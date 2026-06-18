@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # The shared correctness library: build, vet, race-tested, gofmt-clean.
+  providerkit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l internal providers)"
+          if [[ -n "$unformatted" ]]; then
+            echo "These files are not gofmt-clean:"; echo "$unformatted"; exit 1
+          fi
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race -count=1 ./internal/...
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          args: ./internal/...
+
+  # Discover the provider list so the matrix below picks up new providers
+  # automatically (a new providers/<name> needs no CI edits). The copy-me
+  # _template is included — it is the credential-free conformance gate.
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      providers: ${{ steps.list.outputs.providers }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: |
+          providers="$(ls -1 providers | jq -R . | jq -s -c .)"
+          echo "providers=$providers" >> "$GITHUB_OUTPUT"
+          echo "Discovered providers: $providers"
+
+  # Per-provider build / vet / unit-test / lint. One matrix leg per provider.
+  provider:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: ${{ fromJSON(needs.discover.outputs.providers) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Resolve package path
+        id: pkg
+        run: |
+          name='${{ matrix.provider }}'
+          # The _-prefixed template is hidden from ./... expansion, so name it
+          # explicitly; real providers use /... to catch any subpackages.
+          case "$name" in
+            _*) pkg="./providers/$name" ;;
+            *)  pkg="./providers/$name/..." ;;
+          esac
+          echo "pkg=$pkg" >> "$GITHUB_OUTPUT"
+      - run: go build ${{ steps.pkg.outputs.pkg }}
+      - run: go vet ${{ steps.pkg.outputs.pkg }}
+      - run: go test -race -count=1 ${{ steps.pkg.outputs.pkg }}
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          args: ${{ steps.pkg.outputs.pkg }}
+
+  # Conformance against the bigfleet suite, for providers that can stand up
+  # without cloud credentials. The _template runs unconditionally (in-memory
+  # backend). Credentialed cloud providers should be added as their own steps
+  # gated on a secret and skipped cleanly when it is unset — never fail CI for
+  # missing cloud creds. See the commented example below.
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check out bigfleet at the pinned version
+        run: |
+          ref="$(go list -m -f '{{.Version}}' github.com/intUnderflow/bigfleet)"
+          case "$ref" in *-*-*) ref="${ref##*-}" ;; esac
+          echo "bigfleet ref: $ref"
+          git clone --filter=blob:none --quiet https://github.com/intUnderflow/bigfleet.git .cache/bigfleet-src
+          git -C .cache/bigfleet-src checkout --quiet "$ref"
+      - name: Conformance — _template (no cloud creds)
+        env:
+          BIGFLEET_SRC: ${{ github.workspace }}/.cache/bigfleet-src
+        run: make conformance-_template
+
+      # --- Example: credentialed cloud provider, skipped when unset ---------
+      # - name: Conformance — aws (only when creds are present)
+      #   if: ${{ secrets.AWS_CONFORMANCE_ROLE != '' }}
+      #   env:
+      #     BIGFLEET_SRC: ${{ github.workspace }}/.cache/bigfleet-src
+      #     AWS_ROLE: ${{ secrets.AWS_CONFORMANCE_ROLE }}
+      #   run: make conformance-aws

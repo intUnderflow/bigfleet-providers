@@ -1,0 +1,28 @@
+# golangci-lint v2 configuration for bigfleet-providers.
+# Run: golangci-lint run
+version: "2"
+
+linters:
+  # The default set (errcheck, govet, ineffassign, staticcheck, unused) plus a
+  # few that keep the shared library honest. Keep this list tight: the point
+  # is signal, not noise.
+  enable:
+    - bodyclose
+    - misspell
+    - unconvert
+  exclusions:
+    generated: lax
+    rules:
+      # Table-driven and lifecycle tests intentionally ignore some returns.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/intUnderflow/bigfleet-providers
