@@ -29,17 +29,45 @@ Price is sourced per capacity type (`pricing.go`):
 
 | Capacity type | Source |
 |---|---|
-| `on_demand` | Pinned per-region on-demand table (`onDemandUSEast1`). |
+| `on_demand` | Pinned per-region on-demand table (`onDemandByRegion`). |
 | `reserved` | Priced at on-demand unless you model a real reservation discount. |
 | `spot` | Current price from `ec2:DescribeSpotPriceHistory`, cached + refreshed on a timer. |
 | `bare_metal` | `0` — already paid for. |
 
-### On-demand: a pinned table
+### On-demand: a pinned, region-keyed table
 
-On-demand prices come from `onDemandUSEast1`, a pinned snapshot keyed by
-instance type. It is deterministic and has no runtime pricing-API dependency on
-the `List` hot path. It is **not** load-bearing for correctness — it feeds the
+On-demand prices come from `onDemandByRegion`, a pinned table keyed by region
+then instance type. On-demand prices are stable, so a pinned table is the right
+model: it is deterministic and has no runtime pricing-API dependency on the
+`List` hot path. It is **not** load-bearing for correctness — it feeds the
 engine's *relative* cost ranking — but keep it roughly accurate.
+
+`us-east-1` is the authoritative baseline, and `us-west-2` is priced identically
+for these families. A region with **no** pinned table of its own falls back to
+the baseline and logs a warning (the prices are then approximate). The empty
+region — the fake/dev backend, which does not price-rank — falls back silently.
+
+#### Regenerating a region's table
+
+Rather than hand-editing prices, regenerate a region's table with the
+`genpricing` tool. It reads the **public** AWS Price List Bulk API — no AWS
+credentials — and prints a Go map literal you paste into `onDemandByRegion`:
+
+```sh
+cd providers/aws
+go run ./cmd/genpricing -region eu-west-1 \
+  -types m6i.large,m6i.xlarge,c7g.large,c7g.xlarge,r6i.large,g5.xlarge
+# ->  "eu-west-1": {
+#         "c7g.large": 0.08075,
+#         "m6i.large": 0.1056,
+#         ...
+#     },
+```
+
+It selects the plain on-demand SKU (Linux, Shared tenancy, no pre-installed
+software), so Windows / Dedicated / Reserved SKUs for the same type are ignored.
+The offer files are large (tens of MB), so this is an occasional offline
+maintenance step, never a runtime dependency.
 
 ### Spot: refreshed from the price history
 
@@ -128,36 +156,38 @@ The poller needs `sqs:ReceiveMessage` + `sqs:DeleteMessage` on the queue — see
 `--spot-interruption-queue` is set. Wiring the EventBridge rule and the queue is
 covered in [Observability](/providers/aws/observability/).
 
-## The us-east-1 caveat
+## What is region-shaped, and what to verify
 
-Both pinned tables — `onDemandUSEast1` (`pricing.go`) and `advisorBucket`
-(`interruption.go`) — are **us-east-1 approximations**, as is the instance-type
-allocatable table. When the provider runs the `aws` backend in any region other
-than `us-east-1`, it logs a startup warning:
+Three substrate facts could be region-shaped. Where they stand now:
+
+| Fact | Source | Region handling |
+|---|---|---|
+| `allocatable` (vCPU/mem) | `ec2:DescribeInstanceTypes` | **Authoritative** — resolved live for any region; the pinned table is only an offline fallback. |
+| Spot `price_per_hour` | `ec2:DescribeSpotPriceHistory` | **Authoritative** — fetched live per region, correct everywhere. |
+| On-demand `price_per_hour` | `onDemandByRegion` table | Tabulated for `us-east-1`/`us-west-2`; other regions fall back to the baseline (approximate) until you regenerate. |
+| Spot `interruption_probability` buckets | `advisorBucket` (`interruption.go`) | **Still pinned us-east-1 approximations** for every region. |
+
+So the only genuinely us-east-1-shaped table left is the interruption advisor
+buckets. When the `aws` backend serves any region other than `us-east-1`, it
+logs a startup warning about them:
 
 ```
-pinned pricing/interruption/instance-type tables are us-east-1 approximations;
-verify them for this region
+spot interruption-probability buckets are us-east-1 approximations; verify advisorBucket for this region
 ```
 
-Spot *prices* are always fetched live per region, so they are correct
-everywhere; only the on-demand table and the advisor buckets are pinned and
-region-shaped. The values drift over time even within us-east-1.
+and `newPricing` logs its own warning if the region has no pinned on-demand
+table. Both values drift over time even within us-east-1.
 
 ### How to regenerate
 
-Regenerate the pinned tables per region with a small offline script and replace
-the maps:
-
-- **On-demand** (`onDemandUSEast1` in `pricing.go`): regenerate from the AWS
-  Price List API for the region you offer, or swap the table out entirely for a
-  cached `pricing:GetProducts` lookup (keep it off the `List` hot path).
+- **On-demand prices** — run the `genpricing` tool (see
+  [above](#regenerating-a-regions-table)); it reads the public AWS Price List
+  Bulk API and prints a Go map literal for `onDemandByRegion`.
 - **Advisor buckets** (`advisorBucket` in `interruption.go`): refresh from the
   Spot Instance Advisor JSON feed for your region. Keep the bucket index in the
   `0`–`4` range; any type you drop falls back to the non-zero middle bucket
   rather than to `0`.
 
-Expand or trim both maps to exactly the instance types your `--offerings` use.
-A type present in your offerings but absent from `onDemandUSEast1` prices at the
-zero value of the map, and absent from `advisorBucket` it falls back to the
-middle SPOT bucket — so keep the two tables in sync with your offerings.
+A type present in your offerings but absent from `onDemandByRegion` prices at the
+zero value of the map; absent from `advisorBucket` it falls back to the middle
+SPOT bucket — so keep both tables in sync with your offerings.

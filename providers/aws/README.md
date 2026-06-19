@@ -113,9 +113,11 @@ tag conditions in production.
 
 ## Pricing
 
-- **On-demand**: a pinned per-region table (`pricing.go`, `onDemandUSEast1`).
-  Deterministic and off the `List` hot path. Regenerate per region with a small
-  offline script (or swap in a cached `pricing:GetProducts` lookup).
+- **On-demand**: a pinned, region-keyed table (`pricing.go`, `onDemandByRegion`).
+  Deterministic and off the `List` hot path. `us-east-1`/`us-west-2` are
+  tabulated; other regions fall back to the baseline with a warning. Regenerate a
+  region's table with `go run ./cmd/genpricing` (public AWS Price List API, no
+  credentials).
 - **Spot**: the current price from `ec2:DescribeSpotPriceHistory`, cached and
   refreshed on `--spot-refresh`, never fetched per `List`. Cold-cache reads fall
   back to a conservative fraction of on-demand until the first refresh.

@@ -191,10 +191,13 @@ func run() error {
 		obs.start(logger)
 	}
 
-	// Pinned pricing/interruption/instance-type tables are us-east-1
-	// approximations; warn when serving another region.
+	// The Spot interruption advisor buckets (interruption.go) are still pinned
+	// us-east-1 approximations; warn when serving another region. On-demand
+	// pricing is region-keyed (newPricing logs its own per-region fallback) and
+	// allocatable is resolved live from DescribeInstanceTypes, so only the
+	// interruption buckets need a region caveat here.
 	if mode == "aws" && *region != "" && *region != "us-east-1" {
-		logger.Warn("pinned pricing/interruption/instance-type tables are us-east-1 approximations; verify them for this region", "region", *region)
+		logger.Warn("spot interruption-probability buckets are us-east-1 approximations; verify advisorBucket for this region", "region", *region)
 	}
 
 	// Background loops: spot price refresh + EC2->inventory reconcile.
