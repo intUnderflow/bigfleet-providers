@@ -6,8 +6,7 @@ sidebar:
   label: Certification
 ---
 
-The AWS EC2 provider is the project's **gold-standard reference implementation**,
-and it earns that title by *passing the same certification suites every other
+The AWS EC2 provider is certified by *passing the same certification suites every
 provider must pass* — against one running endpoint, as a black-box gRPC client.
 This page is how you reproduce that verdict locally and in CI.
 
@@ -129,8 +128,8 @@ provider, and you are expected to certify it manually against a real endpoint.
 
 The AWS provider **does not** carry this marker, and must not: its `fake` backend
 stands up with no credentials, so `make certify-aws` runs and stays green on
-every PR. Adding the opt-out here would forfeit the reference implementation's
-credential-free certification gate.
+every PR. Adding the opt-out here would forfeit that credential-free
+certification gate.
 
 ## See also
 

@@ -1,16 +1,16 @@
 ---
 title: AWS EC2 provider
-description: The BigFleet capacity provider for AWS EC2 — the gold-standard reference implementation.
+description: The BigFleet capacity provider for AWS EC2 — create, configure, drain, and delete EC2 instances on demand.
 sidebar:
   order: 0
   label: AWS overview
 ---
 
 The **AWS EC2 provider** is a BigFleet `CapacityProvider` that creates,
-configures, drains, and deletes EC2 instances on demand. It is the project's
-**gold-standard reference implementation** — every other provider is measured
-against it — so it is exemplary in correctness, testability, production-
-readiness, and observability.
+configures, drains, and deletes EC2 instances on demand. It supports on-demand,
+spot, and reserved capacity, with idempotent launches, a running-instance gate
+on `Create`, SSM-verified `Configure`/`Drain`, live pricing and interruption
+signals, and full health + metrics instrumentation.
 
 It implements only the substrate-specific `providerkit.Backend`; the shared
 [`providerkit`](https://github.com/intUnderflow/bigfleet-providers/tree/main/providerkit)
