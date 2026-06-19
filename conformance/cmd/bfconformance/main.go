@@ -102,6 +102,25 @@ func main() {
 		ext = append(ext, faultRes...)
 	}
 
+	// Lane 4 (durable): when the "durable" profile is selected, certify the
+	// B10xx restart-recovery behaviors. This lane OWNS the provider lifecycle —
+	// it boots the provider under test with a --state FileStore, drives durable
+	// state over a raw client, KILLS the process, re-boots a fresh one against
+	// the SAME --state, and asserts every piece of durable state survived. It
+	// needs a real provider binary (a --target endpoint cannot be killed and
+	// re-booted), so it requires -provider. Its results MERGE into ext so the
+	// B10xx map onto the registry like every other behavior.
+	if contains(profiles, "durable") {
+		if *providerName == "" {
+			fatal("the durable profile requires -provider <name> (the lane kills and re-boots the provider; a --target endpoint cannot be restarted)")
+		}
+		durRes, err := runDurableLane(repoRoot, *providerName, *port+2)
+		if err != nil {
+			fatal("%v", err)
+		}
+		ext = append(ext, durRes...)
+	}
+
 	rep := buildReport(label, profiles, ts, base, ext, baselineRan)
 	printSummary(rep)
 	if *outDir != "" {
