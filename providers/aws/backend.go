@@ -261,6 +261,22 @@ func (b *awsBackend) refreshPrices(ctx context.Context) int {
 	return b.pricing.refresh(ctx, b.spotPairs())
 }
 
+// machineIDFor resolves an EC2 instance id to its BigFleet machine id (via the
+// bigfleet:machine-id tag), or "" if it isn't a managed instance. Used by the
+// interruption poller to attribute a spot notice to a machine.
+func (b *awsBackend) machineIDFor(ctx context.Context, instanceID string) string {
+	managed, err := b.ec2.DescribeManaged(ctx)
+	if err != nil {
+		return ""
+	}
+	for _, inst := range managed {
+		if inst.InstanceID == instanceID {
+			return inst.MachineID
+		}
+	}
+	return ""
+}
+
 // capacityString renders a kit CapacityType as the canonical tag string.
 func capacityString(c providerkit.CapacityType) string {
 	switch c {

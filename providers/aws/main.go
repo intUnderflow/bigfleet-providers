@@ -57,6 +57,7 @@ func run() error {
 		bootstrapHk  = flag.String("bootstrap-hook", "/opt/bigfleet/bootstrap", "AMI path that applies the delivered bootstrap blob")
 		baseUserData = flag.String("base-user-data", "", "path to the generic pre-binding bootstrap baked in at launch")
 		spotRefresh  = flag.Duration("spot-refresh", 5*time.Minute, "spot price refresh interval")
+		spotIntrQ    = flag.String("spot-interruption-queue", "", "SQS queue URL fed by an EventBridge spot-interruption/rebalance rule (aws backend; raises observed interruption probability)")
 		reconcile    = flag.Duration("reconcile-interval", 2*time.Minute, "background EC2->inventory reconcile interval (0 = off)")
 
 		metricsAddr = flag.String("metrics-addr", ":9090", "address for /metrics, /healthz, /readyz (empty = disabled)")
@@ -181,9 +182,25 @@ func run() error {
 		obs.start(logger)
 	}
 
+	// Pinned pricing/interruption/instance-type tables are us-east-1
+	// approximations; warn when serving another region.
+	if mode == "aws" && *region != "" && *region != "us-east-1" {
+		logger.Warn("pinned pricing/interruption/instance-type tables are us-east-1 approximations; verify them for this region", "region", *region)
+	}
+
 	// Background loops: spot price refresh + EC2->inventory reconcile.
 	go runSpotRefresher(ctx, backend, m, *spotRefresh)
 	go runReconciler(ctx, srv, m, *reconcile, logger)
+
+	// Observed spot interruptions (optional): an SQS queue fed by EventBridge.
+	if mode == "aws" && *spotIntrQ != "" {
+		poller, err := newInterruptionPoller(ctx, *region, *spotIntrQ, backend, m, logger)
+		if err != nil {
+			return err
+		}
+		go poller.run(ctx)
+		logger.Info("watching for spot interruptions", "queue", *spotIntrQ)
+	}
 
 	// Mark ready: serving traffic + probes go green.
 	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)

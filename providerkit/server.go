@@ -247,11 +247,15 @@ func (s *Server) Register(reg grpc.ServiceRegistrar) {
 	pb.RegisterCapacityProviderServer(reg, s)
 }
 
-// Reconcile re-reads the backend's substrate inventory and adds any machines
-// the kit does not already track (new Speculative quota or pre-existing free
-// pool). It never clobbers a tracked record — the kit's lifecycle/binding
-// overlay always wins — so it is safe to call periodically. Invalid records
-// are skipped with a warning rather than crashing a running provider.
+// Reconcile re-reads the backend's substrate inventory: it adds machines the
+// kit does not yet track (new Speculative quota or a pre-existing free pool),
+// and REFRESHES the mutable substrate facts of machines it already tracks —
+// price_per_hour, interruption_probability, resources, allocatable, labels —
+// which change over time (a spot price moves; an interruption signal raises the
+// probability). It never touches the kit-owned overlay (state, host, cluster,
+// shard_metadata, last_error), so the lifecycle/binding always wins and it is
+// safe to call periodically. Invalid records are skipped with a warning rather
+// than crashing a running provider; an unchanged reconcile bumps no revision.
 func (s *Server) Reconcile(ctx context.Context) error {
 	instances, err := s.backend.Describe(ctx)
 	if err != nil {
@@ -261,21 +265,68 @@ func (s *Server) Reconcile(ctx context.Context) error {
 	defer s.mu.Unlock()
 	changed := false
 	for _, in := range instances {
-		if _, exists := s.machines[in.ID]; exists {
-			continue
-		}
 		if err := in.validate(s.opts.RequireZone); err != nil {
 			s.logger.Warn("providerkit: reconcile skipping invalid instance", "id", in.ID, "err", err)
 			continue
 		}
-		s.machines[in.ID] = in.toMachine()
-		s.touchLocked(in.ID)
-		changed = true
+		cur, exists := s.machines[in.ID]
+		if !exists {
+			s.machines[in.ID] = in.toMachine()
+			s.touchLocked(in.ID)
+			changed = true
+			continue
+		}
+		if refreshSubstrate(cur, in) {
+			s.touchLocked(in.ID)
+			changed = true
+		}
 	}
 	if changed {
 		s.persistLocked()
 	}
 	return nil
+}
+
+// refreshSubstrate updates a tracked machine's mutable substrate facts from a
+// fresh Describe, preserving the kit-owned lifecycle/binding fields. It returns
+// whether anything actually changed (so an idempotent reconcile bumps no
+// revision). instance_type and zone are treated as immutable identity and are
+// not refreshed.
+func refreshSubstrate(cur *Machine, in Instance) bool {
+	changed := false
+	if cur.PricePerHour != in.PricePerHour {
+		cur.PricePerHour = in.PricePerHour
+		changed = true
+	}
+	if cur.InterruptionProbability != in.InterruptionProbability {
+		cur.InterruptionProbability = in.InterruptionProbability
+		changed = true
+	}
+	if !mapsEqual(cur.Resources, in.Resources) {
+		cur.Resources = cloneMap(in.Resources)
+		changed = true
+	}
+	if !mapsEqual(cur.Allocatable, in.Allocatable) {
+		cur.Allocatable = cloneMap(in.Allocatable)
+		changed = true
+	}
+	if !mapsEqual(cur.Labels, in.Labels) {
+		cur.Labels = cloneMap(in.Labels)
+		changed = true
+	}
+	return changed
+}
+
+func mapsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // --- the six RPCs ---------------------------------------------------------
