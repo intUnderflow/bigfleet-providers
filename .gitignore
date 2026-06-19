@@ -36,3 +36,4 @@
 
 # bfconformance runner output
 /conformance-report/
+/conformance/bfconformance

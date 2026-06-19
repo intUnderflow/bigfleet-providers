@@ -487,3 +487,45 @@ func TestB312_RandomStreamMatchesOracle(t *testing.T) {
 	}
 	t.Logf("B312: %d/%d tokens accepted, final mark (%d,%d)", accepts, steps, maxE, maxS)
 }
+
+// B311 — a zombie shard's passing token that establishes a mark, then fails its
+// op against an out-of-position machine, STILL advances the high-water mark, so
+// the zombie's own retry with that same (now-stale) token is fenced.
+//
+// This is pure black-box fencing — no fault injection. The contract: the fence
+// runs FIRST and advances the mark for any strictly-newer token, BEFORE the
+// position check, so even an op that is then rejected out-of-position
+// (non-FAILED_PRECONDITION) has already moved the mark. We prove it by replaying
+// a now-stale token and observing FAILED_PRECONDITION.
+//
+//  1. A fenced Drain (token 5,5) on a Speculative machine: Drain is
+//     out-of-position from Speculative, so the op is rejected — but NOT with
+//     FAILED_PRECONDITION (that code is reserved for fencing). The fence passed
+//     and the mark advanced to (5,5).
+//  2. A fenced Create with the now-stale token (5,4): strictly older than the
+//     mark established in step 1, so it MUST be FAILED_PRECONDITION — proving the
+//     mark advanced despite step 1's op being rejected.
+func TestB311_MarkAdvancesEvenWhenOpRejected(t *testing.T) {
+	behavior(t, "B311")
+	h := dial(t)
+	shard := h.UniqueShardID("b311")
+	m := h.PickSpeculative()
+
+	// Step 1: a higher token (5,5) on an out-of-position op. The fence passes
+	// (advancing the mark), then the position check rejects the Drain — but
+	// never with FAILED_PRECONDITION, which is reserved for fencing.
+	err := h.FencedCall(harness.RPCDrain, m, shard, 5, 5)
+	h.RejectsNonFencing("B311 out-of-position fenced Drain on Speculative (token 5,5)", err)
+
+	// Step 2: replay a now-stale token (5,4) — strictly older than the mark the
+	// passing-but-rejected op in step 1 established. It MUST be FAILED_PRECONDITION,
+	// proving the mark advanced to (5,5) even though step 1's op was rejected.
+	fpOnly(t, "B311 stale-token Create (5,4) after mark advanced to (5,5)",
+		h.FencedCreate(m, shard, 5, 4))
+
+	// And a strictly-newer token (5,6) still passes the fence (the mark is at
+	// exactly (5,5), not higher), confirming step 1 advanced it to (5,5) — not
+	// further — and the machine is genuinely fenceable forward.
+	accepted(t, "B311 fresh token Create (5,6) past the (5,5) mark",
+		h.FencedCreate(m, shard, 5, 6))
+}

@@ -88,6 +88,20 @@ func main() {
 	extCmd.Env = append(os.Environ(), "GOWORK=off")
 	ext, _ := runJSONTests(extCmd)
 
+	// Lane 3 (fault): when the "fault" profile is selected, certify the B7xx
+	// failure/timeout/recovery behaviors against the reference faultprovider,
+	// which injects substrate faults on command. It boots on its OWN port (the
+	// provider under test cannot inject faults), runs the fault-tagged suite, and
+	// its results are MERGED into the extension results so the B7xx map onto the
+	// registry like every other behavior.
+	if contains(profiles, "fault") {
+		faultRes, err := runFaultLane(repoRoot, *port+1)
+		if err != nil {
+			fatal("%v", err)
+		}
+		ext = append(ext, faultRes...)
+	}
+
 	rep := buildReport(label, profiles, ts, base, ext, baselineRan)
 	printSummary(rep)
 	if *outDir != "" {
