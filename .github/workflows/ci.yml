@@ -8,107 +8,166 @@ on:
 permissions:
   contents: read
 
+# Build each module standalone; never let a local go.work mask a per-module go.mod.
+env:
+  GOWORK: "off"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  # The shared correctness library: build, vet, race-tested, gofmt-clean.
-  providerkit:
+  # Smart change detection: figure out the minimum work this push/PR needs.
+  # A providerkit change rebuilds ALL providers (they depend on the kit); a
+  # tooling change runs everything; otherwise only the changed providers/site.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      run_kit: ${{ steps.detect.outputs.run_kit }}
+      run_site: ${{ steps.detect.outputs.run_site }}
+      providers: ${{ steps.detect.outputs.providers }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so diff bases (merge-base / before-SHA) resolve
+      - id: detect
+        run: ./hack/ci-changes.sh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_REF: ${{ github.base_ref }}
+
+  # The bigfleet proto pin must match across every module (root is the source of
+  # truth) so all modules build against one wire contract. Cheap; always runs.
+  pins:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+      - run: make check-bigfleet-pin
+
+  # The shared library (root module). Runs only when the kit (or tooling) changed.
+  providerkit:
+    needs: changes
+    if: needs.changes.outputs.run_kit == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: gofmt
         run: |
-          unformatted="$(gofmt -l internal providers)"
-          if [[ -n "$unformatted" ]]; then
-            echo "These files are not gofmt-clean:"; echo "$unformatted"; exit 1
-          fi
+          unformatted="$(gofmt -l providerkit)"
+          [ -z "$unformatted" ] || { echo "not gofmt-clean:"; echo "$unformatted"; exit 1; }
       - run: go build ./...
       - run: go vet ./...
-      - run: go test -race -count=1 ./internal/...
+      - run: go test -race -count=1 ./...
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12.2
-          args: ./internal/...
+          args: ./...
 
-  # Discover the provider list so the matrix below picks up new providers
-  # automatically (a new providers/<name> needs no CI edits). The copy-me
-  # _template is included — it is the credential-free conformance gate.
-  discover:
-    runs-on: ubuntu-latest
-    outputs:
-      providers: ${{ steps.list.outputs.providers }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: list
-        run: |
-          providers="$(ls -1 providers | jq -R . | jq -s -c .)"
-          echo "providers=$providers" >> "$GITHUB_OUTPUT"
-          echo "Discovered providers: $providers"
-
-  # Per-provider build / vet / unit-test / lint. One matrix leg per provider.
+  # Per-changed-provider build / vet / test / lint / tidy-check. Each runs INSIDE
+  # the provider's own module (root ./... cannot see submodules).
   provider:
-    needs: discover
+    needs: changes
+    if: needs.changes.outputs.providers != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        provider: ${{ fromJSON(needs.discover.outputs.providers) }}
+        provider: ${{ fromJSON(needs.changes.outputs.providers) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
-          cache: true
-      - name: Resolve package path
-        id: pkg
+          go-version-file: providers/${{ matrix.provider }}/go.mod
+          cache-dependency-path: providers/${{ matrix.provider }}/go.sum
+      - name: gofmt
         run: |
-          name='${{ matrix.provider }}'
-          # The _-prefixed template is hidden from ./... expansion, so name it
-          # explicitly; real providers use /... to catch any subpackages.
-          case "$name" in
-            _*) pkg="./providers/$name" ;;
-            *)  pkg="./providers/$name/..." ;;
-          esac
-          echo "pkg=$pkg" >> "$GITHUB_OUTPUT"
-      - run: go build ${{ steps.pkg.outputs.pkg }}
-      - run: go vet ${{ steps.pkg.outputs.pkg }}
-      - run: go test -race -count=1 ${{ steps.pkg.outputs.pkg }}
+          unformatted="$(gofmt -l providers/${{ matrix.provider }})"
+          [ -z "$unformatted" ] || { echo "not gofmt-clean:"; echo "$unformatted"; exit 1; }
+      - run: go -C providers/${{ matrix.provider }} build -o "$RUNNER_TEMP/" ./... # temp -o: no in-tree binary
+      - run: go -C providers/${{ matrix.provider }} vet ./...
+      - run: go -C providers/${{ matrix.provider }} test -race -count=1 ./...
+      - name: go mod tidy is clean
+        run: |
+          go -C providers/${{ matrix.provider }} mod tidy
+          git diff --exit-code providers/${{ matrix.provider }}/go.mod providers/${{ matrix.provider }}/go.sum
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12.2
-          args: ${{ steps.pkg.outputs.pkg }}
+          working-directory: providers/${{ matrix.provider }}
+          args: ./...
 
-  # Conformance against the bigfleet suite, for providers that can stand up
-  # without cloud credentials. The _template runs unconditionally (in-memory
-  # backend). Credentialed cloud providers should be added as their own steps
-  # gated on a secret and skipped cleanly when it is unset — never fail CI for
-  # missing cloud creds. See the commented example below.
+  # Conformance against the bigfleet suite, per changed provider, for providers
+  # that can stand up credential-free. A provider that needs cloud creds opts out
+  # with a providers/<name>/.ci-no-conformance marker (skipped, never failed).
   conformance:
+    needs: changes
+    if: needs.changes.outputs.providers != '[]'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: ${{ fromJSON(needs.changes.outputs.providers) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
-          cache: true
-      - name: Check out bigfleet at the pinned version
+          go-version-file: providers/${{ matrix.provider }}/go.mod
+          cache-dependency-path: providers/${{ matrix.provider }}/go.sum
+      - id: gate
         run: |
-          ref="$(go list -m -f '{{.Version}}' github.com/intUnderflow/bigfleet)"
-          case "$ref" in *-*-*) ref="${ref##*-}" ;; esac
-          echo "bigfleet ref: $ref"
-          git clone --filter=blob:none --quiet https://github.com/intUnderflow/bigfleet.git .cache/bigfleet-src
-          git -C .cache/bigfleet-src checkout --quiet "$ref"
-      - name: Conformance — _template (no cloud creds)
-        env:
-          BIGFLEET_SRC: ${{ github.workspace }}/.cache/bigfleet-src
-        run: make conformance-_template
+          if [ -f "providers/${{ matrix.provider }}/.ci-no-conformance" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "providers/${{ matrix.provider }} opts out of credential-free conformance"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Conformance
+        if: steps.gate.outputs.skip != 'true'
+        # run-conformance.sh clones bigfleet at the pinned version itself when
+        # BIGFLEET_SRC is unset — no need to duplicate that logic here.
+        run: make conformance-${{ matrix.provider }}
 
-      # --- Example: credentialed cloud provider, skipped when unset ---------
-      # - name: Conformance — aws (only when creds are present)
-      #   if: ${{ secrets.AWS_CONFORMANCE_ROLE != '' }}
-      #   env:
-      #     BIGFLEET_SRC: ${{ github.workspace }}/.cache/bigfleet-src
-      #     AWS_ROLE: ${{ secrets.AWS_CONFORMANCE_ROLE }}
-      #   run: make conformance-aws
+  # The Astro site build-check (Cloudflare Pages deploys it; this just catches a
+  # broken build in review). Runs only when site/ changed.
+  site:
+    needs: changes
+    if: needs.changes.outputs.run_site == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+        working-directory: site
+      - run: npm run build
+        working-directory: site
+
+  # Single aggregation gate for branch protection: green unless a job that
+  # actually ran failed (skipped jobs are fine). Make THIS the required check.
+  ci-ok:
+    needs: [changes, pins, providerkit, provider, conformance, site]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All required jobs succeeded or were skipped
+        run: |
+          results='${{ join(needs.*.result, ' ') }}'
+          echo "job results: $results"
+          for r in $results; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "::error::a required job did not succeed"
+              exit 1
+            fi
+          done
+          echo "ok"

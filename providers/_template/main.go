@@ -37,7 +37,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/intUnderflow/bigfleet-providers/internal/providerkit"
+	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
 
 func main() {

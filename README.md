@@ -10,7 +10,7 @@ BigFleet is a fleet-level infrastructure autoscaler: it takes capacity demand fr
 
 These providers all live together in one **mono-repo** (rather than one repo per provider) so they share:
 
-- **one correctness-critical library** — [`internal/providerkit`](internal/providerkit) — that gets fencing, idempotency, async dispatch, `shard_metadata`, and the `Machine` field shape right *once*, so each provider only writes substrate-specific logic;
+- **one correctness-critical library** — [`providerkit`](providerkit) — that gets fencing, idempotency, async dispatch, `shard_metadata`, and the `Machine` field shape right *once*, so each provider only writes substrate-specific logic;
 - **one conformance harness** — pointed at the canonical suite in the bigfleet repo;
 - **one CI pipeline** and one place to read.
 
@@ -48,20 +48,33 @@ More providers (gcp, libvirt, …) are added by copying `_template`; the table g
 
 ## Repository layout
 
+This is a **multi-module** repo: the shared library is the root Go module, and
+each provider is its **own** Go module (own `go.mod`/`go.sum`/dependencies).
+
 ```
-internal/providerkit/    the shared correctness library (the crown jewel)
-providers/_template/     copy-me provider skeleton (compiles, passes conformance)
+go.mod                   the ROOT module — holds providerkit/ (the kit's only deps: bigfleet, grpc)
+providerkit/             the shared correctness library (the crown jewel)
+providers/_template/     copy-me provider skeleton — its own module
+  go.mod                 require providerkit (replace => ../..) + this provider's deps
 providers/<name>/        a real provider: cp -r providers/_template providers/<name>
+providers/aws/           the AWS EC2 provider (own module: aws-sdk-go-v2 lives here, not in root)
 hack/run-conformance.sh  boots a provider + runs the bigfleet conformance suite
-Makefile                 build-/test-/run-/conformance-<name>, build-all, test-all, lint
-.github/workflows/ci.yml provider matrix + the credential-free conformance gate
+hack/ci-changes.sh       smart-CI change detection (only run what changed)
+Makefile                 per-module build-/test-/lint-/conformance-<name>, check-bigfleet-pin
+.github/workflows/ci.yml change-aware CI: kit change => all providers; else only changed ones
 ```
 
-Providers are discovered automatically from `providers/*` — a new one needs no Makefile or CI edits. The `_template` directory is `_`-prefixed so the Go toolchain skips it in `./...`; it is built and conformance-tested explicitly.
+**Why separate modules:** two people (or agents) adding two providers in
+parallel touch *zero* shared files — there is no single `go.mod` to collide on,
+and one provider's `go mod tidy` can never prune another's dependencies.
+Providers are discovered automatically from `providers/*`; a new one needs no
+edits to the Makefile, CI, or any other shared file. Run Go commands inside a
+provider module (`go -C providers/<name> …`); the root `go ./...` only sees the
+kit. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
 
 ## What `providerkit` gives you
 
-You implement the small substrate-specific [`providerkit.Backend`](internal/providerkit/backend.go) (create / configure / drain / describe, plus optional delete) and wrap it in a [`providerkit.Server`](internal/providerkit/server.go). The kit then handles everything that is identical across providers and easy to get subtly wrong:
+You implement the small substrate-specific [`providerkit.Backend`](providerkit/backend.go) (create / configure / drain / describe, plus optional delete) and wrap it in a [`providerkit.Server`](providerkit/server.go). The kit then handles everything that is identical across providers and easy to get subtly wrong:
 
 - **Async dispatch** — lifecycle RPCs return a `TransitionAck` immediately; the backend runs in the background; progress shows up via `Get`/`List`.
 - **Idempotency** — same `(machine, operation)` returns the same `operation_id`, persisted across restarts.
@@ -71,7 +84,7 @@ You implement the small substrate-specific [`providerkit.Backend`](internal/prov
 - **Field shape** — `instance_type` / `zone` / `capacity_type` stay top-level (never labels-only); `interruption_probability` is validated for every machine and required (> 0) for SPOT.
 - **`since_revision`** — incremental `List` plumbing for free.
 
-The persistent [`providerkit.Store`](internal/providerkit/store.go) keeps the fence marks, the idempotency map, and the inventory (with bindings + `shard_metadata`) — so a provider restart loses nothing. Two implementations ship: an in-memory store (tests / ephemeral) and a durable JSON file store.
+The persistent [`providerkit.Store`](providerkit/store.go) keeps the fence marks, the idempotency map, and the inventory (with bindings + `shard_metadata`) — so a provider restart loses nothing. Two implementations ship: an in-memory store (tests / ephemeral) and a durable JSON file store.
 
 ## Capacity type, pricing & interruption probability
 

@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/intUnderflow/bigfleet-providers/internal/providerkit"
+	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
 
 // offering is one shape of capacity this provider is allowed to provision: an

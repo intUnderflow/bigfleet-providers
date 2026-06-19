@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/intUnderflow/bigfleet-providers/internal/providerkit"
+	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
 
 // templateBackend is a copy-me [providerkit.Backend]. It is deliberately the

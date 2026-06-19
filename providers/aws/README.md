@@ -1,7 +1,7 @@
 # AWS EC2 capacity provider
 
 A BigFleet `CapacityProvider` for **AWS EC2**. It implements only the
-substrate-specific [`providerkit.Backend`](../../internal/providerkit) (+
+substrate-specific [`providerkit.Backend`](../../providerkit) (+
 `Deleter`); providerkit wraps it with the full
 `bigfleet.v1alpha1.CapacityProvider` contract — fencing, idempotency, async
 dispatch, transition timeouts, the `shard_metadata` lifecycle, the `Machine`

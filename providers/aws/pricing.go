@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/intUnderflow/bigfleet-providers/internal/providerkit"
+	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
 
 // pricing supplies Machine.price_per_hour (USD/hour). On-demand comes from a

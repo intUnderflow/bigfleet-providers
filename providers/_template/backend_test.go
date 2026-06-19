@@ -7,7 +7,7 @@ import (
 
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 
-	"github.com/intUnderflow/bigfleet-providers/internal/providerkit"
+	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
 
 func newServer(t *testing.T) *providerkit.Server {

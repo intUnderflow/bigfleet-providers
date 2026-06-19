@@ -26,10 +26,14 @@ if [[ -n "${BIGFLEET_SRC:-}" && -d "${BIGFLEET_SRC}/test/conformance" ]]; then
 else
   SRC="$REPO_ROOT/.cache/bigfleet-src"
   VERSION="$(go list -m -f '{{.Version}}' github.com/intUnderflow/bigfleet)"
-  case "$VERSION" in
-    *-*-*) REF="${VERSION##*-}" ;; # pseudo-version: trailing commit hash
-    *)     REF="$VERSION" ;;       # release tag
-  esac
+  # A Go pseudo-version ends in -<14-digit timestamp>-<12-hex commit>; check it
+  # out by that commit. Anything else (a release tag, including hyphenated
+  # pre-releases like v1.0.0-beta-2) is itself a git ref.
+  if [[ "$VERSION" =~ -[0-9]{14}-([0-9a-f]{12})$ ]]; then
+    REF="${BASH_REMATCH[1]}"
+  else
+    REF="$VERSION"
+  fi
   if [[ ! -d "$SRC/.git" ]]; then
     echo ">> cloning bigfleet into $SRC"
     rm -rf "$SRC"
@@ -40,9 +44,11 @@ else
 fi
 
 # --- build the provider --------------------------------------------------
+# Each provider is its own Go module, so build from inside it (GOWORK=off so a
+# stray local go.work never masks a per-module go.mod problem).
 mkdir -p bin
 echo ">> building provider '$NAME'"
-go build -o "bin/$NAME" "./providers/$NAME"
+GOWORK=off go -C "providers/$NAME" build -o "$REPO_ROOT/bin/$NAME" .
 
 # --- boot it -------------------------------------------------------------
 echo ">> starting provider on 127.0.0.1:$PORT"

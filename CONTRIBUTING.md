@@ -1,7 +1,7 @@
 # Contributing
 
 This repo holds out-of-tree BigFleet capacity providers and the shared
-[`providerkit`](internal/providerkit) library they build on. Almost always,
+[`providerkit`](providerkit) library they build on. Almost always,
 "contributing" means **adding a provider**.
 
 ## The one rule
@@ -26,10 +26,13 @@ its inventory.
    [`provider-author-guide.md`](https://github.com/intUnderflow/bigfleet/blob/main/docs/provider-author-guide.md)
    and [`provider.proto`](https://github.com/intUnderflow/bigfleet/blob/main/api/proto/bigfleet/v1alpha1/provider.proto).
 
-2. **Copy the template.**
+2. **Copy the template and point its module at the new path.** Each provider is
+   its own Go module (see *Why each provider is its own module* below), so the
+   only setup is renaming the module:
 
    ```sh
    cp -r providers/_template providers/<name>
+   go -C providers/<name> mod edit -module github.com/intUnderflow/bigfleet-providers/providers/<name>
    ```
 
 3. **Implement the `Backend`.** Fill in the `TODO(provider-author)` methods in
@@ -53,36 +56,69 @@ its inventory.
      out-of-bounds cost, SPOT-with-zero-probability) at startup.
    - Keep `instance_type` / `zone` top-level — never labels-only.
 
-5. **Wire it up — automatically.** The Makefile and CI discover providers from
-   `providers/*`, so `make build-<name>`, `make test-<name>`,
-   `make conformance-<name>`, and the CI matrix leg all appear with no edits.
-   Just add an entry to the provider table in the [README](README.md).
+5. **Add your dependencies — to your module only.**
 
-6. **Get conformance green.**
+   ```sh
+   go -C providers/<name> get <your-substrate-sdk>@latest
+   go -C providers/<name> mod tidy
+   ```
+
+   These land in `providers/<name>/go.mod` + `go.sum` — files no other provider
+   shares. Keep your bigfleet pin equal to the root's: `make check-bigfleet-pin`
+   (or `make sync-bigfleet` to align).
+
+6. **Wire it up — automatically.** The Makefile and CI discover providers from
+   `providers/*`, so `make build-<name>`, `make test-<name>`,
+   `make conformance-<name>`, and the CI matrix leg all appear with **no edits to
+   any shared file**. Just add an entry to the provider table in the
+   [README](README.md).
+
+7. **Get conformance green.**
 
    ```sh
    make conformance-<name>
    ```
 
-   A passing run is what "BigFleet-compatible" means. For a credentialed cloud
-   provider, add a CI conformance step gated on a secret and skipped cleanly
-   when it is unset — never fail CI for missing cloud creds (see the example in
-   `.github/workflows/ci.yml`).
+   A passing run is what "BigFleet-compatible" means. If your provider can't run
+   conformance without cloud credentials, add an empty
+   `providers/<name>/.ci-no-conformance` marker so CI skips it cleanly (never
+   fail CI for missing cloud creds) and document how to run it with credentials.
+
+## Why each provider is its own module
+
+`providers/<name>/` is a **separate Go module** with its own `go.mod`/`go.sum`;
+the shared library is the root module, pulled in via a `replace` directive to
+the local checkout. This is deliberate: two people (or two agents) adding two
+providers in parallel write to two disjoint directories and never touch a shared
+file — there is no single `go.mod` to collide on, and one provider's
+`go mod tidy` can never prune another's dependencies. Consequences:
+
+- Run Go commands **inside** the provider module: `go -C providers/<name> build ./...`
+  (the root `go ./...` only sees the kit). The `make *-<name>` targets do this.
+- A local `go.work` is **not** committed (it would be a shared file again);
+  `make gen-workspace` regenerates one for your editor on demand.
+- The bigfleet proto pin is duplicated per module and kept consistent by
+  `make check-bigfleet-pin` (a CI gate) and `make sync-bigfleet`.
 
 ## Before you push
 
 ```sh
-make build-all      # everything compiles (incl. the template)
-make test-all       # kit + provider unit tests (race detector)
+make build-all          # kit + every provider module compiles
+make test-all           # kit + provider unit tests (race detector)
 make vet
-make lint           # golangci-lint
+make lint               # golangci-lint, per module
+make check-bigfleet-pin # every module pins the same bigfleet proto version
 make conformance-<name>
 ```
+
+CI only runs the work your change needs (a provider change tests just that
+provider; a `providerkit` change tests them all). The single required check is
+the `ci-ok` job.
 
 ## Style
 
 - Match the surrounding code: naming, comment density, idiom.
 - New cross-cutting behaviour goes in `providerkit` with unit tests that pin
-  the contract (see `internal/providerkit/*_test.go` for the shape).
+  the contract (see `providerkit/*_test.go` for the shape).
 - Never edit, fork, or vendor the `bigfleet` repo's proto — consume it from the
   Go module so the contract can't drift.

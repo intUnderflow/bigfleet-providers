@@ -10,7 +10,7 @@ cp -r providers/_template providers/<name>
 
 ## What's here
 
-- **`backend.go`** — `templateBackend`, a [`providerkit.Backend`](../../internal/providerkit/backend.go)
+- **`backend.go`** — `templateBackend`, a [`providerkit.Backend`](../../providerkit/backend.go)
   with `TODO(provider-author)` stubs. This is the only file you rewrite: replace
   each stub with calls to your substrate's API. It also implements the optional
   `providerkit.Deleter` (cloud-style teardown); delete that method for a

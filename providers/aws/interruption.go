@@ -3,7 +3,7 @@ package main
 import (
 	"sync"
 
-	"github.com/intUnderflow/bigfleet-providers/internal/providerkit"
+	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
 
 // interruption supplies Machine.interruption_probability for SPOT machines.
