@@ -93,7 +93,7 @@ certify-%: ## Full certification (upstream baseline + extension suite) for one p
 .PHONY: certify
 certify: certify-_template ## Credential-free certification gate (the template)
 
-report-%: ## Certify a provider via the bfconformance runner, emitting JUnit XML + JSON (PROFILE=core OUT=...)
+report-%: ## Certify a provider via the bfconformance runner (baseline + every lane), JUnit+JSON. Full run: PROFILE=core,cloud,spot,fault,durable,scale
 	$(GOW) -C conformance run ./cmd/bfconformance -provider "$*" -port "$(PORT)" \
 	  -profile "$(or $(PROFILE),core)" -out "$(or $(OUT),$(CURDIR)/conformance-report/$*)"
 

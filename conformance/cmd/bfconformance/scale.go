@@ -5,7 +5,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 )
+
+// scaleParams resolves the scale seed + soak duration, overridable via
+// BFCONF_SCALE_SEED / BFCONF_SOAK so CI can run a lighter, faster scale lane
+// (and a nightly job can crank it well above these defaults).
+func scaleParams() (seed int, soak string) {
+	seed, soak = 8000, "10s"
+	if v := os.Getenv("BFCONF_SCALE_SEED"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			seed = n
+		}
+	}
+	if v := os.Getenv("BFCONF_SOAK"); v != "" {
+		soak = v
+	}
+	return seed, soak
+}
 
 // runScaleLane certifies the B11xx SCALE & SOAK behaviors. It builds and boots
 // the provider under test with a LARGE seeded inventory on its own port (so it
@@ -21,8 +38,7 @@ import (
 // registry's "tens of thousands of machines" / "multi-minute soak" titles are
 // exercised with real weight while staying fast enough for CI.
 func runScaleLane(repoRoot, providerName string, port int) ([]testResult, error) {
-	const scaleSeed = 8000
-	const soak = "10s"
+	scaleSeed, soak := scaleParams()
 
 	bin, err := buildProvider(repoRoot, providerName)
 	if err != nil {
