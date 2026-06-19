@@ -54,13 +54,27 @@ func buildFaultProvider(repoRoot string) (string, error) {
 }
 
 // bootFaultProvider starts the faultprovider binary on addr with the fault-lane
-// flags and waits until its gRPC port accepts a connection.
+// flags (short 2s transition-timeout, in-memory store) and waits until its gRPC
+// port accepts a connection.
 func bootFaultProvider(bin, addr, logPath string) (*provider, error) {
+	return bootFaultProviderWith(bin, addr, logPath, "2s", "")
+}
+
+// bootFaultProviderWith starts the faultprovider binary on addr with an explicit
+// --transition-timeout and an optional --state path (empty = in-memory only),
+// waiting until its gRPC port accepts a connection. The durable lane's B1006
+// cycle uses a GENEROUS timeout (so a CONFIGURING machine sits long enough to be
+// killed mid-transition) and a --state FileStore (so the orphaned record
+// survives the kill and recoverInterrupted moves it to FAILED on reload).
+func bootFaultProviderWith(bin, addr, logPath, transitionTimeout, statePath string) (*provider, error) {
 	args := []string{
 		"--addr=" + addr,
 		"--provider=fault",
 		"--seed-count=64",
-		"--transition-timeout=2s",
+		"--transition-timeout=" + transitionTimeout,
+	}
+	if statePath != "" {
+		args = append(args, "--state="+statePath)
 	}
 	lf, err := os.Create(logPath)
 	if err != nil {

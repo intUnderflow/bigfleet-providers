@@ -74,7 +74,169 @@ func runDurableLane(repoRoot, providerName string, port int) ([]testResult, erro
 	defer prov2.stop()
 
 	res := assertPostRestart(addr2, pre)
+
+	// B1006-strong: a dedicated end-to-end recoverInterrupted cycle against the
+	// reference faultprovider (which can BLOCK a transition on command, unlike
+	// the provider under test's instant fake). This REPLACES the weak,
+	// vacuous-against-an-instant-fake B1006 produced by assertPostRestart.
+	b1006 := runB1006Recovery(repoRoot, port)
+	res = replaceBehavior(res, "B1006", b1006)
+
 	return res, nil
+}
+
+// replaceBehavior swaps the testResult carrying behavior id out of res for repl,
+// preserving order. If no existing result carries id, repl is appended.
+func replaceBehavior(res []testResult, id string, repl testResult) []testResult {
+	for i, r := range res {
+		if contains(r.Behaviors, id) {
+			res[i] = repl
+			return res
+		}
+	}
+	return append(res, repl)
+}
+
+// faultClusterTimeout is the faultprovider's "block ConfigureInstance until ctx
+// is done" selector (its faultBackend's clusterConfigureTO, which lives in the
+// separate faultprovider main package — duplicated here as a wire constant).
+// Configuring onto it makes the machine sit in CONFIGURING for the whole
+// transition timeout, which the B1006 cycle exploits to kill the provider
+// mid-transition.
+const faultClusterTimeout = "fault-timeout"
+
+// runB1006Recovery exercises providerkit.recoverInterrupted() end-to-end: it
+// boots the reference faultprovider against a --state FileStore with a GENEROUS
+// --transition-timeout, drives a machine INTO Configuring via the "fault-timeout"
+// cluster (whose ConfigureInstance BLOCKS until ctx is done, so the machine sits
+// in CONFIGURING), OBSERVES it in CONFIGURING (so the test is non-vacuous),
+// KILLS the provider mid-transition, RE-BOOTS against the SAME --state on a fresh
+// port, and asserts the orphaned CONFIGURING record was recovered to FAILED with
+// a non-empty last_error on reload. Any setup error fails the behavior with a
+// clear message rather than silently passing.
+//
+// Ports: the faultprovider boots on basePort+10 then basePort+11 (the durable
+// lane is invoked with port = *basePort+2 and re-boots on +3; the fault lane
+// owns +1 and the scale lane +3 — basePort+10/+11 are well clear of all of
+// them). The temp --state file and both provider processes are cleaned up on
+// every path.
+func runB1006Recovery(repoRoot string, basePort int) testResult {
+	const id = "B1006"
+
+	bin, err := buildFaultProvider(repoRoot)
+	if err != nil {
+		return durFail(id, fmt.Sprintf("build faultprovider: %v", err))
+	}
+
+	tmp, err := os.MkdirTemp("", "bfconformance-b1006-")
+	if err != nil {
+		return durFail(id, fmt.Sprintf("mkdtemp: %v", err))
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	statePath := filepath.Join(tmp, "fault-state.json")
+	logPath := filepath.Join(tmp, "fault-provider.log")
+
+	// --- boot with a GENEROUS timeout so CONFIGURING persists until we kill it.
+	addr := fmt.Sprintf("127.0.0.1:%d", basePort+10)
+	fmt.Fprintf(os.Stderr, ">> [durable/B1006] booting faultprovider on %s (--state=%s, --transition-timeout=30s)\n", addr, statePath)
+	prov, err := bootFaultProviderWith(bin, addr, logPath, "30s", statePath)
+	if err != nil {
+		return durFail(id, fmt.Sprintf("boot faultprovider: %v", err))
+	}
+	// prov is killed below (mid-CONFIGURING); guard a leak on early return.
+	provStopped := false
+	defer func() {
+		if !provStopped {
+			prov.stop()
+		}
+	}()
+
+	c, err := dialDurable(addr)
+	if err != nil {
+		return durFail(id, fmt.Sprintf("dial faultprovider: %v", err))
+	}
+
+	// --- pick a Speculative machine, Create -> IDLE.
+	mid, err := c.pickSpeculative(map[string]bool{})
+	if err != nil {
+		c.close()
+		return durFail(id, fmt.Sprintf("pick speculative: %v", err))
+	}
+	{
+		ctx, cancel := ctxTO()
+		_, cerr := c.cli.Create(ctx, &pb.CreateRequest{MachineId: mid})
+		cancel()
+		if cerr != nil {
+			c.close()
+			return durFail(id, fmt.Sprintf("create %s: %v", mid, cerr))
+		}
+	}
+	if _, err := c.pollState(mid, pb.MachineState_MACHINE_STATE_IDLE, 20*time.Second); err != nil {
+		c.close()
+		return durFail(id, fmt.Sprintf("machine %s never reached IDLE: %v", mid, err))
+	}
+
+	// --- Configure onto "fault-timeout": ConfigureInstance now BLOCKS until ctx
+	//     is done, so the machine enters and STAYS in CONFIGURING.
+	{
+		ctx, cancel := ctxTO()
+		_, cerr := c.cli.Configure(ctx, &pb.ConfigureRequest{
+			MachineId: mid, ClusterId: faultClusterTimeout,
+			BootstrapBlob: []byte("# b1006\n"), ShardMetadata: map[string]string{"b1006/k": "v"},
+		})
+		cancel()
+		if cerr != nil {
+			c.close()
+			return durFail(id, fmt.Sprintf("configure %s onto %q: %v", mid, faultClusterTimeout, cerr))
+		}
+	}
+
+	// --- OBSERVE CONFIGURING (bounded). This is what makes the test non-vacuous:
+	//     if it never goes CONFIGURING, fail loudly rather than silently pass.
+	if _, err := c.pollState(mid, pb.MachineState_MACHINE_STATE_CONFIGURING, 5*time.Second); err != nil {
+		c.close()
+		return durFail(id, fmt.Sprintf("machine %s never observed in CONFIGURING (the blocking actuator did not engage): %v — test would be vacuous", mid, err))
+	}
+	fmt.Fprintf(os.Stderr, ">> [durable/B1006] machine %s OBSERVED in CONFIGURING; killing faultprovider mid-transition\n", mid)
+	c.close()
+
+	// --- KILL mid-CONFIGURING. The orphaned CONFIGURING record now lives only in
+	//     statePath; the goroutine + timeout that would have moved it are gone.
+	prov.stop()
+	provStopped = true
+
+	// --- RE-BOOT against the SAME --state on a FRESH port (avoid rebind races).
+	addr2 := fmt.Sprintf("127.0.0.1:%d", basePort+11)
+	logPath2 := filepath.Join(tmp, "fault-provider-2.log")
+	fmt.Fprintf(os.Stderr, ">> [durable/B1006] re-booting faultprovider on %s against the SAME --state\n", addr2)
+	prov2, err := bootFaultProviderWith(bin, addr2, logPath2, "30s", statePath)
+	if err != nil {
+		return durFail(id, fmt.Sprintf("re-boot faultprovider: %v", err))
+	}
+	defer prov2.stop()
+
+	c2, err := dialDurable(addr2)
+	if err != nil {
+		return durFail(id, fmt.Sprintf("re-dial faultprovider: %v", err))
+	}
+	defer c2.close()
+
+	// --- ASSERT: recoverInterrupted moved the orphaned CONFIGURING -> FAILED with
+	//     a non-empty last_error on reload.
+	ctx, cancel := ctxTO()
+	m, gerr := c2.cli.Get(ctx, &pb.MachineRef{Id: mid})
+	cancel()
+	if gerr != nil {
+		return durFail(id, fmt.Sprintf("Get %s post-restart: %v", mid, gerr))
+	}
+	if m.GetState() != pb.MachineState_MACHINE_STATE_FAILED {
+		return durFail(id, fmt.Sprintf("machine %s post-restart state=%s, want FAILED — recoverInterrupted did NOT recover the orphaned CONFIGURING record", mid, m.GetState()))
+	}
+	if m.GetLastError() == "" {
+		return durFail(id, fmt.Sprintf("machine %s recovered to FAILED but last_error is empty — recoverInterrupted must surface the interruption", mid))
+	}
+	fmt.Fprintf(os.Stderr, ">> [durable/B1006] machine %s recovered CONFIGURING->FAILED post-restart (last_error=%q)\n", mid, m.GetLastError())
+	return durPass(id, fmt.Sprintf("killed %s mid-CONFIGURING (blocking actuator); on restart recoverInterrupted recovered the orphaned record to FAILED with last_error=%q", mid, m.GetLastError()))
 }
 
 // preState captures everything the post-restart assertions compare against.
@@ -415,11 +577,14 @@ func (c *durClient) assertB1005(pre *preState) testResult {
 		string(resp.GetRevision()), newOp, len(pre.opIDs)))
 }
 
-// B1006: no machine is stuck in a transitional state after restart. The kit's
-// recoverInterrupted moves any persisted transitional (CREATING/CONFIGURING/
-// DRAINING/DELETING) to FAILED on reload; for the AWS instant fake every drive
-// settled before the kill, so the contract-correct invariant is simply that
-// no machine is transitional post-restart.
+// B1006 (weak invariant): no machine is stuck in a transitional state after
+// restart. Against the provider-under-test's instant fake every drive settled
+// before the kill, so this only asserts the negative ("nothing transitional
+// post-restart") — it never actually drives recoverInterrupted. runDurableLane
+// REPLACES this result with runB1006Recovery's strong, non-vacuous cycle
+// (kill mid-CONFIGURING against the blocking faultprovider, assert FAILED on
+// reload). This weak check is still computed as a cheap negative sanity guard on
+// the provider under test; its result is swapped out before reporting.
 func (c *durClient) assertB1006(pre *preState) testResult {
 	post, err := c.snapshotInventory()
 	if err != nil {
