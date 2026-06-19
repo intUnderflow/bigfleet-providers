@@ -44,15 +44,21 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/intunderflow/bigfleet-aws
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
       - name: Build + push the AWS provider image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: providers/aws/deploy/Dockerfile
           push: true
-          tags: |
-            ghcr.io/intunderflow/bigfleet-aws:${{ github.ref_name }}
-            ghcr.io/intunderflow/bigfleet-aws:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
   helm:
     runs-on: ubuntu-latest
@@ -83,6 +89,7 @@ jobs:
         with:
           generate_release_notes: true
           body_path: CHANGELOG.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             artifacts/conformance-report/report.json
             artifacts/conformance-report/junit.xml
