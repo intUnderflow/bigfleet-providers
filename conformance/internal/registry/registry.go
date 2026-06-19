@@ -1,0 +1,230 @@
+// Package registry is the FROZEN, machine-readable catalog of BigFleet provider
+// conformance behaviors — the curated, stable leaf-id list (like the Kubernetes
+// [Conformance] test set). It is the single source of truth the extension suite
+// references (via behavior ids) and the bfconformance runner accounts coverage
+// against. Entries are append-only and ids are never reused: a behavior is
+// retired by marking it Deprecated, never deleted.
+//
+// Areas: B1xx lifecycle/state-machine, B2xx transition-matrix/errors, B3xx
+// fencing, B4xx concurrency/idempotency, B5xx metadata, B7xx timeouts/failure,
+// B8xx field-shape/cost, B9xx list/revision, B10xx durability/restart, B11xx
+// scale/soak, B12xx property/fuzz.
+package registry
+
+// Behavior is one frozen conformance leaf.
+type Behavior struct {
+	ID         string   // frozen leaf id, e.g. "B401" (never reused)
+	Area       string   // human area name
+	Title      string   // one precise wire-observable assertion
+	Profiles   []string // profiles that REQUIRE this behavior (core, cloud, bare-metal, spot, scale, durable, fault)
+	Capability string   // capability gate (""=always; Delete, SinceRevision, Durable, Fault, Scale)
+	Phase      int      // implementation phase: 2 black-box suites, 4 fault/durability lanes, 5 scale/soak
+	BlackBox   bool     // assertable over the 6 RPCs alone (false => needs runner orchestration / configurable backend)
+}
+
+// Catalog is the complete frozen behavior set (92 behaviors).
+var Catalog = []Behavior{
+	{ID: "B101", Area: "Lifecycle & State Machine", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "A full Speculative->Idle->Configured->Idle round-trip repeated four times leaves cluster, shard_metadata, and last_error all empty at every return to Idle"},
+	{ID: "B103", Area: "Lifecycle & State Machine", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "During a Configure, any mid-flight state observed is CONFIGURING (never another transitional), and the machine settles in Configured"},
+	{ID: "B104", Area: "Lifecycle & State Machine", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "During a Drain, any mid-flight state observed is DRAINING (never another transitional), and the machine settles back in Idle"},
+	{ID: "B105", Area: "Lifecycle & State Machine", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "The de-duplicated ordered state trace of a Create-then-Configure-then-Drain cycle visits only states adjacent on the four legal edges, never skipping a stable state"},
+	{ID: "B106", Area: "Lifecycle & State Machine", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "cluster is non-empty whenever the machine rests in Configured and is empty once a Drain has settled to Idle; if a Configuring window is observed, cluster is already non-empty in it"},
+	{ID: "B107", Area: "Lifecycle & State Machine", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "At every resting stable state, host is nil for Speculative and set for Idle/Configured, with no transitional state ever surfaced as the settled Get result"},
+	{ID: "B108", Area: "Lifecycle & State Machine", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "After a settled mutation, Consistently-polling the machine over a stability window shows it never spontaneously re-enters a transitional state"},
+	{ID: "B109", Area: "Lifecycle & State Machine", Profiles: []string{"core", "cloud"}, Capability: "Delete", Phase: 2, BlackBox: true,
+		Title: "During a Delete, any mid-flight state observed is DELETING (never another transitional), and the machine settles back in Speculative"},
+	{ID: "B201", Area: "Transition Matrix / Errors", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Create on a Configured machine is rejected with a non-FAILED_PRECONDITION code and leaves the machine in Configured (no partial transition)"},
+	{ID: "B202", Area: "Transition Matrix / Errors", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Configure on a Speculative machine is rejected with a non-FAILED_PRECONDITION code and leaves the machine in Speculative"},
+	{ID: "B203", Area: "Transition Matrix / Errors", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Drain on an Idle machine is rejected with a non-FAILED_PRECONDITION code and leaves the machine in Idle"},
+	{ID: "B204", Area: "Transition Matrix / Errors", Profiles: []string{"core", "cloud"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Delete on a Speculative or Configured machine is rejected with a non-FAILED_PRECONDITION code (or Unimplemented) and leaves the source state unchanged"},
+	{ID: "B205", Area: "Transition Matrix / Errors", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Re-Configure on an already-Configured machine and re-Create on an already-Idle machine are idempotent no-ops that succeed and leave the target state unchanged"},
+	{ID: "B206", Area: "Transition Matrix / Errors", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "An idempotent no-op-at-target call returns the same non-empty operation_id as the original transition into that target state"},
+	{ID: "B207", Area: "Transition Matrix / Errors", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Create/Configure/Drain on an unknown machine_id return NotFound, never FAILED_PRECONDITION and never a silent create"},
+	{ID: "B208", Area: "Transition Matrix / Errors", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Get/Create/Configure/Drain with an empty machine_id return InvalidArgument"},
+	{ID: "B209", Area: "Transition Matrix / Errors", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "A Configure carrying more shard_metadata keys/bytes than the provider accepts is either echoed verbatim or rejected with InvalidArgument (never FAILED_PRECONDITION) with no partial transition"},
+	{ID: "B210", Area: "Transition Matrix / Errors", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "A Drain with a negative grace_period_seconds is rejected with InvalidArgument and leaves the machine in Configured"},
+	{ID: "B211", Area: "Transition Matrix / Errors", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "A mutating RPC carrying a negative shard_epoch or negative sequence_number with a non-empty shard_id is rejected with InvalidArgument, not FAILED_PRECONDITION"},
+	{ID: "B212", Area: "Transition Matrix / Errors", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "A Configure with an int64-max shard_epoch/sequence_number against a fresh shard is accepted and establishes the high-water mark at that value without overflow"},
+	{ID: "B213", Area: "Transition Matrix / Errors", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "A Configure carrying an oversized bootstrap_blob is either accepted or rejected with InvalidArgument (never FAILED_PRECONDITION) with no partial transition"},
+	{ID: "B214", Area: "Transition Matrix / Errors", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Distinct successive target-state transitions on one machine mint distinct operation_ids (operation_id freshness-per-new-cycle), complementing the same-op-id-at-target invariant"},
+	{ID: "B215", Area: "Transition Matrix / Errors", Profiles: []string{"core", "cloud"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Get on an unknown machine_id returns NotFound and Delete on an unknown machine_id returns NotFound or Unimplemented"},
+	{ID: "B301", Area: "Fencing", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "A stale token aimed at a non-existent machine is rejected with FAILED_PRECONDITION, proving the fence runs before the not-found check"},
+	{ID: "B302", Area: "Fencing", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Fencing high-water marks are isolated per shard_id: one shard's high mark never fences another shard's first low-token contact, and the owning shard's stale token is still rejected"},
+	{ID: "B303", Area: "Fencing", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "On a single shard, every not-strictly-newer (epoch,sequence) token is rejected with FAILED_PRECONDITION and every strictly-newer token advances the mark, lexicographically (a higher epoch with a low sequence advances and resets the sequence space)"},
+	{ID: "B305", Area: "Fencing", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Get and List succeed throughout a series of interleaved fenced-out mutations, confirming reads carry no token and never fence"},
+	{ID: "B306", Area: "Fencing", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "The fence runs before the idempotency short-circuit on Configure: a stale token replaying an already-applied Configure is rejected with FAILED_PRECONDITION, not reused"},
+	{ID: "B307", Area: "Fencing", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "The fence runs before the idempotency short-circuit on Drain: a stale-token Drain replay is rejected with FAILED_PRECONDITION"},
+	{ID: "B308", Area: "Fencing", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "A two-zero-token (shard_id empty, epoch=0, seq=0) Create followed by another zero-token Create are both accepted, confirming an absent token bypasses fencing"},
+	{ID: "B309", Area: "Fencing", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "A ShardSession's monotonically auto-advancing tokens are accepted in order across Create/Configure/Drain on one machine, exercising fencing on every mutating RPC"},
+	{ID: "B310", Area: "Fencing", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "After a ShardSession NewEpoch (epoch++, seq reset), a replay of a pre-restart token is rejected with FAILED_PRECONDITION while the new-epoch token is accepted"},
+	{ID: "B311", Area: "Fencing", Profiles: []string{"core", "fault"}, Capability: "Fault", Phase: 4, BlackBox: false,
+		Title: "A zombie shard's passing token that establishes a mark, then fails its op against an out-of-position machine, still advances the high-water mark so its own retry is fenced"},
+	{ID: "B312", Area: "Fencing", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "For a randomized stream of (epoch,sequence) tokens on one shard, acceptance matches a monotonic-lexicographic oracle exactly (accept iff strictly greater than the running max)"},
+	{ID: "B401", Area: "Concurrency & Idempotency", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "N parallel identical Create retries on one Speculative machine return exactly one distinct non-empty operation_id and the machine settles in Idle exactly once"},
+	{ID: "B402", Area: "Concurrency & Idempotency", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "N parallel identical Configure retries (same cluster, same metadata) on one Idle machine return a single stable operation_id and settle in Configured exactly once"},
+	{ID: "B403", Area: "Concurrency & Idempotency", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "N parallel identical Drain retries on one Configured machine return a single stable operation_id and settle back to Idle exactly once with cluster/metadata cleared"},
+	{ID: "B404", Area: "Concurrency & Idempotency", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Two racing conflicting mutations on one machine (e.g. Configure vs Drain) serialize so at most one succeeds and the machine lands in exactly one well-defined stable state"},
+	{ID: "B405", Area: "Concurrency & Idempotency", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Concurrent interleaved old-epoch zombie and new-epoch live tokens on one machine always let the live (higher) epoch win and always FAILED_PRECONDITION the zombie"},
+	{ID: "B406", Area: "Concurrency & Idempotency", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Idempotency is keyed on (machine_id, target_state) under contention: concurrent retries toward the same target collapse to one operation_id even when fired across distinct connections"},
+	{ID: "B407", Area: "Concurrency & Idempotency", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "K machines driven to Idle concurrently each return a distinct operation_id and each independently reach Idle with no cross-machine effect bleed"},
+	{ID: "B408", Area: "Concurrency & Idempotency", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Across a parallel burst of identical retries, every succeeding ack's embedded machine snapshot reports the same target-bound transitional or settled state (no torn snapshot)"},
+	{ID: "B409", Area: "Concurrency & Idempotency", Profiles: []string{"core", "cloud"}, Capability: "Delete", Phase: 2, BlackBox: true,
+		Title: "N parallel identical Delete retries on one Idle machine return a single stable operation_id and settle to Speculative exactly once"},
+	{ID: "B501", Area: "Metadata", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "A 55-key map mixing embedded NUL, control bytes, unicode, and empty values is echoed byte-for-byte on Get and on List(CONFIGURED), stable across repeated reads"},
+	{ID: "B502", Area: "Metadata", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "shard_metadata and cluster both clear when a Drain settles to Idle, and a subsequent Configure with a disjoint map shows no key from the prior binding"},
+	{ID: "B503", Area: "Metadata", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "An oversized or many-key metadata map is either echoed verbatim or rejected with InvalidArgument under a documented cap, never silently truncated or summarized"},
+	{ID: "B504", Area: "Metadata", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "If a CONFIGURING window is observed mid-flight, shard_metadata is already visible verbatim in it (best-effort against instant actuators); otherwise the verbatim map is asserted once the machine is Configured"},
+	{ID: "B505", Area: "Metadata", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Mutating a metadata map after a Configure ack does not alter the provider-stored copy: a fresh Get still returns the originally-sent bytes (no caller aliasing)"},
+	{ID: "B701", Area: "Timeouts & Failure", Profiles: []string{"core", "fault"}, Capability: "Fault", Phase: 4, BlackBox: false,
+		Title: "A Configure whose actuator errors drives the machine to FAILED with a non-empty last_error and no lingering CONFIGURING state"},
+	{ID: "B702", Area: "Timeouts & Failure", Profiles: []string{"core", "fault"}, Capability: "Fault", Phase: 4, BlackBox: false,
+		Title: "A Create whose actuator errors drives the machine to FAILED with a non-empty last_error"},
+	{ID: "B703", Area: "Timeouts & Failure", Profiles: []string{"core", "fault"}, Capability: "Fault", Phase: 4, BlackBox: false,
+		Title: "A transition that exceeds its configured timeout drives the machine to FAILED carrying a timeout-shaped non-empty last_error, never silently reverting"},
+	{ID: "B704", Area: "Timeouts & Failure", Profiles: []string{"core", "fault"}, Capability: "Fault", Phase: 4, BlackBox: false,
+		Title: "A stale async actuator completion arriving after the transition already failed is discarded: the machine stays FAILED and does not flip to the success state"},
+	{ID: "B705", Area: "Timeouts & Failure", Profiles: []string{"core", "fault"}, Capability: "Fault", Phase: 4, BlackBox: false,
+		Title: "After a transition fails to FAILED, a re-issued mutation toward a legal target recovers the machine out of FAILED and clears last_error on the next clean settle"},
+	{ID: "B706", Area: "Timeouts & Failure", Profiles: []string{"core", "fault"}, Capability: "Fault", Phase: 4, BlackBox: false,
+		Title: "A Drain with grace_period_seconds=0 against a failing actuator ends in Idle or FAILED-with-last_error, never stuck DRAINING and never a silent revert"},
+	{ID: "B707", Area: "Timeouts & Failure", Profiles: []string{"core", "fault"}, Capability: "Fault", Phase: 4, BlackBox: false,
+		Title: "A FAILED machine still answers Get/List and reports its FAILED state with last_error preserved verbatim across repeated reads"},
+	{ID: "B801", Area: "Field Shape & Cost", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Every machine reports a non-UNSPECIFIED state and a non-empty top-level instance_type, with no instance-type/zone/capacity-type key hidden in labels"},
+	{ID: "B802", Area: "Field Shape & Cost", Profiles: []string{"core", "spot"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "Every machine's price_per_hour is finite and >= 0 and interruption_probability lies in [0,1], with SPOT machines reporting interruption_probability > 0"},
+	{ID: "B803", Area: "Field Shape & Cost", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "host is nil for Speculative and set for Idle/Configured, and cluster is empty for Speculative/Idle and non-empty for Configured"},
+	{ID: "B804", Area: "Field Shape & Cost", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "When a machine populates allocatable and resources, both are non-empty resource maps so the density floor(allocatable/resources) is computable"},
+	{ID: "B805", Area: "Field Shape & Cost", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "A machine's HostRef.provider is identical across every Get and List observation through its Idle->Configured->Idle lifecycle (stable host identity)"},
+	{ID: "B806", Area: "Field Shape & Cost", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "zone and capacity_type are cross-field consistent for a stable machine: capacity_type is non-UNSPECIFIED and zone is non-empty wherever a host is set"},
+	{ID: "B807", Area: "Field Shape & Cost", Profiles: []string{"core", "cloud"}, Capability: "Delete", Phase: 2, BlackBox: true,
+		Title: "Walking an Idle machine through Delete back to Speculative clears host, cluster, and shard_metadata (positive Delete-clears-host)"},
+	{ID: "B901", Area: "List, Revision & Pagination", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "List filtered by each single state returns only machines in that state, and a multi-state filter returns the exact union and nothing else"},
+	{ID: "B902", Area: "List, Revision & Pagination", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "List with max_results=1,2,3 never returns more than the cap, and max_results=0 imposes no cap"},
+	{ID: "B903", Area: "List, Revision & Pagination", Profiles: []string{"core"}, Capability: "SinceRevision", Phase: 2, BlackBox: true,
+		Title: "List.revision advances after a mutation and a delta List since the prior cursor includes the just-mutated machine"},
+	{ID: "B904", Area: "List, Revision & Pagination", Profiles: []string{"core"}, Capability: "SinceRevision", Phase: 2, BlackBox: true,
+		Title: "A delta List since the current revision, with no intervening mutation, returns an empty machine set (empty-delta when nothing changed)"},
+	{ID: "B905", Area: "List, Revision & Pagination", Profiles: []string{"core"}, Capability: "SinceRevision", Phase: 2, BlackBox: true,
+		Title: "Across many sequential mutations the revision cursor is monotonic: each post-mutation revision differs from the prior and a since-delta keyed on any earlier cursor includes all machines mutated after it"},
+	{ID: "B906", Area: "List, Revision & Pagination", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "A garbage, zero, or non-cursor since_revision value is treated as no-cursor and returns the full list without error"},
+	{ID: "B907", Area: "List, Revision & Pagination", Profiles: []string{"core"}, Capability: "SinceRevision", Phase: 2, BlackBox: true,
+		Title: "Paging a fleet via repeated max_results+since_revision walks the List-as-a-set with no duplicate and no skipped machine (set-completeness)"},
+	{ID: "B908", Area: "List, Revision & Pagination", Profiles: []string{"core"}, Capability: "SinceRevision", Phase: 2, BlackBox: true,
+		Title: "A since-poller observes no revision bump from idle reconcile ticks: with no client mutation, repeated List returns an empty delta over a quiescent window"},
+	{ID: "B909", Area: "List, Revision & Pagination", Profiles: []string{"core"}, Capability: "SinceRevision", Phase: 2, BlackBox: true,
+		Title: "An opaque revision cursor fed back as the exact bytes a prior List emitted is accepted, while a byte-mutated copy degrades to a full list rather than erroring"},
+	{ID: "B1001", Area: "Durability / Restart Recovery", Profiles: []string{"core", "durable"}, Capability: "Durable", Phase: 4, BlackBox: false,
+		Title: "After kill+restart against the same FileStore path, a not-strictly-newer fencing token is still rejected with FAILED_PRECONDITION (high-water marks survived)"},
+	{ID: "B1002", Area: "Durability / Restart Recovery", Profiles: []string{"core", "durable"}, Capability: "Durable", Phase: 4, BlackBox: false,
+		Title: "After restart, an idempotent retry of a pre-restart mutation returns the same operation_id as before the restart (idempotency map survived)"},
+	{ID: "B1003", Area: "Durability / Restart Recovery", Profiles: []string{"core", "durable"}, Capability: "Durable", Phase: 4, BlackBox: false,
+		Title: "After restart, a previously Configured machine still reports its cluster and verbatim shard_metadata over Get and List (bindings survived)"},
+	{ID: "B1004", Area: "Durability / Restart Recovery", Profiles: []string{"core", "durable"}, Capability: "Durable", Phase: 4, BlackBox: false,
+		Title: "After restart, full inventory (machine ids and states) is recovered identically with no machine lost or duplicated"},
+	{ID: "B1005", Area: "Durability / Restart Recovery", Profiles: []string{"core", "durable"}, Capability: "Durable", Phase: 4, BlackBox: false,
+		Title: "After restart, a post-restart since-delta cursor and a freshly issued operation_id are well-formed and the operation_id is not reused from a pre-restart cycle (freshness, not counter monotonicity)"},
+	{ID: "B1006", Area: "Durability / Restart Recovery", Profiles: []string{"core", "durable"}, Capability: "Durable", Phase: 4, BlackBox: false,
+		Title: "A transition interrupted by the kill is recovered on restart to FAILED (with last_error) or to a clean stable state, never left stuck in a transitional state"},
+	{ID: "B1007", Area: "Durability / Restart Recovery", Profiles: []string{"core", "durable"}, Capability: "Durable", Phase: 4, BlackBox: false,
+		Title: "After restart, a brand-new shard_id's first low token is still accepted, confirming per-shard mark isolation survived without a global high-water collapse"},
+	{ID: "B1101", Area: "Scale & Soak", Profiles: []string{"core", "scale"}, Capability: "Scale", Phase: 5, BlackBox: true,
+		Title: "With a 10k-100k seeded inventory, a full List returns every machine and each record satisfies the field-shape and cost-bound invariants"},
+	{ID: "B1102", Area: "Scale & Soak", Profiles: []string{"core", "scale"}, Capability: "Scale", Phase: 5, BlackBox: true,
+		Title: "At scale, a since_revision delta after a bounded batch of mutations returns exactly the mutated set, with no missing or extraneous machine"},
+	{ID: "B1103", Area: "Scale & Soak", Profiles: []string{"core", "scale"}, Capability: "Scale", Phase: 5, BlackBox: true,
+		Title: "At scale, paging the whole fleet via max_results+revision yields set-completeness (no-dup/no-skip) over tens of thousands of machines"},
+	{ID: "B1104", Area: "Scale & Soak", Profiles: []string{"core", "scale"}, Capability: "Scale", Phase: 5, BlackBox: true,
+		Title: "A continuous Configure/Drain churn soak over many cycles keeps every machine's invariants intact and leaks no residual cluster/metadata at each Idle return"},
+	{ID: "B1105", Area: "Scale & Soak", Profiles: []string{"core", "scale"}, Capability: "Scale", Phase: 5, BlackBox: true,
+		Title: "Over a multi-minute soak the live machine count is conserved (created==deleted+resident), proving no machine leaks or vanishes"},
+	{ID: "B1106", Area: "Scale & Soak", Profiles: []string{"core", "scale"}, Capability: "Scale", Phase: 5, BlackBox: true,
+		Title: "Per-RPC latency histograms are captured and p99 for Get/List/Create stays within the lane's declared budget at scale"},
+	{ID: "B1107", Area: "Scale & Soak", Profiles: []string{"core", "scale"}, Capability: "Scale", Phase: 5, BlackBox: true,
+		Title: "List cost at N machines stays within budget: full-List latency grows sub-pathologically as inventory scales from baseline to 100k"},
+	{ID: "B1108", Area: "Scale & Soak", Profiles: []string{"core", "scale"}, Capability: "Scale", Phase: 5, BlackBox: true,
+		Title: "Under K parallel walk-to-Idle at scale, sustained mutation throughput holds and every machine reaches Idle without operation_id collision"},
+	{ID: "B1109", Area: "Scale & Soak", Profiles: []string{"core", "scale"}, Capability: "Scale", Phase: 5, BlackBox: true,
+		Title: "Throughout the soak, Consistently-polling a sample of steady-state machines shows none drifts into a transitional or FAILED state without a client mutation"},
+	{ID: "B1201", Area: "Property / Fuzz", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "For a seeded random stream of (epoch,sequence) tokens on one shard, acceptance equals the lexicographic-greater-than-running-max oracle on every step (replayable via -seed)"},
+	{ID: "B1202", Area: "Property / Fuzz", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "For seeded random valid-UTF-8 metadata maps, each Configure round-trips byte-identically on the next Get across many generated cases"},
+	{ID: "B1203", Area: "Property / Fuzz", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "For seeded random valid/invalid lifecycle sequences, the provider follows the four-legal-edge model: legal edges succeed, illegal edges reject non-FAILED_PRECONDITION, and no partial transition occurs"},
+	{ID: "B1204", Area: "Property / Fuzz", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "For random interleavings of fenced mutations across multiple shards on shared machines, the invariant oracle confirms FAILED_PRECONDITION is emitted only for fencing rejections, never for out-of-position or not-found"},
+	{ID: "B1205", Area: "Property / Fuzz", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
+		Title: "For seeded random request shapes (empty/unknown id, negative grace, oversize metadata, oversize bootstrap_blob, malformed token), the response code matches the frozen code-discipline oracle (InvalidArgument/NotFound/Unimplemented, never FAILED_PRECONDITION)"},
+}
+
+// ByID returns the behavior with the given id.
+func ByID(id string) (Behavior, bool) {
+	for _, b := range Catalog {
+		if b.ID == id {
+			return b, true
+		}
+	}
+	return Behavior{}, false
+}
+
+// IDs returns every behavior id in catalog order.
+func IDs() []string {
+	out := make([]string, 0, len(Catalog))
+	for _, b := range Catalog {
+		out = append(out, b.ID)
+	}
+	return out
+}
