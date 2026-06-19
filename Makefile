@@ -75,27 +75,50 @@ build-all: build-kit $(addprefix build-,$(ALL_PROVIDERS)) ## Build the kit and e
 test-all: test-kit $(addprefix test-,$(ALL_PROVIDERS)) ## Test the kit and every provider
 vet: vet-kit $(addprefix vet-,$(ALL_PROVIDERS)) ## Vet the kit and every provider
 lint: lint-kit $(addprefix lint-,$(ALL_PROVIDERS)) ## Lint the kit and every provider
-tidy: tidy-kit $(addprefix tidy-,$(ALL_PROVIDERS)) ## Tidy every module
+tidy: tidy-kit tidy-conformance $(addprefix tidy-,$(ALL_PROVIDERS)) ## Tidy every module
+.PHONY: tidy-conformance
+tidy-conformance:
+	$(GO) -C conformance mod tidy
 
 .PHONY: conformance
 conformance: conformance-_template ## Credential-free conformance gate (the template)
 
+# --- certification: upstream baseline + the extension suite ---------------
+# Submodules that pin bigfleet and so must be kept in lockstep with the root.
+PIN_MODULES := $(addprefix providers/,$(ALL_PROVIDERS)) conformance
+
+certify-%: ## Full certification (upstream baseline + extension suite) for one provider
+	./hack/run-certify.sh "$*" "$(PORT)"
+
+.PHONY: certify
+certify: certify-_template ## Credential-free certification gate (the template)
+
+.PHONY: build-conformance test-conformance lint-conformance
+build-conformance: ## Build the conformance harness + extension suite
+	$(GOW) -C conformance build ./...
+	$(GOW) -C conformance build -tags=certify ./...
+test-conformance: ## Unit-test the conformance harness
+	$(GOW) -C conformance test -count=1 ./...
+	$(GOW) -C conformance vet -tags=certify ./...
+lint-conformance: ## Lint the conformance module (incl. the tagged suite)
+	cd conformance && GOWORK=off golangci-lint run --build-tags=certify ./...
+
 # --- bigfleet pin (root module is the single source of truth) -------------
 
 .PHONY: sync-bigfleet check-bigfleet-pin
-sync-bigfleet: ## Sync every provider's bigfleet pin to the root module's
+sync-bigfleet: ## Sync every submodule's bigfleet pin to the root module's
 	@echo ">> root pins bigfleet@$(BIGFLEET_VERSION)"
-	@for p in $(ALL_PROVIDERS); do \
-	  echo ">> providers/$$p -> bigfleet@$(BIGFLEET_VERSION)"; \
-	  $(GO) -C providers/$$p get github.com/intUnderflow/bigfleet@$(BIGFLEET_VERSION); \
-	  $(GO) -C providers/$$p mod tidy; \
+	@for m in $(PIN_MODULES); do \
+	  echo ">> $$m -> bigfleet@$(BIGFLEET_VERSION)"; \
+	  $(GO) -C $$m get github.com/intUnderflow/bigfleet@$(BIGFLEET_VERSION); \
+	  $(GO) -C $$m mod tidy; \
 	done
 
-check-bigfleet-pin: ## Fail if any provider's bigfleet pin differs from the root's
+check-bigfleet-pin: ## Fail if any submodule's bigfleet pin differs from the root's
 	@root="$(BIGFLEET_VERSION)"; fail=0; \
-	for p in $(ALL_PROVIDERS); do \
-	  v=$$($(GO) -C providers/$$p list -m -f '{{.Version}}' github.com/intUnderflow/bigfleet); \
-	  if [ "$$v" != "$$root" ]; then echo "MISMATCH providers/$$p: $$v != root $$root"; fail=1; fi; \
+	for m in $(PIN_MODULES); do \
+	  v=$$($(GO) -C $$m list -m -f '{{.Version}}' github.com/intUnderflow/bigfleet); \
+	  if [ "$$v" != "$$root" ]; then echo "MISMATCH $$m: $$v != root $$root"; fail=1; fi; \
 	done; \
 	if [ $$fail -eq 0 ]; then echo "bigfleet pin consistent across all modules ($$root)"; else exit 1; fi
 
@@ -104,7 +127,7 @@ check-bigfleet-pin: ## Fail if any provider's bigfleet pin differs from the root
 .PHONY: gen-workspace
 gen-workspace: ## Generate a local go.work for editors (gitignored)
 	@rm -f go.work go.work.sum
-	$(GO) work init . $(addprefix ./providers/,$(ALL_PROVIDERS))
+	$(GO) work init . ./conformance $(addprefix ./providers/,$(ALL_PROVIDERS))
 	@echo "generated go.work (gitignored) — builds still use per-module replace"
 
 .PHONY: clean

@@ -51,6 +51,7 @@ resolve_changed() {
 
 run_kit=false
 run_site=false
+run_conformance=false # the conformance module changed (build/lint it)
 providers="[]"
 
 if changed="$(resolve_changed)"; then
@@ -60,6 +61,7 @@ if changed="$(resolve_changed)"; then
     [ -z "$f" ] && continue
     case "$f" in
       providerkit/*) run_kit=true ;;
+      conformance/*) run_conformance=true ;;
       site/*) run_site=true ;;
       go.mod | go.sum | Makefile | .golangci.yml) runall=true ;;
       hack/* | .github/*) runall=true ;;
@@ -76,27 +78,32 @@ if changed="$(resolve_changed)"; then
   if [ "$runall" = true ]; then
     run_kit=true
     run_site=true
+    run_conformance=true
     providers="$all_providers"
   elif [ -n "$changed_providers" ]; then
-    if [ "$run_kit" = true ]; then
-      providers="$all_providers" # kit change fans out to every provider
+    # A kit OR extension-suite change re-certifies EVERY provider (their behaviour
+    # / the suite that judges it changed); otherwise only the changed providers.
+    if [ "$run_kit" = true ] || [ "$run_conformance" = true ]; then
+      providers="$all_providers"
     else
       providers="$(printf '%s' "$changed_providers" | sed '/^$/d' | sort -u | jq -R . | jq -s -c .)"
     fi
-  elif [ "$run_kit" = true ]; then
-    providers="$all_providers" # kit changed but no provider files touched
+  elif [ "$run_kit" = true ] || [ "$run_conformance" = true ]; then
+    providers="$all_providers"
   fi
 else
   # Unknown base — run everything (the safe direction).
   run_kit=true
   run_site=true
+  run_conformance=true
   providers="$all_providers"
 fi
 
 {
   echo "run_kit=$run_kit"
   echo "run_site=$run_site"
+  echo "run_conformance=$run_conformance"
   echo "providers=$providers"
 } >> "${GITHUB_OUTPUT:-/dev/stdout}"
 
-echo "ci-changes: run_kit=$run_kit run_site=$run_site providers=$providers" >&2
+echo "ci-changes: run_kit=$run_kit run_site=$run_site run_conformance=$run_conformance providers=$providers" >&2

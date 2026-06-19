@@ -25,6 +25,7 @@ jobs:
     outputs:
       run_kit: ${{ steps.detect.outputs.run_kit }}
       run_site: ${{ steps.detect.outputs.run_site }}
+      run_conformance: ${{ steps.detect.outputs.run_conformance }}
       providers: ${{ steps.detect.outputs.providers }}
     steps:
       - uses: actions/checkout@v4
@@ -104,10 +105,29 @@ jobs:
           working-directory: providers/${{ matrix.provider }}
           args: ./...
 
-  # Conformance against the bigfleet suite, per changed provider, for providers
-  # that can stand up credential-free. A provider that needs cloud creds opts out
-  # with a providers/<name>/.ci-no-conformance marker (skipped, never failed).
-  conformance:
+  # The conformance EXTENSION suite module (the harness + the certify suite):
+  # build, vet, test, lint. Runs when the conformance module (or tooling) changed.
+  conformance-module:
+    needs: changes
+    if: needs.changes.outputs.run_conformance == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: conformance/go.mod
+          cache-dependency-path: conformance/go.sum
+      - run: make build-conformance test-conformance
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          working-directory: conformance
+          args: --build-tags=certify ./...
+
+  # Full certification (upstream baseline + extension suite) per changed
+  # provider, credential-free. A provider that needs cloud creds opts out with a
+  # providers/<name>/.ci-no-conformance marker (skipped, never failed).
+  certify:
     needs: changes
     if: needs.changes.outputs.providers != '[]'
     runs-on: ubuntu-latest
@@ -125,15 +145,15 @@ jobs:
         run: |
           if [ -f "providers/${{ matrix.provider }}/.ci-no-conformance" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "providers/${{ matrix.provider }} opts out of credential-free conformance"
+            echo "providers/${{ matrix.provider }} opts out of credential-free certification"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Conformance
+      - name: Certify (upstream baseline + extension suite)
         if: steps.gate.outputs.skip != 'true'
-        # run-conformance.sh clones bigfleet at the pinned version itself when
-        # BIGFLEET_SRC is unset — no need to duplicate that logic here.
-        run: make conformance-${{ matrix.provider }}
+        # run-certify.sh clones bigfleet at the pinned version itself when
+        # BIGFLEET_SRC is unset.
+        run: make certify-${{ matrix.provider }}
 
   # The Astro site build-check (Cloudflare Pages deploys it; this just catches a
   # broken build in review). Runs only when site/ changed.
@@ -156,7 +176,7 @@ jobs:
   # Single aggregation gate for branch protection: green unless a job that
   # actually ran failed (skipped jobs are fine). Make THIS the required check.
   ci-ok:
-    needs: [changes, pins, providerkit, provider, conformance, site]
+    needs: [changes, pins, providerkit, provider, conformance-module, certify, site]
     if: always()
     runs-on: ubuntu-latest
     steps:

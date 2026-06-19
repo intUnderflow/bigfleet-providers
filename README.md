@@ -58,7 +58,9 @@ providers/_template/     copy-me provider skeleton — its own module
   go.mod                 require providerkit (replace => ../..) + this provider's deps
 providers/<name>/        a real provider: cp -r providers/_template providers/<name>
 providers/aws/           the AWS EC2 provider (own module: aws-sdk-go-v2 lives here, not in root)
+conformance/             the certification program — its own module (upstream baseline + extension suite)
 hack/run-conformance.sh  boots a provider + runs the bigfleet conformance suite
+hack/run-certify.sh      boots a provider + runs the upstream baseline AND the extension suite
 hack/ci-changes.sh       smart-CI change detection (only run what changed)
 Makefile                 per-module build-/test-/lint-/conformance-<name>, check-bigfleet-pin
 .github/workflows/ci.yml change-aware CI: kit change => all providers; else only changed ones
@@ -118,6 +120,22 @@ BIGFLEET_SRC=/path/to/bigfleet make conformance-<name>
 ```
 
 The conformance suite is in the bigfleet repo; `hack/run-conformance.sh` clones the exact version pinned in `go.mod` (into `.cache/`) unless `BIGFLEET_SRC` is set. Equivalently, from a bigfleet checkout: `make conformance TARGET=host:port`.
+
+## Certification (beyond the baseline)
+
+The upstream suite is the *baseline*. This repo also ships a
+Kubernetes-conformance-scale **certification program** in [`conformance/`](conformance):
+a black-box, behaviors-based extension suite (exhaustive out-of-position
+transition matrix, fencing depth, `shard_metadata` stress, field-shape sweeps,
+List/`since_revision`) that runs against any provider's `--addr`. A provider is
+**certified** when it passes the upstream baseline *and* the extension suite:
+
+```sh
+make certify-<name>          # boots the provider, runs BOTH suites (credential-free)
+```
+
+See [`conformance/docs/conformance.md`](conformance/docs/conformance.md) for the
+behaviors registry, profiles, and how to add a behavior.
 
 ## Design decisions (kept deliberately simple)
 
