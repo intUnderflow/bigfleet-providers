@@ -81,9 +81,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Only the conformance report is fetched cross-job (one named artifact,
+      # not "all" — that download is flaky). The chart is re-packaged locally for
+      # the release asset; it is already published to the OCI registry by `helm`.
       - uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          name: conformance-report
+          path: report
+      - uses: azure/setup-helm@v4
+      - run: helm package providers/aws/deploy/helm --destination charts
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -91,7 +97,7 @@ jobs:
           body_path: CHANGELOG.md
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
-            artifacts/conformance-report/report.json
-            artifacts/conformance-report/junit.xml
-            artifacts/conformance-report/badge.json
-            artifacts/helm-chart/*.tgz
+            report/report.json
+            report/junit.xml
+            report/badge.json
+            charts/*.tgz
