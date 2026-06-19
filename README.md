@@ -41,9 +41,10 @@ Generated Go types and the server interface come from `github.com/intUnderflow/b
 
 | Provider | Capacity types | Status |
 |---|---|---|
+| [`aws`](providers/aws) | on-demand, spot, reserved | EC2 — passes conformance (fake EC2 backend); live demo needs AWS creds |
 | [`_template`](providers/_template) | on-demand + spot (example) | copy-me skeleton — passes conformance against an in-memory backend |
 
-Real providers (aws, gcp, libvirt, …) are added by copying `_template`; the table grows as they land.
+More providers (gcp, libvirt, …) are added by copying `_template`; the table grows as they land.
 
 ## Repository layout
 

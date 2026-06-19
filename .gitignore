@@ -3,10 +3,13 @@
 *.exe
 *.test
 *.out
-# Provider binaries left at the repo root by a bare `go build ./providers/<name>`
-# (the sanctioned build path is `make build-<name>`, which writes to bin/).
+# Provider binaries left by a bare `go build ./providers/<name>` (at the repo
+# root) or `go build` inside a provider dir. The sanctioned build path is
+# `make build-<name>`, which writes to bin/.
 /_template
+/aws
 /providers/*/*.bin
+/providers/aws/aws
 
 # Conformance scratch (cloned bigfleet checkout, local provider state)
 /.cache/
