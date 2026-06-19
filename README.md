@@ -1,5 +1,7 @@
 # bigfleet-providers
 
+[![conformance](https://img.shields.io/badge/bigfleet%20conformance-92%20behaviors%20CERTIFIED-brightgreen)](https://bigfleet-providers.lucy.sh/conformance/)
+
 Out-of-tree **capacity providers** for [BigFleet](https://github.com/intUnderflow/bigfleet), and the shared library every provider is built on.
 
 BigFleet is a fleet-level infrastructure autoscaler: it takes capacity demand from many Kubernetes clusters, diffs it against provisioned inventory, and provisions/reclaims machines through pluggable **`CapacityProvider`** backends. A *provider* is the component that actually creates / configures / drains / deletes machines on a specific substrate (AWS, GCP, libvirt, bare metal, …). BigFleet is not a scheduler — it does not place pods.

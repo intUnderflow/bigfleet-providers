@@ -1,0 +1,90 @@
+name: Release
+
+# Triggered by the ROOT module tag (vX.Y.Z). Submodule tags like
+# providers/aws/vX.Y.Z don't start with "v", so they never trigger this.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write # create the GitHub Release
+  packages: write # push image + chart to ghcr.io
+
+jobs:
+  # Gate the release on a full conformance certification (all 92 behaviors). The
+  # runner exits non-zero unless the verdict is CERTIFIED, so a regression blocks
+  # the release.
+  certify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: conformance/go.mod
+          cache-dependency-path: conformance/go.sum
+      - name: Full conformance certification (baseline + every lane)
+        env:
+          BFCONF_SCALE_SEED: "4000"
+          BFCONF_SOAK: "5s"
+        run: |
+          make report-aws \
+            PROFILE=core,cloud,spot,fault,durable,scale \
+            OUT="$GITHUB_WORKSPACE/release-report"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conformance-report
+          path: release-report
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build + push the AWS provider image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: providers/aws/deploy/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/intunderflow/bigfleet-aws:${{ github.ref_name }}
+            ghcr.io/intunderflow/bigfleet-aws:latest
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Package + push the Helm chart (OCI)
+        run: |
+          mkdir -p /tmp/charts
+          helm package providers/aws/deploy/helm --destination /tmp/charts
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm push /tmp/charts/*.tgz oci://ghcr.io/intunderflow/charts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helm-chart
+          path: /tmp/charts/*.tgz
+
+  release:
+    needs: [certify, image, helm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body_path: CHANGELOG.md
+          files: |
+            artifacts/conformance-report/report.json
+            artifacts/conformance-report/junit.xml
+            artifacts/conformance-report/badge.json
+            artifacts/helm-chart/*.tgz

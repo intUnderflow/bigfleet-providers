@@ -167,6 +167,9 @@ func writeReports(dir string, rep report, base, ext []testResult) error {
 	if err := os.WriteFile(filepath.Join(dir, "report.json"), append(j, '\n'), 0o644); err != nil {
 		return err
 	}
+	if err := os.WriteFile(filepath.Join(dir, "badge.json"), badgeJSON(rep), 0o644); err != nil {
+		return err
+	}
 	return os.WriteFile(filepath.Join(dir, "junit.xml"), junitXML(rep.Provider, base, ext), 0o644)
 }
 
