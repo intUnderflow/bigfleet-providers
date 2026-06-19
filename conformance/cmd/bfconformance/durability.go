@@ -309,9 +309,18 @@ func (c *durClient) pickSpeculative(exclude map[string]bool) (string, error) {
 		return "", fmt.Errorf("list speculative: %w", err)
 	}
 	for _, m := range resp.GetMachines() {
-		if !exclude[m.GetId()] {
-			return m.GetId(), nil
+		if exclude[m.GetId()] {
+			continue
 		}
+		// Skip the reference faultprovider's create-fault slots (label
+		// conformance.fault/create=error): their CreateInstance errors, so a
+		// Create would drive the machine to FAILED, never IDLE. Harmless for real
+		// providers, which don't carry the label. (Fixes a flaky B1006 that
+		// happened to pick faultcreate-N from the unordered List.)
+		if m.GetLabels()["conformance.fault/create"] == "error" {
+			continue
+		}
+		return m.GetId(), nil
 	}
 	return "", fmt.Errorf("no spare Speculative machine (have %d, excluded %d)", len(resp.GetMachines()), len(exclude))
 }
