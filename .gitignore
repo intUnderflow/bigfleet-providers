@@ -33,3 +33,6 @@
 
 # Claude Code session scratch (agent worktrees, transcripts).
 .claude/
+
+# bfconformance runner output
+/conformance-report/
