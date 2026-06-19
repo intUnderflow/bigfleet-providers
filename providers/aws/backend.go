@@ -256,9 +256,9 @@ func (b *awsBackend) spotPairs() []spotPair {
 }
 
 // refreshPrices warms / refreshes the spot price cache. Call at startup and on
-// a timer.
-func (b *awsBackend) refreshPrices(ctx context.Context) {
-	b.pricing.refresh(ctx, b.spotPairs())
+// a timer. Returns the number of (type,zone) pairs that failed to refresh.
+func (b *awsBackend) refreshPrices(ctx context.Context) int {
+	return b.pricing.refresh(ctx, b.spotPairs())
 }
 
 // capacityString renders a kit CapacityType as the canonical tag string.

@@ -25,6 +25,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
@@ -56,6 +57,10 @@ func run() error {
 		bootstrapHk  = flag.String("bootstrap-hook", "/opt/bigfleet/bootstrap", "AMI path that applies the delivered bootstrap blob")
 		baseUserData = flag.String("base-user-data", "", "path to the generic pre-binding bootstrap baked in at launch")
 		spotRefresh  = flag.Duration("spot-refresh", 5*time.Minute, "spot price refresh interval")
+		reconcile    = flag.Duration("reconcile-interval", 2*time.Minute, "background EC2->inventory reconcile interval (0 = off)")
+
+		metricsAddr = flag.String("metrics-addr", ":9090", "address for /metrics, /healthz, /readyz (empty = disabled)")
+		reflectFlag = flag.Bool("reflection", true, "register gRPC server reflection (for grpcurl/debugging)")
 
 		tlsCert = flag.String("tls-cert", "", "server certificate (PEM)")
 		tlsKey  = flag.String("tls-key", "", "server private key (PEM)")
@@ -97,6 +102,10 @@ func run() error {
 	default:
 		return fmt.Errorf("--ec2-backend must be aws, fake, or auto (got %q)", *ec2Backend)
 	}
+
+	// Instrument every EC2/SSM call.
+	m := newMetrics()
+	ec2c = newMetricsEC2Client(ec2c, m)
 
 	// Offerings.
 	var offs []offering
@@ -157,11 +166,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	var grpcOpts []grpc.ServerOption
-	if creds != nil {
-		grpcOpts = append(grpcOpts, grpc.Creds(creds))
-	}
-	gs := grpc.NewServer(grpcOpts...)
+	gs, healthSrv := buildGRPCServer(creds, m, *reflectFlag, logger)
 	srv.Register(gs)
 
 	lis, err := net.Listen("tcp", *addr)
@@ -169,22 +174,71 @@ func run() error {
 		return fmt.Errorf("listen on %s: %w", *addr, err)
 	}
 
-	// Background spot price refresher.
-	go runSpotRefresher(ctx, backend, *spotRefresh, logger)
+	// Observability HTTP server (/metrics, /healthz, /readyz).
+	var obs *observabilityServer
+	if *metricsAddr != "" {
+		obs = newObservabilityServer(*metricsAddr, m)
+		obs.start(logger)
+	}
+
+	// Background loops: spot price refresh + EC2->inventory reconcile.
+	go runSpotRefresher(ctx, backend, m, *spotRefresh)
+	go runReconciler(ctx, srv, m, *reconcile, logger)
+
+	// Mark ready: serving traffic + probes go green.
+	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	if obs != nil {
+		obs.setReady(true)
+	}
 
 	go func() {
 		<-ctx.Done()
 		logger.Info("shutting down")
+		healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+		if obs != nil {
+			obs.setReady(false)
+			sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
+			obs.stop(sctx)
+			scancel()
+		}
 		gs.GracefulStop()
 	}()
 
 	logger.Info("serving CapacityProvider",
 		"addr", lis.Addr().String(), "provider", *providerLbl, "region", *region,
-		"ec2_backend", mode, "security", securityMode(creds, *tlsCA), "offerings", len(offs))
+		"ec2_backend", mode, "security", securityMode(creds, *tlsCA), "offerings", len(offs),
+		"metrics_addr", *metricsAddr)
 	if err := gs.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 		return fmt.Errorf("serve: %w", err)
 	}
 	return nil
+}
+
+// runReconciler periodically re-reads EC2 truth into kit inventory (new
+// offerings, orphans). The persisted store is the primary restart path; this
+// catches drift while running.
+func runReconciler(ctx context.Context, srv *providerkit.Server, m *metrics, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err := srv.Reconcile(rctx)
+			cancel()
+			outcome := "success"
+			if err != nil {
+				outcome = "error"
+				logger.Warn("reconcile failed", "err", err)
+			}
+			m.reconcile.WithLabelValues(outcome).Inc()
+		}
+	}
 }
 
 func resolveBackendMode(flagVal, region string) string {
@@ -199,7 +253,7 @@ func resolveBackendMode(flagVal, region string) string {
 	}
 }
 
-func runSpotRefresher(ctx context.Context, backend *awsBackend, interval time.Duration, logger *slog.Logger) {
+func runSpotRefresher(ctx context.Context, backend *awsBackend, m *metrics, interval time.Duration) {
 	if interval <= 0 {
 		return
 	}
@@ -211,8 +265,13 @@ func runSpotRefresher(ctx context.Context, backend *awsBackend, interval time.Du
 			return
 		case <-t.C:
 			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			backend.refreshPrices(rctx)
+			failed := backend.refreshPrices(rctx)
 			cancel()
+			outcome := "success"
+			if failed > 0 {
+				outcome = "error"
+			}
+			m.spotRefresh.WithLabelValues(outcome).Inc()
 		}
 	}
 }

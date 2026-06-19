@@ -75,10 +75,13 @@ func (p *pricing) price(instanceType, zone string, capacity providerkit.Capacity
 // refresh fetches the current spot price for each (instanceType, zone) pair and
 // caches it. Best-effort: a fetch error leaves the prior (or fallback) value.
 // Call it once at startup and on a timer; never on the List hot path.
-func (p *pricing) refresh(ctx context.Context, pairs []spotPair) {
+// Returns the number of pairs that failed to refresh.
+func (p *pricing) refresh(ctx context.Context, pairs []spotPair) int {
+	failures := 0
 	for _, pr := range pairs {
 		v, err := p.ec2.SpotPriceUSD(ctx, pr.instanceType, pr.zone)
 		if err != nil {
+			failures++
 			p.logger.Warn("pricing: spot price fetch failed; keeping fallback",
 				"instance_type", pr.instanceType, "zone", pr.zone, "err", err)
 			continue
@@ -87,6 +90,7 @@ func (p *pricing) refresh(ctx context.Context, pairs []spotPair) {
 		p.spot[spotKey(pr.instanceType, pr.zone)] = v
 		p.mu.Unlock()
 	}
+	return failures
 }
 
 // spotPair identifies one (instanceType, zone) to refresh spot pricing for.
