@@ -30,3 +30,6 @@
 *.swp
 .idea/
 .vscode/
+
+# Claude Code session scratch (agent worktrees, transcripts).
+.claude/
