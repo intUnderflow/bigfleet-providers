@@ -54,6 +54,9 @@ type runSpec struct {
 	// capacity type is recoverable from EC2 alone (DescribeManaged), not just
 	// guessed from the spot lifecycle.
 	Capacity string
+	// IdempotencyToken is the kit's per-operation id, used as the EC2
+	// RunInstances ClientToken so a retried launch can't double-provision.
+	IdempotencyToken string
 	// BaseUserData is the pre-binding bootstrap baked in at launch (a generic,
 	// cluster-agnostic node bootstrap). The cluster-specific bootstrap arrives
 	// later via ApplyBootstrap, because EC2 user-data is immutable post-launch.

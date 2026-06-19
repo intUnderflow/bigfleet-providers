@@ -20,11 +20,12 @@ import (
 type fakeBackend struct {
 	seed []Instance
 
-	mu          sync.Mutex
-	createFn    func(context.Context, CreateInstanceRequest) (CreateInstanceResult, error)
-	configureFn func(context.Context, ConfigureInstanceRequest) error
-	drainFn     func(context.Context, DrainInstanceRequest) error
-	deleteFn    func(context.Context, DeleteInstanceRequest) error
+	mu             sync.Mutex
+	createFn       func(context.Context, CreateInstanceRequest) (CreateInstanceResult, error)
+	configureFn    func(context.Context, ConfigureInstanceRequest) error
+	drainFn        func(context.Context, DrainInstanceRequest) error
+	deleteFn       func(context.Context, DeleteInstanceRequest) error
+	lastCreateOpID string
 }
 
 func (b *fakeBackend) Describe(context.Context) ([]Instance, error) { return b.seed, nil }
@@ -32,11 +33,19 @@ func (b *fakeBackend) Describe(context.Context) ([]Instance, error) { return b.s
 func (b *fakeBackend) CreateInstance(ctx context.Context, req CreateInstanceRequest) (CreateInstanceResult, error) {
 	b.mu.Lock()
 	fn := b.createFn
+	b.lastCreateOpID = req.OperationID
 	b.mu.Unlock()
 	if fn != nil {
 		return fn(ctx, req)
 	}
 	return CreateInstanceResult{Host: HostRef{Provider: "test", Ref: req.Machine.ID}}, nil
+}
+
+// lastOpID returns the OperationID the most recent CreateInstance saw.
+func (b *fakeBackend) lastOpID() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lastCreateOpID
 }
 
 func (b *fakeBackend) ConfigureInstance(ctx context.Context, req ConfigureInstanceRequest) error {

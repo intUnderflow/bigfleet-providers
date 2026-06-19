@@ -104,12 +104,14 @@ func slotLabels(off offering) map[string]string {
 // plus any orphan managed instances. The kit calls this to seed a fresh store;
 // the persisted store is the primary restart path.
 //
-// A machine-id-tagged managed instance owns its slot in ANY non-terminated
-// state (DescribeManaged returns only non-terminated instances): a tagged
-// instance must never let its slot be re-seeded Speculative, or Create would
-// launch a duplicate sharing the same machine id. Untagged-but-running managed
-// instances are surfaced as orphans under their instance id so they are not
-// lost; untagged non-running ones are skipped (too anomalous to seed).
+// A machine-id-tagged managed instance owns its slot while it is alive —
+// DescribeManaged returns pending/running/stopping/stopped instances, and any
+// of those keeps the slot from being re-seeded Speculative so Create can't
+// launch a duplicate under the same machine id. A shutting-down/terminated
+// instance is releasing its slot and is correctly absent (the slot returns to
+// Speculative for re-provisioning). Untagged-but-running managed instances are
+// surfaced as orphans under their instance id so they are not lost; untagged
+// non-running ones are skipped (too anomalous to seed).
 func (b *awsBackend) Describe(ctx context.Context) ([]providerkit.Instance, error) {
 	managed, err := b.ec2.DescribeManaged(ctx)
 	if err != nil {
@@ -178,12 +180,13 @@ func (b *awsBackend) instanceToIdle(machineID string, inst ec2Instance) provider
 func (b *awsBackend) CreateInstance(ctx context.Context, req providerkit.CreateInstanceRequest) (providerkit.CreateInstanceResult, error) {
 	m := req.Machine
 	inst, err := b.ec2.RunInstance(ctx, runSpec{
-		MachineID:    m.ID,
-		InstanceType: m.InstanceType,
-		Zone:         m.Zone,
-		Spot:         m.CapacityType == providerkit.CapacitySpot,
-		Capacity:     capacityString(m.CapacityType),
-		BaseUserData: b.baseUserData,
+		MachineID:        m.ID,
+		InstanceType:     m.InstanceType,
+		Zone:             m.Zone,
+		Spot:             m.CapacityType == providerkit.CapacitySpot,
+		Capacity:         capacityString(m.CapacityType),
+		IdempotencyToken: req.OperationID,
+		BaseUserData:     b.baseUserData,
 	})
 	if err != nil {
 		return providerkit.CreateInstanceResult{}, fmt.Errorf("RunInstances %s: %w", m.InstanceType, err)

@@ -285,8 +285,8 @@ func (s *Server) Create(_ context.Context, req *pb.CreateRequest) (*pb.Transitio
 	if req.GetMachineId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "machine_id required")
 	}
-	op := func(ctx context.Context, m Machine) (func(*Machine), error) {
-		res, err := s.backend.CreateInstance(ctx, CreateInstanceRequest{Machine: m})
+	op := func(ctx context.Context, m Machine, opID string) (func(*Machine), error) {
+		res, err := s.backend.CreateInstance(ctx, CreateInstanceRequest{Machine: m, OperationID: opID})
 		if err != nil {
 			return nil, err
 		}
@@ -328,9 +328,9 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Tra
 		m.Cluster = clusterID
 		m.ShardMetadata = md
 	}
-	op := func(ctx context.Context, m Machine) (func(*Machine), error) {
+	op := func(ctx context.Context, m Machine, opID string) (func(*Machine), error) {
 		if err := s.backend.ConfigureInstance(ctx, ConfigureInstanceRequest{
-			Machine: m, ClusterID: clusterID, BootstrapBlob: blob,
+			Machine: m, ClusterID: clusterID, BootstrapBlob: blob, OperationID: opID,
 		}); err != nil {
 			return nil, err
 		}
@@ -347,8 +347,8 @@ func (s *Server) Drain(_ context.Context, req *pb.DrainRequest) (*pb.TransitionA
 		return nil, status.Error(codes.InvalidArgument, "machine_id required")
 	}
 	grace := req.GetGracePeriodSeconds()
-	op := func(ctx context.Context, m Machine) (func(*Machine), error) {
-		if err := s.backend.DrainInstance(ctx, DrainInstanceRequest{Machine: m, GracePeriodSeconds: grace}); err != nil {
+	op := func(ctx context.Context, m Machine, opID string) (func(*Machine), error) {
+		if err := s.backend.DrainInstance(ctx, DrainInstanceRequest{Machine: m, GracePeriodSeconds: grace, OperationID: opID}); err != nil {
 			return nil, err
 		}
 		return func(dst *Machine) {
@@ -370,8 +370,8 @@ func (s *Server) Delete(_ context.Context, req *pb.DeleteRequest) (*pb.Transitio
 	if !s.canDelete {
 		return nil, status.Error(codes.Unimplemented, "this provider does not support Delete (bare-metal free-pool semantics)")
 	}
-	op := func(ctx context.Context, m Machine) (func(*Machine), error) {
-		if err := s.deleter.DeleteInstance(ctx, DeleteInstanceRequest{Machine: m}); err != nil {
+	op := func(ctx context.Context, m Machine, opID string) (func(*Machine), error) {
+		if err := s.deleter.DeleteInstance(ctx, DeleteInstanceRequest{Machine: m, OperationID: opID}); err != nil {
 			return nil, err
 		}
 		return func(dst *Machine) {
@@ -444,8 +444,10 @@ func stateMatches(s State, want []pb.MachineState) bool {
 
 // backendOp runs the substrate work for one transition and returns the
 // post-effect to apply when (and only when) it succeeds. It runs on a
-// background goroutine under a per-transition timeout.
-type backendOp func(ctx context.Context, m Machine) (apply func(*Machine), err error)
+// background goroutine under a per-transition timeout. opID is the kit's
+// idempotency key for this operation, handed to the backend so it can use it
+// as a substrate idempotency token.
+type backendOp func(ctx context.Context, m Machine, opID string) (apply func(*Machine), err error)
 
 // dispatch is the shared body of all four mutating RPCs. It enforces the
 // fence-then-idempotency-then-validate ordering, accepts the transition,
@@ -509,7 +511,7 @@ func (s *Server) dispatch(k kind, id string, f Fence, timeout time.Duration, pre
 
 	// 6. Do the substrate work in the background; progress is observed via
 	//    Get/List.
-	go s.runTransition(k, id, timeout, op, snapshot)
+	go s.runTransition(k, id, timeout, op, snapshot, opID)
 	return ack, nil
 }
 
@@ -517,7 +519,7 @@ func (s *Server) dispatch(k kind, id string, f Fence, timeout time.Duration, pre
 // racing it against the per-transition timeout. On success it advances the
 // machine to its stable target and applies the post-effect; on error or
 // timeout it moves the machine to Failed with last_error set.
-func (s *Server) runTransition(k kind, id string, timeout time.Duration, op backendOp, snapshot Machine) {
+func (s *Server) runTransition(k kind, id string, timeout time.Duration, op backendOp, snapshot Machine, opID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -527,7 +529,7 @@ func (s *Server) runTransition(k kind, id string, timeout time.Duration, op back
 	}
 	ch := make(chan result, 1)
 	go func() {
-		apply, err := op(ctx, snapshot)
+		apply, err := op(ctx, snapshot, opID)
 		ch <- result{apply, err}
 	}()
 

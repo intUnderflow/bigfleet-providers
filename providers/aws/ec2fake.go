@@ -15,18 +15,32 @@ type ec2Fake struct {
 	mu        sync.Mutex
 	seq       int
 	instances map[string]*ec2Instance // keyed by instance id
+	byToken   map[string]string       // ClientToken -> instance id (EC2 idempotency)
 	// spotUSD is the deterministic spot price the simulator reports, so
 	// conformance and tests are reproducible.
 	spotUSD float64
 }
 
 func newEC2Fake() *ec2Fake {
-	return &ec2Fake{instances: make(map[string]*ec2Instance), spotUSD: 0.0345}
+	return &ec2Fake{
+		instances: make(map[string]*ec2Instance),
+		byToken:   make(map[string]string),
+		spotUSD:   0.0345,
+	}
 }
 
 func (f *ec2Fake) RunInstance(_ context.Context, spec runSpec) (ec2Instance, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// Model EC2 ClientToken idempotency: a repeated token returns the existing
+	// instance instead of launching a second one.
+	if spec.IdempotencyToken != "" {
+		if id, ok := f.byToken[spec.IdempotencyToken]; ok {
+			if inst, ok := f.instances[id]; ok {
+				return *inst, nil
+			}
+		}
+	}
 	f.seq++
 	id := fmt.Sprintf("i-fake%08d", f.seq)
 	inst := &ec2Instance{
@@ -40,6 +54,9 @@ func (f *ec2Fake) RunInstance(_ context.Context, spec runSpec) (ec2Instance, err
 		Running:      true,
 	}
 	f.instances[id] = inst
+	if spec.IdempotencyToken != "" {
+		f.byToken[spec.IdempotencyToken] = id
+	}
 	return *inst, nil
 }
 

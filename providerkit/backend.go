@@ -98,6 +98,14 @@ type CreateInstanceRequest struct {
 	// already moved to Creating. Use its substrate fields (instance_type,
 	// zone, capacity_type, …) as the spec for what to provision.
 	Machine Machine
+	// OperationID is the kit's idempotency key for this transition: stable
+	// across retries of the same operation, fresh for a new operation cycle
+	// (so a Speculative slot that is Created, Deleted, then Created again gets
+	// a new id). A backend that actuates a non-idempotent substrate call
+	// SHOULD use this as the substrate's idempotency token — e.g. EC2
+	// RunInstances ClientToken — so a retried Create cannot double-provision,
+	// while a genuine re-Create after a delete still launches fresh.
+	OperationID string
 }
 
 // CreateInstanceResult is returned by Backend.CreateInstance.
@@ -118,17 +126,27 @@ type ConfigureInstanceRequest struct {
 	Machine       Machine
 	ClusterID     string
 	BootstrapBlob []byte
+	// OperationID is the per-operation idempotency key — see
+	// CreateInstanceRequest.OperationID. Usable as a substrate idempotency
+	// token (e.g. an SSM command idempotency key).
+	OperationID string
 }
 
 // DrainInstanceRequest is handed to Backend.DrainInstance.
 type DrainInstanceRequest struct {
 	Machine            Machine
 	GracePeriodSeconds int64
+	// OperationID is the per-operation idempotency key — see
+	// CreateInstanceRequest.OperationID.
+	OperationID string
 }
 
 // DeleteInstanceRequest is handed to Backend.DeleteInstance.
 type DeleteInstanceRequest struct {
 	Machine Machine
+	// OperationID is the per-operation idempotency key — see
+	// CreateInstanceRequest.OperationID.
+	OperationID string
 }
 
 // validate enforces the Machine field-shape contract the autoscaler depends

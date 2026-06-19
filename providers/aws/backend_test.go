@@ -240,6 +240,33 @@ func TestInstanceToIdle_CapacityFromTag(t *testing.T) {
 	}
 }
 
+// A retried CreateInstance with the same operation id (the kit's idempotency
+// key) must NOT launch a second EC2 instance — the ClientToken collapses it.
+func TestCreateInstance_ClientTokenPreventsDoubleLaunch(t *testing.T) {
+	b, fake := newTestBackend(t, 2)
+	req := providerkit.CreateInstanceRequest{
+		Machine: providerkit.Machine{
+			ID: "slot", InstanceType: "m6i.large", Zone: "us-east-1a",
+			CapacityType: providerkit.CapacityOnDemand,
+		},
+		OperationID: "op-42",
+	}
+	r1, err := b.CreateInstance(context.Background(), req)
+	if err != nil {
+		t.Fatalf("create #1: %v", err)
+	}
+	r2, err := b.CreateInstance(context.Background(), req) // retry, same op id
+	if err != nil {
+		t.Fatalf("create #2: %v", err)
+	}
+	if r1.Host.Ref != r2.Host.Ref {
+		t.Errorf("retried Create launched a second instance: %s vs %s", r1.Host.Ref, r2.Host.Ref)
+	}
+	if n := len(fake.instances); n != 1 {
+		t.Errorf("EC2 fake has %d instances after a retried Create, want 1 (ClientToken dedup)", n)
+	}
+}
+
 func TestNewAWSBackend_RejectsZonelessOffering(t *testing.T) {
 	fake := newEC2Fake()
 	offs := []offering{{InstanceType: "m6i.large", Zone: "", Capacity: "on_demand", Count: 1}}

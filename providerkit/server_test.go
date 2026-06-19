@@ -59,6 +59,45 @@ func TestFullLifecycle(t *testing.T) {
 
 // --- idempotency ----------------------------------------------------------
 
+// The kit hands the backend the operation_id so a backend can use it as a
+// substrate idempotency token (e.g. an EC2 RunInstances ClientToken). It must
+// equal the ack's operation_id, and a fresh create cycle must mint a new one.
+func TestOperationID_PassedToBackend(t *testing.T) {
+	s, b := newTestServer(t, 4)
+	id := firstSpeculative(t, s)
+
+	ack := create(t, s, id)
+	waitState(t, s, id, pb.MachineState_MACHINE_STATE_IDLE, 2*time.Second)
+	first := b.lastOpID()
+	if first == "" {
+		t.Fatal("backend received empty OperationID")
+	}
+	if first != ack.GetOperationId() {
+		t.Errorf("backend OperationID %q != ack operation_id %q", first, ack.GetOperationId())
+	}
+
+	// A full cycle back to Speculative, then re-Create: a new operation id.
+	configure(t, s, id, "c", nil)
+	waitState(t, s, id, pb.MachineState_MACHINE_STATE_CONFIGURED, 2*time.Second)
+	if _, err := s.Drain(bg(), &pb.DrainRequest{MachineId: id, GracePeriodSeconds: 1}); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	waitState(t, s, id, pb.MachineState_MACHINE_STATE_IDLE, 2*time.Second)
+	if _, err := s.Delete(bg(), &pb.DeleteRequest{MachineId: id}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	waitState(t, s, id, pb.MachineState_MACHINE_STATE_SPECULATIVE, 2*time.Second)
+
+	ack2 := create(t, s, id)
+	waitState(t, s, id, pb.MachineState_MACHINE_STATE_IDLE, 2*time.Second)
+	if b.lastOpID() == first {
+		t.Errorf("re-Create reused the old operation id %q (must be fresh per cycle)", first)
+	}
+	if b.lastOpID() != ack2.GetOperationId() {
+		t.Errorf("backend OperationID %q != second ack %q", b.lastOpID(), ack2.GetOperationId())
+	}
+}
+
 func TestIdempotentCreate_SameOperationID(t *testing.T) {
 	s, _ := newTestServer(t, 4)
 	id := firstSpeculative(t, s)
