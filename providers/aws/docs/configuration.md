@@ -6,11 +6,12 @@ sidebar:
   label: Configuration
 ---
 
-The provider is configured entirely by command-line flags. One process serves
-one AWS region: you give it a quota of capacity it may provision (the
-**offerings**), a base AMI + networking to launch into, and the addresses it
-listens on. Everything else (fencing, idempotency, transition timeouts) is
-handled by the shared `providerkit` and is not configurable here.
+You run one process per AWS region, and you configure it entirely with
+command-line flags. You give it three things: a quota of capacity it may
+provision for your fleet (the **offerings**), a base AMI plus the networking to
+launch into, and the addresses it listens on. Correctness concerns like
+retry-safe launches and transition timeouts are handled for you and need no
+tuning.
 
 This page is the flag reference, the offerings schema, the backend modes, and
 the launch-then-bootstrap contract your AMI must satisfy. For the IAM the flags

@@ -1,81 +1,59 @@
 ---
 title: BigFleet Providers
-description: Out-of-tree capacity providers for BigFleet, and the shared library every provider is built on.
+description: Capacity providers you deploy alongside BigFleet to provision and reclaim the machines that run your fleet — production-ready and conformance-certified.
 template: splash
 hero:
-  tagline: Out-of-tree capacity providers for BigFleet — one shared library, one conformance harness, one place to read.
+  tagline: Capacity providers you deploy alongside BigFleet to provision and reclaim the machines under your fleet — production-ready and conformance-certified.
   actions:
-    - text: Provider author guide
-      link: https://bigfleet.lucy.sh/provider-author-guide/
+    - text: Get started with AWS
+      link: /providers/aws/
       icon: right-arrow
       variant: primary
-      attrs:
-        target: _blank
-        rel: noopener
+    - text: Why you can trust it
+      link: /conformance/
+      icon: document
+      variant: secondary
     - text: GitHub
       link: https://github.com/intUnderflow/bigfleet-providers
-      icon: external
-      variant: secondary
-    - text: BigFleet
-      link: https://bigfleet.lucy.sh
       icon: external
       variant: minimal
 ---
 
-:::note
-This site is an early stub. The repository and its shared library are live; the
-provider list and per-provider docs will grow here as real providers land.
-:::
+## What you get
 
-## What this is
+You already run [BigFleet](https://bigfleet.lucy.sh) to autoscale your fleet. BigFleet decides *which machines* your Kubernetes clusters need — but it doesn't touch your cloud account. A **capacity provider** is the piece that does: you deploy it next to BigFleet, point it at your substrate, and it provisions, configures, drains, and reclaims real machines automatically as your fleet's demand moves.
 
-[BigFleet](https://bigfleet.lucy.sh) is a fleet-level infrastructure autoscaler. It decides which machines should serve which Kubernetes clusters and provisions, reclaims, and rebalances them through pluggable **`CapacityProvider`** backends. A *provider* is the component that actually creates, configures, drains, and deletes machines on a specific substrate — AWS, GCP, libvirt, bare metal, and so on.
-
-**BigFleet ships zero real providers in its own repo, on purpose.** Kubernetes spent years undoing in-tree CCM/CSI providers; BigFleet does not repeat that. Every real provider lives here, in `bigfleet-providers` — a repository kept deliberately separate from the main BigFleet repo.
-
-## Why one repository
-
-Rather than one repo per provider, every provider lives together in a mono-repo so they share:
-
-- **one correctness-critical library** — `providerkit` — that gets fencing, idempotency, async dispatch, `shard_metadata`, and the machine field shape right *once*, so each provider only writes substrate-specific logic;
-- **one conformance harness** — pointed at the canonical acceptance suite in the BigFleet repo, so "BigFleet-compatible" means a passing run, not a promise;
-- **one CI pipeline**, and one place to read.
-
-Each provider is still an independently buildable binary that can ship on its own cadence.
-
-## The contract
-
-A provider is a gRPC **server** implementing `bigfleet.v1alpha1.CapacityProvider`; the BigFleet shard is the **client** that dials it. The contract is six RPCs — no `Watch`; reconciliation is `List` + `Get`:
-
-| RPC | Lifecycle |
-|---|---|
-| `Create` | Speculative → Creating → Idle |
-| `Configure` | Idle → Configuring → Configured |
-| `Drain` | Configured → Draining → Idle |
-| `Delete` | Idle → Deleting → Speculative |
-| `Get` / `List` | read inventory |
-
-Every provider owes the same cross-cutting obligations — async dispatch, idempotency, transition timeouts, fencing, the `shard_metadata` lifecycle, and the machine field shape. `providerkit` implements all of them so a provider author cannot get them subtly wrong. The authoritative wire contract and author guide live in the BigFleet repo and are consumed here from the Go module, never vendored — so the contract can't drift.
+You run it as a container, ship it with a Helm chart, give it scoped credentials, and BigFleet dials it. From then on, machines appear and disappear to match your fleet — no glue scripts, no manual capacity ops.
 
 ## Providers
 
-| Provider | Capacity types | Status |
-|---|---|---|
-| `_template` | on-demand + spot (example) | copy-me skeleton — passes conformance against an in-memory backend |
+### AWS EC2 — available and certified
 
-Real providers (AWS, GCP, libvirt, …) are added by copying `_template`; this table grows as they land.
+The **[AWS EC2 provider](/providers/aws/)** is a complete, production-ready provider: a container image and a Helm chart you deploy onto EKS (or anywhere it can reach AWS).
 
-## Build a provider
+- **On-demand, spot, and reserved** capacity. Spot machines always carry a real, non-zero interruption probability, forecast from the Spot Instance Advisor and raised the moment AWS signals an interruption.
+- **Deploy it the way you already work** — pull the container image, install the [Helm chart](/providers/aws/install/) one release per region, and authenticate with IRSA. No static keys, no hardcoded credentials.
+- **You provide the substrate** — an AWS account, a base AMI, your subnets and security groups, and a [least-privilege IAM role](/providers/aws/iam/) (Terraform included). The provider does the rest.
+- **Built to be operated** — Prometheus metrics, `/healthz` and `/readyz` probes, structured logs, optional mTLS, and durable state on a PersistentVolume so it recovers cleanly on restart.
 
-1. Read the [provider author guide](https://bigfleet.lucy.sh/provider-author-guide/) — the spine.
-2. `cp -r providers/_template providers/<name>` and implement the substrate `Backend`.
-3. Declare `capacity_type`, `price_per_hour`, and `interruption_probability` honestly (a real probability for spot).
-4. Get `make conformance-<name>` green.
+Start with the **[AWS overview](/providers/aws/)**, then **[Install & deploy](/providers/aws/install/)**.
 
-The step-by-step recipe is in [CONTRIBUTING.md](https://github.com/intUnderflow/bigfleet-providers/blob/main/CONTRIBUTING.md).
+**More substrates are coming.** GCP, libvirt, bare metal, and others are added the same way and held to the same bar.
 
-## Where to go next
+## Why you can trust it
 
-- Building a provider → the [provider author guide](https://bigfleet.lucy.sh/provider-author-guide/) and the conformance suite.
-- The source → [GitHub](https://github.com/intUnderflow/bigfleet-providers).
-- The bigger picture → [BigFleet](https://bigfleet.lucy.sh).
+Every provider here is certified by *passing the same suite* — no exceptions, no self-attestation. The AWS provider clears the upstream authoritative baseline **plus** an extension suite, certified against **92 conformance behaviors across 11 areas** with no failures. That covers the things you'd otherwise have to take on faith: a failed bootstrap or drain becomes a visible failure rather than a silent false "ready"; launches are idempotent; inventory stays consistent.
+
+See the **[conformance program](/conformance/)** for what's checked, and the AWS provider's **[certification page](/providers/aws/certification/)** for how to reproduce the verdict yourself.
+
+## How it works (in one line)
+
+BigFleet is the client; each provider is a gRPC server it dials to create, configure, drain, and delete machines. You don't write any of that — you deploy a provider and configure it.
+
+## Building a provider?
+
+If you're adding support for a new substrate rather than operating one, the authoring path lives a layer down — every provider is built on a shared library that gets fencing, idempotency, and the machine contract right once, so you only write substrate-specific logic.
+
+- The [provider author guide](https://bigfleet.lucy.sh/provider-author-guide/) — the spine for new providers.
+- [CONTRIBUTING.md](https://github.com/intUnderflow/bigfleet-providers/blob/main/CONTRIBUTING.md) — the step-by-step recipe.
+- The [conformance program](/conformance/) — the behavior registry your provider must pass.

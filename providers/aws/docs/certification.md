@@ -6,9 +6,12 @@ sidebar:
   label: Certification
 ---
 
-The AWS EC2 provider is certified by *passing the same certification suites every
-provider must pass* — against one running endpoint, as a black-box gRPC client.
-This page is how you reproduce that verdict locally and in CI.
+This provider is **certified**: it passes every behavior in the BigFleet
+conformance program — the same bar every provider must clear — so you can trust
+it to launch, configure, drain, and delete machines correctly under load,
+failure, and restart. You do not need to run anything here to use it in
+production; this page exists if you want to reproduce that verdict yourself,
+locally or in your own CI.
 
 "Certified" here means exactly what it means in the
 [conformance program](https://github.com/intUnderflow/bigfleet-providers/tree/main/conformance/docs/conformance.md):
@@ -50,35 +53,58 @@ reason** (never failing them).
 bigfleet repo. We run it verbatim and never modify it; it is the floor every
 certified provider clears.
 
-**Extension suite** — deepens coverage well beyond the baseline (it adds cases
-and asserts stronger invariants under distinct behavior ids, rather than forking
-the upstream tests):
+**Extension suite** — the BigFleet conformance program: a frozen registry of
+**92 behaviors across 11 areas** that deepens the baseline (stronger invariants
+under distinct, append-only ids, never forking the upstream tests):
 
-| ID | Checks |
-|----|--------|
-| **C1** | Full and repeated lifecycle round-trips leave no residue — `cluster`, `shard_metadata`, and `last_error` all clear at a clean Idle; host/cluster invariants per state. |
-| **C2** | The out-of-position matrix: every illegal (RPC × source-state) is rejected with a **non-`FAILED_PRECONDITION`** code and no partial transition; RPCs at their target state are idempotent no-ops; unknown id → `NotFound`; empty id → `InvalidArgument`. |
-| **C3** | Fencing depth: the fence runs *before* not-found and before idempotency; per-`shard_id` isolation; exhaustive `(epoch, sequence)` ordering incl. new-epoch reset; reads never fence. |
-| **C5** | `shard_metadata` stress: verbatim echo of large / unicode / control-byte / empty-value / many-key maps, stable across Get/List, cleared on Drain, replaced cleanly on re-Configure. |
-| **C8** | Field shape & cost: `instance_type`/`zone`/`capacity_type` are top-level (never labels); `price_per_hour` ≥ 0 and finite; `interruption_probability` ∈ [0,1] and **> 0 for SPOT**. |
-| **C9** | `List` filtering by every state and multi-state union; `max_results` bound; `since_revision` advances on mutation and a `since` delta includes the mutated machine. |
+| Area | What it certifies |
+|---|---|
+| Lifecycle & state machine | residue-free round-trips; per-edge transitional, cluster, and host invariants |
+| Transition matrix / errors | the out-of-position matrix, idempotent no-ops, code discipline, edge inputs |
+| Fencing | fence-before-everything, per-`shard_id` isolation, exhaustive `(epoch, sequence)` ordering |
+| Concurrency & idempotency | N parallel retries collapse to one `operation_id` and exactly one effect |
+| Metadata | `shard_metadata` verbatim echo, clear-on-drain, clean replace |
+| Field shape & cost | top-level `instance_type`/`zone`/`capacity_type`; price ≥ 0; `interruption_probability` ∈ [0,1], **> 0 for SPOT** |
+| List, revision & pagination | filters, `max_results`, `since_revision` deltas, completeness at scale |
+| Timeouts & failure | actuator error / timeout → `FAILED` + `last_error`; a late completion is discarded |
+| Durability / restart | fence marks, idempotency, bindings, and inventory survive a kill + restart |
+| Scale & soak | large inventory, churn-soak, latency budgets, parallel throughput |
+| Property / fuzz | seeded-random lifecycle / fencing / metadata oracles |
 
-C8's SPOT rigor is where the AWS provider's design pays off: its spot machines
-carry a real, non-zero forecast (see
+The full, frozen registry of all 92 behaviors — every assertion, profile, and id
+— is the [conformance program](/conformance/). This provider clears every one.
+
+The field-shape area is where the AWS provider's design pays off: its spot
+machines carry a real, non-zero interruption forecast (see
 [Pricing & interruption](/providers/aws/pricing-and-interruption/)), so the
-`interruption_probability ∈ (0,1]` assertion holds by construction.
+SPOT-`interruption_probability` > 0 assertion holds by construction.
 
 ## Profiles the AWS provider claims
 
 The harness certifies a provider against the **profiles** it advertises;
 behaviors outside a claimed profile skip-as-pass:
 
-- **core** — every provider (C1, C2, C3, C5, C8, C9).
+- **core** — every provider (lifecycle, errors, fencing, concurrency, metadata,
+  field-shape, list, property).
 - **cloud** — implements `Delete` (Idle → Speculative). The AWS provider does
   (`Delete` = `TerminateInstances`).
 - **spot** — exposes SPOT capacity, so the SPOT interruption rigor applies. The
   AWS provider does.
-- **scale** — supports `since_revision` deltas.
+- **fault** — failure / timeout → `FAILED` handling (certified via a reference
+  fault-injecting provider).
+- **durable** — fence marks, idempotency, bindings, and inventory survive a kill
+  + restart against a `--state` file.
+- **scale** — large inventory, `since_revision` deltas, churn-soak, latency
+  budgets.
+
+`make certify-aws` runs the credential-free core gate (baseline + the black-box
+extension). The **complete** certification — all 92 behaviors across every lane,
+including the fault, durability, and scale lanes — runs through the
+`bfconformance` runner and emits a JUnit + JSON report:
+
+```sh
+make report-aws PROFILE=core,cloud,spot,fault,durable,scale
+```
 
 ## Certifying a real endpoint
 

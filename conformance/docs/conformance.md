@@ -5,6 +5,14 @@ description: The BigFleet provider conformance program — 92 certified behavior
 
 # BigFleet provider conformance program
 
+:::note[Operators: you can stop here]
+If you are running a provider, all you need to know is that **"certified" means
+it passed every one of the 92 behaviors registered below** — the full
+correctness, fault, durability, and scale bar. You do not need to read the
+registry; the trust signal is the verdict. The rest of this page is the
+developer-facing catalog for people **building or extending** providers.
+:::
+
 A certification program for BigFleet capacity providers, modelled on the
 Kubernetes conformance program: a **frozen, machine-readable registry** of
 behaviors, a **black-box suite** that exercises them against a live provider over

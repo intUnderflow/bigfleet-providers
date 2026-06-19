@@ -1,59 +1,66 @@
 ---
 title: AWS EC2 provider
-description: The BigFleet capacity provider for AWS EC2 — create, configure, drain, and delete EC2 instances on demand.
+description: Provision EC2 capacity — on-demand, spot, and reserved — for your BigFleet fleet. Deploy one process per region with the Helm chart and container image on EKS, scaled in and out automatically.
 sidebar:
   order: 0
   label: AWS overview
 ---
 
-The **AWS EC2 provider** is a BigFleet `CapacityProvider` that creates,
-configures, drains, and deletes EC2 instances on demand. It supports on-demand,
-spot, and reserved capacity, with idempotent launches, a running-instance gate
-on `Create`, SSM-verified `Configure`/`Drain`, live pricing and interruption
-signals, and full health + metrics instrumentation.
+The **AWS EC2 provider** gives your BigFleet fleet machines to run on. When
+BigFleet decides your clusters need more capacity, the provider launches EC2
+instances; when the fleet scales in, it drains and terminates them. You point it
+at your AWS account, your subnets, and a base AMI, and it provisions
+**on-demand, spot, and reserved** capacity automatically — no manual instance
+management, no node-group babysitting.
 
-It implements only the substrate-specific `providerkit.Backend`; the shared
-[`providerkit`](https://github.com/intUnderflow/bigfleet-providers/tree/main/providerkit)
-library handles fencing, idempotency, async dispatch, transition timeouts, the
-`shard_metadata` lifecycle, `since_revision`, and the `Machine` field shape. The
-provider's job is the EC2 mapping and the substrate facts (`instance_type`,
-`zone`, `capacity_type`, `price_per_hour`, `interruption_probability`,
-`resources`, `allocatable`, `host`).
+You run **one process per region**, next to BigFleet. Each process owns a single
+region's capacity, and BigFleet dials it to request, configure, drain, and
+delete machines as demand moves.
 
-## At a glance
+## Why you'd trust it in production
 
-- **One process per region.** Configure offerings (the quota of slots it may
-  provision), point it at a base AMI + subnets, and BigFleet dials its `--addr`.
-- **Capacity types:** on-demand, spot, and reserved. Spot machines always carry
-  a real, non-zero `interruption_probability` (forecast from the Spot Instance
-  Advisor, raised on an observed interruption notice).
-- **Correct by construction.** `RunInstances` is idempotent (`ClientToken`),
-  `Create` blocks until the instance is actually running, and `Configure`/`Drain`
-  confirm their SSM commands *succeeded* — a failed bootstrap or drain becomes
-  `FAILED`, never a false Configured/Idle.
-- **Production-ready.** gRPC health + reflection, Prometheus metrics, structured
-  logging + panic recovery, `/healthz` + `/readyz`, a background reconcile loop,
-  and adaptive SDK retries.
+- **Production-ready.** It ships as a hardened container image and a Helm chart,
+  runs non-root on a distroless, read-only root filesystem, and exposes
+  liveness/readiness probes, Prometheus metrics, and structured logs. See
+  [Observability](/providers/aws/observability/).
+- **Certified.** It passes the full BigFleet provider conformance program —
+  [92 certified behaviors](/conformance/) — credential-free on every change, plus
+  an extension suite that asserts stronger invariants. See
+  [Certification](/providers/aws/certification/).
+- **Correct by construction.** A `Create` blocks until the instance is actually
+  running, spot machines always carry a real interruption risk (never a
+  falsely-cheap zero), and a failed bootstrap or drain surfaces as a hard
+  failure rather than a silently-broken node. Capacity it doesn't own, it never
+  touches.
 
-## Operator guide
+## What you need
 
-| Page | What it covers |
-|---|---|
-| [Install & deploy](/providers/aws/install/) | Docker image, Helm chart, flags, mTLS, running it on EKS (IRSA) |
-| [Configuration](/providers/aws/configuration/) | Offerings, the backend modes, every flag, the bootstrap model |
-| [IAM](/providers/aws/iam/) | The exact IAM policy (incl. `iam:PassRole`), IRSA, the node profile |
-| [Pricing & interruption](/providers/aws/pricing-and-interruption/) | How price and SPOT interruption probability are sourced and refreshed |
-| [Observability](/providers/aws/observability/) | Metrics, health/readiness, logging, the EventBridge → SQS interruption feed |
-| [Security](/providers/aws/security/) | mTLS, least-privilege IAM, the SSM bootstrap trust model |
-| [Troubleshooting](/providers/aws/troubleshooting/) | Common failure modes and how to diagnose them from metrics/logs |
-| [Certification](/providers/aws/certification/) | Running the conformance + extension suites against this provider |
+To run it against a real region, have these ready (the [IAM](/providers/aws/iam/)
+page walks through the roles):
 
-## Quick start (dev / fake backend)
+- **An AWS account** and the region you want capacity in (one process per region).
+- **A VPC with subnets** — one or more, mapped to availability zones — for the
+  provider to launch into, plus the security groups your nodes need.
+- **A base AMI** that joins your cluster. The provider launches it, then delivers
+  a per-cluster bootstrap blob over SSM and runs a small hook your AMI ships; the
+  EKS-optimized AMIs already include the SSM agent. The hook contract is in
+  [Configuration](/providers/aws/configuration/).
+- **Two IAM identities**: a **provider role** the process runs as (least-privilege
+  EC2 + SSM, given to the pod via IRSA on EKS), and a **node instance profile**
+  the launched instances run as (it needs `AmazonSSMManagedInstanceCore`). Both,
+  with ready-to-apply Terraform, are on the [IAM](/providers/aws/iam/) page.
 
-```sh
-# No AWS account needed: the in-memory backend seeds Speculative slots.
-make build-aws
-./bin/aws --seed-count 32 --addr :9000 --metrics-addr :9090
-```
+## Deploy it
 
-For a real deployment, see [Install & deploy](/providers/aws/install/).
+The provider is a published container image plus a Helm chart — you don't build
+from source. The path on EKS is:
+
+1. **Create the provider role** with IRSA, bound to the chart's ServiceAccount,
+   and give your node profile SSM. The [IAM](/providers/aws/iam/) page has the
+   exact policy and Terraform.
+2. **Install the Helm chart, one release per region**, pointing it at your
+   region, AMI, subnets, security groups, node instance profile, and your
+   **offerings** (the quota of capacity it may provision). Enable durable state on
+   a PersistentVolume so bindings survive restarts.
+
+A minimal install:

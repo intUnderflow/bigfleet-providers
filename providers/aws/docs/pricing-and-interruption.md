@@ -6,18 +6,23 @@ sidebar:
   label: Pricing & interruption
 ---
 
-The provider fills two substrate facts that drive the BigFleet engine's capacity
-ranking: `price_per_hour` and `interruption_probability`. The engine combines
-them into an effective cost:
+Spot capacity is how you make your fleet cheaper — but only if BigFleet can tell
+which machines are safe to put work on. This provider gives BigFleet two honest
+numbers per machine so it ranks capacity by real cost: the hourly price, and how
+likely a spot machine is to be reclaimed. Crucially, this provider **never**
+claims a spot machine has zero interruption risk — so BigFleet can't be fooled
+into piling critical work onto capacity AWS may take back. This page covers
+where both numbers come from, how they stay fresh, and how to keep the pinned
+price tables accurate for your region.
+
+Under the hood the engine combines the two into an effective cost — a spot
+machine reporting zero interruption risk would look both cheap *and* safe and
+get workloads it should never run, which is exactly the trap this provider
+avoids:
 
 ```
 effective_cost = price_per_hour + interruption_probability × penalty
 ```
-
-So a SPOT machine that reports `interruption_probability = 0` looks both cheap
-*and* safe, and gets handed workloads it should never run. This provider
-**never** reports `0` for a SPOT machine. This page covers where both numbers
-come from, how they are refreshed, and how to keep the pinned tables honest.
 
 Both values are read from in-memory caches on the `List`/seed hot path
 (`speculativeSlots` and `Describe`) — neither ever blocks on an AWS API call
