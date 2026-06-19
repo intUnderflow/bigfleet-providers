@@ -48,7 +48,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "genpricing: fetch %s: %v\n", url, err)
 		os.Exit(1)
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 
 	prices, err := extractOnDemandPrices(body, want)
 	if err != nil {
@@ -58,7 +58,10 @@ func main() {
 	if missing := missingTypes(want, prices); len(missing) > 0 {
 		fmt.Fprintf(os.Stderr, "genpricing: warning: no on-demand price found for: %s\n", strings.Join(missing, ", "))
 	}
-	printGoTable(os.Stdout, *region, prices)
+	if err := printGoTable(os.Stdout, *region, prices); err != nil {
+		fmt.Fprintf(os.Stderr, "genpricing: write output: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func parseTypes(csv string) map[string]bool {
@@ -73,12 +76,12 @@ func parseTypes(csv string) map[string]bool {
 
 func fetch(url string) (io.ReadCloser, error) {
 	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Get(url) //nolint:gosec // fixed, well-known AWS pricing host
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("status %s", resp.Status)
 	}
 	return resp.Body, nil
@@ -186,17 +189,19 @@ func missingTypes(want map[string]bool, got map[string]float64) []string {
 	return missing
 }
 
-// printGoTable prints a Go map-literal entry ready to paste into
+// printGoTable writes a Go map-literal entry ready to paste into
 // onDemandByRegion in pricing.go.
-func printGoTable(w io.Writer, region string, prices map[string]float64) {
+func printGoTable(w io.Writer, region string, prices map[string]float64) error {
 	types := make([]string, 0, len(prices))
 	for t := range prices {
 		types = append(types, t)
 	}
 	sort.Strings(types)
-	fmt.Fprintf(w, "\t%q: {\n", region)
+	out := fmt.Sprintf("\t%q: {\n", region)
 	for _, t := range types {
-		fmt.Fprintf(w, "\t\t%q: %s,\n", t, strconv.FormatFloat(prices[t], 'g', -1, 64))
+		out += fmt.Sprintf("\t\t%q: %s,\n", t, strconv.FormatFloat(prices[t], 'g', -1, 64))
 	}
-	fmt.Fprint(w, "\t},\n")
+	out += "\t},\n"
+	_, err := io.WriteString(w, out)
+	return err
 }

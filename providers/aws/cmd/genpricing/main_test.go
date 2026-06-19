@@ -62,7 +62,9 @@ func TestExtractOnDemandPrices_BadJSON(t *testing.T) {
 
 func TestPrintGoTable(t *testing.T) {
 	var b strings.Builder
-	printGoTable(&b, "us-east-1", map[string]float64{"m6i.xlarge": 0.192, "m6i.large": 0.096})
+	if err := printGoTable(&b, "us-east-1", map[string]float64{"m6i.xlarge": 0.192, "m6i.large": 0.096}); err != nil {
+		t.Fatalf("printGoTable: %v", err)
+	}
 	want := "\t\"us-east-1\": {\n\t\t\"m6i.large\": 0.096,\n\t\t\"m6i.xlarge\": 0.192,\n\t},\n"
 	if b.String() != want {
 		t.Fatalf("printGoTable =\n%q\nwant\n%q", b.String(), want)
