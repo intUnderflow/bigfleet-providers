@@ -53,7 +53,7 @@ What the policy grants, and why (each line maps to a call the code makes):
 
 | Statement | Actions | When |
 |---|---|---|
-| EC2 lifecycle + inventory | `ec2:RunInstances`, `ec2:TerminateInstances`, `ec2:DescribeInstances`, `ec2:DescribeSpotPriceHistory`, `ec2:CreateTags`, `ec2:DeleteTags` | always |
+| EC2 lifecycle + inventory | `ec2:RunInstances`, `ec2:TerminateInstances`, `ec2:DescribeInstances`, `ec2:DescribeInstanceTypes`, `ec2:DescribeSpotPriceHistory`, `ec2:CreateTags`, `ec2:DeleteTags` | always |
 | SSM bootstrap + drain | `ssm:SendCommand`, `ssm:GetCommandInvocation` | always (Configure/Drain) |
 | Pass node role to EC2 | `iam:PassRole` (scoped to the node role, `iam:PassedToService=ec2.amazonaws.com`) | only with `--iam-instance-profile` (omit `node_role_arn` otherwise) |
 | Spot interruption queue | `sqs:ReceiveMessage`, `sqs:DeleteMessage` | only with `--spot-interruption-queue` (omit `spot_interruption_queue_arn` otherwise) |

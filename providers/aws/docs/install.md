@@ -223,7 +223,8 @@ at
 [`deploy/iam/`](https://github.com/intUnderflow/bigfleet-providers/tree/main/providers/aws/deploy/iam)
 and is documented field-by-field in [IAM](/providers/aws/iam/). In short the
 role needs `ec2:RunInstances`, `ec2:TerminateInstances`, `ec2:DescribeInstances`,
-`ec2:DescribeSpotPriceHistory`, `ec2:CreateTags`, `ec2:DeleteTags`,
+`ec2:DescribeInstanceTypes`, `ec2:DescribeSpotPriceHistory`, `ec2:CreateTags`,
+`ec2:DeleteTags`,
 `ssm:SendCommand`, and `ssm:GetCommandInvocation`. Two permissions are
 conditional:
 

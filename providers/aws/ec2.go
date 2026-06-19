@@ -41,6 +41,12 @@ type ec2Client interface {
 	// SpotPriceUSD returns the most recent spot price for (instanceType, zone)
 	// in USD/hour (DescribeSpotPriceHistory, newest entry).
 	SpotPriceUSD(ctx context.Context, instanceType, zone string) (float64, error)
+
+	// DescribeInstanceCapacities resolves the hardware capacity (vCPU + memory)
+	// of the given instance types via ec2:DescribeInstanceTypes, for
+	// Machine.allocatable. Types AWS does not return are simply absent from the
+	// result (the caller falls back to the pinned table).
+	DescribeInstanceCapacities(ctx context.Context, instanceTypes []string) (map[string]instanceCapacity, error)
 }
 
 // runSpec is the launch request handed to RunInstance.

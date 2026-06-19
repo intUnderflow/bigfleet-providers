@@ -129,6 +129,12 @@ func (c *metricsEC2Client) SpotPriceUSD(ctx context.Context, instanceType, zone 
 	c.m.observeEC2("DescribeSpotPriceHistory", start, err)
 	return v, err
 }
+func (c *metricsEC2Client) DescribeInstanceCapacities(ctx context.Context, instanceTypes []string) (map[string]instanceCapacity, error) {
+	start := time.Now()
+	out, err := c.inner.DescribeInstanceCapacities(ctx, instanceTypes)
+	c.m.observeEC2("DescribeInstanceTypes", start, err)
+	return out, err
+}
 
 var _ ec2Client = (*metricsEC2Client)(nil)
 

@@ -16,14 +16,15 @@ import (
 // timeouts, shard_metadata, and the rest are providerkit's job — this file
 // never touches them.
 type awsBackend struct {
-	providerName string // HostRef.provider label, e.g. "aws-us-east-1"
-	region       string
-	ec2          ec2Client
-	offerings    []offering
-	pricing      *pricing
-	interruption *interruption
-	baseUserData []byte // generic pre-binding bootstrap baked in at Create
-	logger       *slog.Logger
+	providerName  string // HostRef.provider label, e.g. "aws-us-east-1"
+	region        string
+	ec2           ec2Client
+	offerings     []offering
+	pricing       *pricing
+	interruption  *interruption
+	instanceTypes *instanceTypeResolver // resolves Machine.allocatable (DescribeInstanceTypes + pinned fallback)
+	baseUserData  []byte                // generic pre-binding bootstrap baked in at Create
+	logger        *slog.Logger
 }
 
 func newAWSBackend(providerName, region string, ec2 ec2Client, offerings []offering, pr *pricing, in *interruption, baseUserData []byte, logger *slog.Logger) (*awsBackend, error) {
@@ -44,14 +45,15 @@ func newAWSBackend(providerName, region string, ec2 ec2Client, offerings []offer
 		}
 	}
 	return &awsBackend{
-		providerName: providerName,
-		region:       region,
-		ec2:          ec2,
-		offerings:    offerings,
-		pricing:      pr,
-		interruption: in,
-		baseUserData: baseUserData,
-		logger:       logger,
+		providerName:  providerName,
+		region:        region,
+		ec2:           ec2,
+		offerings:     offerings,
+		pricing:       pr,
+		interruption:  in,
+		instanceTypes: newInstanceTypeResolver(ec2, logger),
+		baseUserData:  baseUserData,
+		logger:        logger,
 	}, nil
 }
 
@@ -80,7 +82,7 @@ func (b *awsBackend) speculativeSlots() []providerkit.Instance {
 				PricePerHour:            b.pricing.price(off.InstanceType, off.Zone, capacity),
 				InterruptionProbability: b.interruption.probability(id, off.InstanceType, capacity),
 				Resources:               cloneMap(off.Resources),
-				Allocatable:             allocatable(off.InstanceType),
+				Allocatable:             b.instanceTypes.allocatable(off.InstanceType),
 				Labels:                  slotLabels(off),
 			})
 		}
@@ -170,7 +172,7 @@ func (b *awsBackend) instanceToIdle(machineID string, inst ec2Instance) provider
 		CapacityType:            capacity,
 		PricePerHour:            b.pricing.price(inst.InstanceType, inst.Zone, capacity),
 		InterruptionProbability: b.interruption.probability(machineID, inst.InstanceType, capacity),
-		Allocatable:             allocatable(inst.InstanceType),
+		Allocatable:             b.instanceTypes.allocatable(inst.InstanceType),
 	}
 }
 
@@ -200,7 +202,7 @@ func (b *awsBackend) CreateInstance(ctx context.Context, req providerkit.CreateI
 	}
 	return providerkit.CreateInstanceResult{
 		Host:        providerkit.HostRef{Provider: b.providerName, Ref: inst.InstanceID},
-		Allocatable: allocatable(m.InstanceType),
+		Allocatable: b.instanceTypes.allocatable(m.InstanceType),
 	}, nil
 }
 
@@ -259,6 +261,24 @@ func (b *awsBackend) spotPairs() []spotPair {
 // a timer. Returns the number of (type,zone) pairs that failed to refresh.
 func (b *awsBackend) refreshPrices(ctx context.Context) int {
 	return b.pricing.refresh(ctx, b.spotPairs())
+}
+
+// refreshInstanceTypes warms the allocatable cache from ec2:DescribeInstanceTypes
+// for the offered types. Call once at startup (instance-type specs are
+// immutable). Returns the number of offered types it could not resolve from AWS
+// (each still covered by the pinned table if present).
+func (b *awsBackend) refreshInstanceTypes(ctx context.Context) int {
+	return b.instanceTypes.resolve(ctx, b.offeredTypes())
+}
+
+// offeredTypes returns the distinct instance types across the configured
+// offerings.
+func (b *awsBackend) offeredTypes() []string {
+	out := make([]string, 0, len(b.offerings))
+	for _, off := range b.offerings {
+		out = append(out, off.InstanceType)
+	}
+	return out
 }
 
 // machineIDFor resolves an EC2 instance id to its BigFleet machine id (via the

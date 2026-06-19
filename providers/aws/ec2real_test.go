@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +28,11 @@ type fakeEC2 struct {
 	descInput []*ec2.DescribeInstancesInput
 	spot      *ec2.DescribeSpotPriceHistoryOutput
 	spotErr   error
+
+	itTypes  []ec2types.InstanceType            // InstanceTypes from the first call
+	itTokens []string                           // NextToken seen on each call (pagination)
+	itPages  []*ec2.DescribeInstanceTypesOutput // returned in order, one per call
+	itErr    error
 
 	terminated []string
 	createTags []*ec2.CreateTagsInput
@@ -64,6 +71,23 @@ func (f *fakeEC2) DeleteTags(_ context.Context, in *ec2.DeleteTagsInput, _ ...fu
 }
 func (f *fakeEC2) DescribeSpotPriceHistory(_ context.Context, _ *ec2.DescribeSpotPriceHistoryInput, _ ...func(*ec2.Options)) (*ec2.DescribeSpotPriceHistoryOutput, error) {
 	return f.spot, f.spotErr
+}
+func (f *fakeEC2) DescribeInstanceTypes(_ context.Context, in *ec2.DescribeInstanceTypesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstanceTypesOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.itTokens) == 0 {
+		f.itTypes = in.InstanceTypes
+	}
+	f.itTokens = append(f.itTokens, aws.ToString(in.NextToken))
+	if f.itErr != nil {
+		return nil, f.itErr
+	}
+	if len(f.itPages) == 0 {
+		return &ec2.DescribeInstanceTypesOutput{}, nil
+	}
+	page := f.itPages[0]
+	f.itPages = f.itPages[1:]
+	return page, nil
 }
 
 // fakeSSM is an injected ssmAPI.
@@ -311,5 +335,61 @@ func TestShellQuote(t *testing.T) {
 		if got := shellQuote(in); got != want {
 			t.Errorf("shellQuote(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestDescribeInstanceCapacities_ParsesPaginatesSkipsIncomplete(t *testing.T) {
+	e := &fakeEC2{
+		itPages: []*ec2.DescribeInstanceTypesOutput{
+			// Page 1: one good type + a NextToken to force a second call.
+			{
+				InstanceTypes: []ec2types.InstanceTypeInfo{{
+					InstanceType: ec2types.InstanceType("m6i.large"),
+					VCpuInfo:     &ec2types.VCpuInfo{DefaultVCpus: aws.Int32(2)},
+					MemoryInfo:   &ec2types.MemoryInfo{SizeInMiB: aws.Int64(8192)},
+				}},
+				NextToken: aws.String("page2"),
+			},
+			// Page 2: a good type + an incomplete entry (no VCpuInfo) to skip.
+			{
+				InstanceTypes: []ec2types.InstanceTypeInfo{
+					{
+						InstanceType: ec2types.InstanceType("m6i.16xlarge"),
+						VCpuInfo:     &ec2types.VCpuInfo{DefaultVCpus: aws.Int32(64)},
+						MemoryInfo:   &ec2types.MemoryInfo{SizeInMiB: aws.Int64(262144)},
+					},
+					{InstanceType: ec2types.InstanceType("broken.type")}, // missing vCPU/mem
+				},
+			},
+		},
+	}
+	r := newTestReal(e, &fakeSSM{})
+
+	got, err := r.DescribeInstanceCapacities(context.Background(), []string{"m6i.large", "m6i.16xlarge"})
+	if err != nil {
+		t.Fatalf("DescribeInstanceCapacities: %v", err)
+	}
+	want := map[string]instanceCapacity{
+		"m6i.large":    {VCPU: 2, MemMiB: 8192},
+		"m6i.16xlarge": {VCPU: 64, MemMiB: 262144},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("capacities = %v, want %v (broken.type must be skipped)", got, want)
+	}
+	// The requested types reached the API.
+	if len(e.itTypes) != 2 || string(e.itTypes[0]) != "m6i.large" || string(e.itTypes[1]) != "m6i.16xlarge" {
+		t.Errorf("InstanceTypes input = %v", e.itTypes)
+	}
+	// Pagination: two calls, the second carrying the NextToken from page 1.
+	if !reflect.DeepEqual(e.itTokens, []string{"", "page2"}) {
+		t.Errorf("pagination tokens = %v, want [\"\" \"page2\"]", e.itTokens)
+	}
+}
+
+func TestDescribeInstanceCapacities_PropagatesError(t *testing.T) {
+	e := &fakeEC2{itErr: errors.New("throttled")}
+	r := newTestReal(e, &fakeSSM{})
+	if _, err := r.DescribeInstanceCapacities(context.Background(), []string{"m6i.large"}); err == nil {
+		t.Fatal("expected error from DescribeInstanceTypes to propagate")
 	}
 }

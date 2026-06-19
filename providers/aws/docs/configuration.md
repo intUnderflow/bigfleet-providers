@@ -152,6 +152,30 @@ tagged, running instance keeps owning its slot, and any tagged instance with no
 matching offering is surfaced as Idle under its machine id rather than being
 lost.
 
+## Allocatable (instance-type capacity)
+
+`resources` (above) is the per-replica *request* shape an offering serves;
+`allocatable` is the instance type's *real hardware* capacity (`cpu`, `memory`),
+which the engine compares against demand (density = `floor(allocatable /
+resources)`). You never set `allocatable` — the provider derives it from the
+instance type.
+
+It is resolved **authoritatively from AWS**: at startup the provider calls
+`ec2:DescribeInstanceTypes` for the offered types and caches each type's
+`DefaultVCpus` and `SizeInMiB`. So any instance type you offer resolves
+correctly, not just a hand-maintained subset. Two safety nets keep this robust:
+
+- A **pinned fallback table** of common types (m/c/r/g families) seeds the cache,
+  so the fake backend, credential-free conformance, and a `DescribeInstanceTypes`
+  outage all still produce correct `allocatable` for those types.
+- Memory is rendered as `Gi` when it is a whole number of GiB, else `Mi`, so
+  fractional-GiB types (e.g. a 512 MiB type) are exact rather than truncated.
+
+A type that is neither offered-and-resolved nor pinned yields no `allocatable`,
+which the engine treats as `allocatable == resources` — so keep offerings to
+types AWS can describe (the normal case) and the value is always real hardware.
+Resolution needs `ec2:DescribeInstanceTypes`; see [IAM](/providers/aws/iam/).
+
 ## Launch then bootstrap
 
 The provider deliberately splits **launch** from **cluster join**, because EC2

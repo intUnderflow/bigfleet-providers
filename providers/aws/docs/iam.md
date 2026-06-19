@@ -39,6 +39,7 @@ and the `iam:PassRole` statement if you are not setting `--iam-instance-profile`
         "ec2:RunInstances",
         "ec2:TerminateInstances",
         "ec2:DescribeInstances",
+        "ec2:DescribeInstanceTypes",
         "ec2:DescribeSpotPriceHistory",
         "ec2:CreateTags",
         "ec2:DeleteTags"
@@ -83,6 +84,7 @@ and the `iam:PassRole` statement if you are not setting `--iam-instance-profile`
 | `ec2:RunInstances` | `Create` | Launches the instance (base AMI + `--base-user-data`, with an idempotency `ClientToken`). |
 | `ec2:TerminateInstances` | `Delete` | Tears the instance down. |
 | `ec2:DescribeInstances` | List / reconcile | Recovers inventory and bindings from the `bigfleet:managed` tag; also the "running" waiter `Create` blocks on. |
+| `ec2:DescribeInstanceTypes` | startup | Resolves each offered type's real vCPU/memory for `Machine.allocatable` (cached once; a pinned table covers anything unresolved). |
 | `ec2:DescribeSpotPriceHistory` | spot refresh | The live spot price, fetched on the `--spot-refresh` loop — never on the List hot path. |
 | `ec2:CreateTags` | `Create` / `Configure` | Stamps `bigfleet:managed`, `machine-id`, `capacity` at launch and `bigfleet:cluster` on bind. |
 | `ec2:DeleteTags` | `Drain` | Removes the `bigfleet:cluster` binding tag. |

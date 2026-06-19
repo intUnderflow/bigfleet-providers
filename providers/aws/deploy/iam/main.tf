@@ -4,8 +4,9 @@
 #   * an EC2 instance profile — when the provider runs on a plain EC2 host.
 #
 # The policy mirrors deploy/iam/policy.json and the actions the code calls:
-#   ec2:RunInstances/TerminateInstances/DescribeInstances/DescribeSpotPriceHistory,
-#   ec2:CreateTags/DeleteTags, ssm:SendCommand/GetCommandInvocation,
+#   ec2:RunInstances/TerminateInstances/DescribeInstances/DescribeInstanceTypes/
+#   DescribeSpotPriceHistory, ec2:CreateTags/DeleteTags,
+#   ssm:SendCommand/GetCommandInvocation,
 #   iam:PassRole (only when --iam-instance-profile is set; scoped to the node
 #   role + iam:PassedToService=ec2.amazonaws.com), and sqs:ReceiveMessage/
 #   DeleteMessage (only with --spot-interruption-queue).
@@ -87,6 +88,7 @@ data "aws_iam_policy_document" "provider" {
       "ec2:RunInstances",
       "ec2:TerminateInstances",
       "ec2:DescribeInstances",
+      "ec2:DescribeInstanceTypes",
       "ec2:DescribeSpotPriceHistory",
       "ec2:CreateTags",
       "ec2:DeleteTags",

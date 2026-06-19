@@ -39,6 +39,7 @@ type ec2API interface {
 	CreateTags(context.Context, *ec2.CreateTagsInput, ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error)
 	DeleteTags(context.Context, *ec2.DeleteTagsInput, ...func(*ec2.Options)) (*ec2.DeleteTagsOutput, error)
 	DescribeSpotPriceHistory(context.Context, *ec2.DescribeSpotPriceHistoryInput, ...func(*ec2.Options)) (*ec2.DescribeSpotPriceHistoryOutput, error)
+	DescribeInstanceTypes(context.Context, *ec2.DescribeInstanceTypesInput, ...func(*ec2.Options)) (*ec2.DescribeInstanceTypesOutput, error)
 }
 
 type ssmAPI interface {
@@ -320,6 +321,56 @@ func (r *ec2Real) SpotPriceUSD(ctx context.Context, instanceType, zone string) (
 		return 0, fmt.Errorf("no spot price history for %s in %s", instanceType, zone)
 	}
 	return price, nil
+}
+
+// DescribeInstanceCapacities resolves vCPU + memory for the given instance
+// types (ec2:DescribeInstanceTypes), for Machine.allocatable. AWS caps
+// InstanceTypes at 100 per request, so it batches and follows pagination; a
+// type AWS does not return (e.g. unavailable in the region) is omitted, and the
+// caller falls back to the pinned table.
+func (r *ec2Real) DescribeInstanceCapacities(ctx context.Context, instanceTypes []string) (map[string]instanceCapacity, error) {
+	out := make(map[string]instanceCapacity, len(instanceTypes))
+	const batch = 100
+	for start := 0; start < len(instanceTypes); start += batch {
+		end := start + batch
+		if end > len(instanceTypes) {
+			end = len(instanceTypes)
+		}
+		types := make([]ec2types.InstanceType, 0, end-start)
+		for _, t := range instanceTypes[start:end] {
+			types = append(types, ec2types.InstanceType(t))
+		}
+		input := &ec2.DescribeInstanceTypesInput{InstanceTypes: types}
+		for {
+			page, err := r.ec2.DescribeInstanceTypes(ctx, input)
+			if err != nil {
+				return nil, err
+			}
+			for _, it := range page.InstanceTypes {
+				if c, ok := instanceCapacityFromSDK(it); ok {
+					out[string(it.InstanceType)] = c
+				}
+			}
+			if aws.ToString(page.NextToken) == "" {
+				break
+			}
+			input.NextToken = page.NextToken
+		}
+	}
+	return out, nil
+}
+
+// instanceCapacityFromSDK extracts the vCPU + memory an instance type reports,
+// or (zero, false) if either is missing.
+func instanceCapacityFromSDK(it ec2types.InstanceTypeInfo) (instanceCapacity, bool) {
+	if it.VCpuInfo == nil || it.VCpuInfo.DefaultVCpus == nil ||
+		it.MemoryInfo == nil || it.MemoryInfo.SizeInMiB == nil {
+		return instanceCapacity{}, false
+	}
+	return instanceCapacity{
+		VCPU:   int(aws.ToInt32(it.VCpuInfo.DefaultVCpus)),
+		MemMiB: aws.ToInt64(it.MemoryInfo.SizeInMiB),
+	}, true
 }
 
 // runCommand sends an SSM shell command and waits for it to actually complete,

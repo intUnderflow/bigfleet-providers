@@ -108,4 +108,18 @@ func (f *ec2Fake) SpotPriceUSD(_ context.Context, _, _ string) (float64, error) 
 	return f.spotUSD, nil
 }
 
+// DescribeInstanceCapacities resolves capacities from the pinned table, so the
+// simulator (and credential-free conformance) exercises the resolve path
+// deterministically. Types absent from the table are omitted, exactly as a real
+// DescribeInstanceTypes omits a type unavailable in the region.
+func (f *ec2Fake) DescribeInstanceCapacities(_ context.Context, instanceTypes []string) (map[string]instanceCapacity, error) {
+	out := make(map[string]instanceCapacity, len(instanceTypes))
+	for _, t := range instanceTypes {
+		if c, ok := instanceTypeTable[t]; ok {
+			out[t] = c
+		}
+	}
+	return out, nil
+}
+
 var _ ec2Client = (*ec2Fake)(nil)

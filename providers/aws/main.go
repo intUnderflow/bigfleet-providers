@@ -141,6 +141,15 @@ func run() error {
 	backend.refreshPrices(warmCtx)
 	cancelWarm()
 
+	// Resolve allocatable (vCPU/memory) for the offered types from
+	// DescribeInstanceTypes (best-effort, bounded); the pinned table covers
+	// anything AWS can't return. Specs are immutable, so this runs once.
+	itCtx, cancelIT := context.WithTimeout(ctx, 20*time.Second)
+	if missed := backend.refreshInstanceTypes(itCtx); missed > 0 {
+		logger.Warn("some offered instance types unresolved from AWS; using pinned table", "unresolved", missed)
+	}
+	cancelIT()
+
 	store, err := buildStore(*statePath)
 	if err != nil {
 		return err
