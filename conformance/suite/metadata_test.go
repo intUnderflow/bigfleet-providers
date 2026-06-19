@@ -44,7 +44,7 @@ func hostileMetadata() map[string]string {
 		"x-unicode/value":                    "παντα ρει — 你好 — 🚀\t\n",
 		"x-empty/value":                      "", // empty value must survive
 		"x-control/value":                    "\x00\x01\x02\x1f\x7f",
-		"x-c1-control/value":                 "", // C1 control range (valid multibyte UTF-8)
+		"x-c1-control/value":                 "\u0085", // C1 control range (valid multibyte UTF-8)
 		"x-nul-only/value":                   "\x00",
 		"x-trailing-space/value":             "padded   ",
 		"x-key-with-nul\x00suffix":           "key itself carries a NUL byte",

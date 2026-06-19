@@ -71,8 +71,8 @@ func TestB1201_FencingLexicographicOracle(t *testing.T) {
 		// Bias generation toward the current mark so we densely sample the
 		// decision boundary (exact replay, seq±1, epoch±1, epoch bump with low
 		// seq) rather than only far-apart random points.
-		switch base := mark; {
-		case base == nil:
+		switch base := mark; base {
+		case nil:
 			c = tok{epoch: 1 + rng.Int63n(3), seq: 1 + rng.Int63n(3)}
 		default:
 			switch rng.Intn(6) {
@@ -446,8 +446,8 @@ func TestB1204_MultiShardFencedInterleavings(t *testing.T) {
 		mk := marks[si]
 		var c tok
 		// Bias around this shard's current mark to densely hit the boundary.
-		switch base := mk; {
-		case base == nil:
+		switch base := mk; base {
+		case nil:
 			c = tok{1 + rng.Int63n(2), 1 + rng.Int63n(2)}
 		default:
 			switch rng.Intn(4) {

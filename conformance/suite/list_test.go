@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/intUnderflow/bigfleet-providers/conformance/internal/harness"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
+
+	"github.com/intUnderflow/bigfleet-providers/conformance/internal/harness"
 )
 
 // Area C9 — List, Revision & Pagination (behaviors B901-B909).
