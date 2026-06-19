@@ -24,6 +24,12 @@ export default defineConfig({
           items: [{ label: "Overview", link: "/" }],
         },
         {
+          // Per-provider operator docs, synced from providers/<name>/docs/ by
+          // scripts/sync-providers.mjs and routed to /providers/<name>/...
+          label: "Providers",
+          autogenerate: { directory: "providers" },
+        },
+        {
           label: "Build a provider",
           items: [
             {

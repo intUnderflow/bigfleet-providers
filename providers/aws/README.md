@@ -10,6 +10,13 @@ that; it only maps the kit's lifecycle calls onto EC2 and fills in the
 substrate fields (`instance_type`, `zone`, `capacity_type`, `price_per_hour`,
 `interruption_probability`, `resources`, `allocatable`, `host`).
 
+> **📖 Operator documentation:** the full operator guide — install & deploy,
+> configuration, IAM, pricing & interruption, observability, security,
+> troubleshooting, and certification — lives at
+> **<https://bigfleet-providers.lucy.sh/providers/aws/>**. The page sources are
+> in [`docs/`](docs) and are published to the site automatically. This README is
+> the quick repo-facing reference.
+
 ## Running it
 
 ```sh

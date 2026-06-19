@@ -4,3 +4,7 @@ dist/
 .env
 .env.production
 .DS_Store
+
+# Provider docs synced from ../providers/<name>/docs by scripts/sync-providers.mjs.
+# Canonical content lives there; never edit or commit the copy.
+src/content/docs/providers/

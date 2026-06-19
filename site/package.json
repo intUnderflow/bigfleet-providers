@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
+    "sync": "node scripts/sync-providers.mjs",
+    "dev": "npm run sync && astro dev",
+    "build": "npm run sync && astro build",
     "preview": "astro preview",
     "astro": "astro"
   },

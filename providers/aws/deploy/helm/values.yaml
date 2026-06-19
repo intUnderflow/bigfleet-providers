@@ -1,0 +1,138 @@
+# Values for the bigfleet-aws chart.
+#
+# One release per AWS region. To run several regions, install the chart once per
+# region with a distinct release name, region, and IRSA role, e.g.:
+#
+#   helm install aws-us-east-1 ./helm \
+#     --set region=us-east-1 \
+#     --set provider=aws-us-east-1 \
+#     --set serviceAccount.roleArn=arn:aws:iam::111122223333:role/bigfleet-aws-us-east-1 \
+#     --set-file offerings.content=offerings.us-east-1.json
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-aws
+  tag: ""            # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Number of replicas. Keep at 1 per region: the provider holds region-scoped
+# state and is the single CapacityProvider process for its region.
+replicaCount: 1
+
+# --- core provider config ---------------------------------------------------
+# AWS region (required for the real EC2 backend; sets --region).
+region: ""
+# HostRef provider label (--provider), e.g. aws-us-east-1.
+provider: ""
+# EC2 backend mode: auto | aws | fake (--ec2-backend). auto = aws when region set.
+ec2Backend: auto
+
+ports:
+  # gRPC CapacityProvider (--addr).
+  grpc: 9000
+  # /metrics, /healthz, /readyz (--metrics-addr).
+  metrics: 9090
+
+# --- EC2 launch parameters (aws backend) ------------------------------------
+ec2:
+  ami: ""                       # --ami (base AMI for RunInstances)
+  subnets: ""                   # --subnets, comma list of zone=subnet-id
+  securityGroups: ""            # --security-groups, comma list of sg ids
+  iamInstanceProfile: ""        # --iam-instance-profile (node profile granting SSM)
+  keyName: ""                   # --key-name (optional)
+  bootstrapHook: /opt/bigfleet/bootstrap   # --bootstrap-hook
+  zoneA: ""                     # --zone-a (default <region>a)
+  zoneB: ""                     # --zone-b (default <region>b)
+  seedCount: 32                # --seed-count (default offerings size)
+
+# --- offerings --------------------------------------------------------------
+# When content is set, it is rendered into a ConfigMap, mounted, and passed via
+# --offerings. Use --set-file offerings.content=offerings.json on install.
+offerings:
+  content: ""
+
+# Optional generic pre-binding bootstrap baked into RunInstances user-data
+# (--base-user-data). Same mechanism as offerings: set content to enable.
+baseUserData:
+  content: ""
+
+# --- background loops -------------------------------------------------------
+spotRefresh: 5m                 # --spot-refresh
+reconcileInterval: 2m           # --reconcile-interval
+# SQS queue URL fed by an EventBridge spot-interruption/rebalance rule
+# (--spot-interruption-queue). Empty disables the interruption poller.
+spotInterruptionQueue: ""
+
+# --- durable state ----------------------------------------------------------
+# When enabled, --state points at a file on a PersistentVolume so fence marks,
+# the idempotency map, inventory, and bindings survive restarts.
+state:
+  enabled: false
+  path: /var/lib/bigfleet-aws/state.json
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+
+# --- TLS / mTLS -------------------------------------------------------------
+# Provide a Secret with tls.crt + tls.key (and optionally ca.crt for mTLS).
+# When ca.crt is present the provider requires + verifies client certs (mTLS).
+tls:
+  enabled: false
+  secretName: ""                 # Secret holding tls.crt, tls.key, [ca.crt]
+  mtls: false                   # mount ca.crt and pass --tls-ca
+
+# --- gRPC reflection (--reflection) -----------------------------------------
+reflection: true
+
+# Extra raw flags appended verbatim to the args, e.g. ["--key-name", "mykey"].
+extraArgs: []
+
+# --- ServiceAccount / IRSA --------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  # IRSA role ARN annotated as eks.amazonaws.com/role-arn. Set to the role from
+  # deploy/iam (the provider's least-privilege role).
+  roleArn: ""
+  annotations: {}
+
+# --- Service ----------------------------------------------------------------
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Scrape annotations added to the Service for the metrics port.
+metrics:
+  prometheusScrape: true
+
+# --- pod scheduling / resources ---------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# Hardened defaults to match the distroless/static:nonroot image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
