@@ -56,3 +56,21 @@ for (const entry of await readdir(providersDir, { withFileTypes: true })) {
 }
 
 console.log(`sync-providers: ${copied} file(s) from ${providers} provider(s) -> ${destBase}`);
+
+// Sync the conformance program docs to /conformance. The canonical overview
+// `conformance/docs/conformance.md` is mapped to index.md so it routes to
+// /conformance/ (its source name is kept for the GitHub links that reference it).
+const confSrc = join(repoRoot, "conformance", "docs");
+const confDest = join(siteDir, "src", "content", "docs", "conformance");
+await rm(confDest, { recursive: true, force: true });
+let confCopied = 0;
+if (await exists(confSrc)) {
+  for await (const file of walk(confSrc)) {
+    const rel = file.slice(confSrc.length + 1);
+    const dest = join(confDest, rel === "conformance.md" ? "index.md" : rel);
+    await mkdir(dirname(dest), { recursive: true });
+    await copyFile(file, dest);
+    confCopied++;
+  }
+}
+console.log(`sync-providers: ${confCopied} conformance doc(s) -> ${confDest}`);

@@ -30,6 +30,10 @@ export default defineConfig({
           autogenerate: { directory: "providers" },
         },
         {
+          label: "Conformance",
+          items: [{ label: "Program overview", link: "/conformance/" }],
+        },
+        {
           label: "Build a provider",
           items: [
             {

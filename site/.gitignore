@@ -8,3 +8,6 @@ dist/
 # Provider docs synced from ../providers/<name>/docs by scripts/sync-providers.mjs.
 # Canonical content lives there; never edit or commit the copy.
 src/content/docs/providers/
+
+# Conformance docs synced from ../conformance/docs by scripts/sync-providers.mjs.
+src/content/docs/conformance/
