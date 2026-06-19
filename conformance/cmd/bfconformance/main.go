@@ -121,6 +121,25 @@ func main() {
 		ext = append(ext, durRes...)
 	}
 
+	// Lane 5 (scale): when the "scale" profile is selected, certify the B11xx
+	// scale/soak behaviors. This lane OWNS the provider lifecycle — it boots the
+	// provider under test with a LARGE --seed-count on its OWN port (port+3, to
+	// avoid the extension/fault/durable ports), runs the scale-tagged suite with a
+	// cranked -scale-seed/-soak, and MERGES the results into ext so the B11xx map
+	// onto the registry like every other behavior. It needs a real provider binary
+	// (a --target endpoint can't be re-seeded at the scale these behaviors need),
+	// so it requires -provider.
+	if contains(profiles, "scale") {
+		if *providerName == "" {
+			fatal("the scale profile requires -provider <name> (the lane boots the provider with a large seed; a pre-running --target endpoint cannot be re-seeded)")
+		}
+		scaleRes, err := runScaleLane(repoRoot, *providerName, *port+3)
+		if err != nil {
+			fatal("%v", err)
+		}
+		ext = append(ext, scaleRes...)
+	}
+
 	rep := buildReport(label, profiles, ts, base, ext, baselineRan)
 	printSummary(rep)
 	if *outDir != "" {

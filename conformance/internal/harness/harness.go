@@ -43,6 +43,16 @@ func Dial(t *testing.T, addr string) *H {
 		t.Fatalf("harness: dial %s: %v", addr, err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
+	return DialConn(t, conn)
+}
+
+// DialConn builds a harness over an already-constructed gRPC connection. It lets
+// callers that need non-default dial options (e.g. the scale lane raising
+// MaxCallRecvMsgSize so a full List of a very large fleet does not exceed the
+// default ~4MB recv limit) reuse every harness primitive. The caller owns the
+// connection's lifecycle (registering its own t.Cleanup to Close it).
+func DialConn(t *testing.T, conn *grpc.ClientConn) *H {
+	t.Helper()
 	var seq uint64
 	return &H{t: t, Client: pb.NewCapacityProviderClient(conn), conn: conn, seq: &seq}
 }

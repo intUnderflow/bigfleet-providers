@@ -408,6 +408,22 @@ func (h *H) ListSince(rev []byte, states ...pb.MachineState) ([]*pb.Machine, []b
 	return resp.GetMachines(), resp.GetRevision()
 }
 
+// ListPage issues one List with BOTH a max_results cap and a since_revision
+// cursor — the page-the-fleet primitive: each call returns up to max machines
+// changed since rev plus the next cursor, so repeated calls walk the List-as-a-
+// set. Order-independent; callers assert set-completeness over the union, never
+// position. Returns (page, nextRevision).
+func (h *H) ListPage(max int32, rev []byte, states ...pb.MachineState) ([]*pb.Machine, []byte) {
+	h.t.Helper()
+	ctx, cancel := h.Ctx()
+	defer cancel()
+	resp, err := h.Client.List(ctx, &pb.ListFilter{States: states, MaxResults: max, SinceRevision: rev})
+	if err != nil {
+		h.t.Fatalf("ListPage(max=%d): %v", max, err)
+	}
+	return resp.GetMachines(), resp.GetRevision()
+}
+
 // ListMax returns up to max machines — an arbitrary bounded subset, since List
 // has no guaranteed order. Callers must assert membership/count, never position.
 func (h *H) ListMax(max int32, states ...pb.MachineState) []*pb.Machine {
