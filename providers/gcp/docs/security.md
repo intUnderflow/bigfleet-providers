@@ -1,6 +1,6 @@
 ---
 title: Security
-description: mTLS on the gRPC port, the two-identity service-account model (Workload Identity), the startup-script bootstrap trust model, and exposure for the BigFleet GCP provider.
+description: mTLS on the gRPC port, the two-identity service-account model (Workload Identity), the in-band SSH bootstrap trust model, and exposure for the BigFleet GCP provider.
 sidebar:
   order: 5
   label: Security
@@ -8,9 +8,9 @@ sidebar:
 
 The GCP provider sits on the trust boundary between BigFleet's control plane and
 your GCP project: it accepts lifecycle RPCs over the network and turns them into
-`instances.insert`, `instances.delete`, metadata/label mutations, and resets.
-This page covers the four things an operator must get right — the gRPC transport
-(mTLS), the identities the process and the nodes hold, the startup-script
+`instances.insert`, `instances.delete`, metadata/label mutations, and in-band SSH
+to the host. This page covers the four things an operator must get right — the
+gRPC transport (mTLS), the identities the process and the nodes hold, the SSH
 bootstrap trust model, and how the process is exposed.
 
 ## Transport: mTLS on the gRPC port

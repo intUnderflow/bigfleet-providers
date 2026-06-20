@@ -27,8 +27,10 @@ Most problems show up as a machine landing in `FAILED` (read `last_error` via
 | `last_error` mentions | Cause | Fix |
 |---|---|---|
 | `insert instance …` | `Instances.Insert` failed (bad type/image/zone, quota, permission). | Check the machine type/image exist in the zone; check the project's quota; verify the provider SA has `compute.instanceAdmin.v1` (and `serviceAccountUser` on the node SA). |
-| `configure: get instance …` / `set metadata …` / `reset …` | Configure couldn't reach or mutate the instance. | Check the instance still exists; verify `compute.instances.setMetadata`/`reset` permission; check the region/zone are correct. |
-| `drain: set metadata …` | Drain couldn't strip the startup-script. | Same as above; the instance may have been deleted out-of-band (reconcile recovers the slot). |
+| `configure: SSH delivery disabled (set --ssh-key)` | Configure with no SSH key configured. | Set `--ssh-key` (and ensure its public key is authorised — the provider does this via `ssh-keys` metadata at Create). |
+| `configure: … ssh dial/handshake/command …` | The provider can't reach the host on port 22, the host key didn't verify, or the bootstrap hook exited non-zero. | Check network reachability to the instance IP (same VPC, or `--use-external-ip`); confirm the image ships the hook at `--bootstrap-hook` and authorises `--ssh-user`; a host-key mismatch aborts as a possible MITM. |
+| `drain: … ssh …` | Drain couldn't cordon/drain over SSH. | Same reachability/SSH checks; confirm `kubectl` is present on the node and the node name resolves. |
+| `configure: record cluster binding …` / `drain: clear cluster binding …` | The post-SSH `SetMetadata` to record/clear the binding failed. | Verify `compute.instances.setMetadata` permission; the instance may have been deleted out-of-band (reconcile recovers the slot). |
 | `transition interrupted by a provider restart` | The process was killed mid-transition. | Expected after a kill without graceful drain; the shard re-drives on a fresh slot. Enable `--state` so fence marks/bindings survive. |
 
 A `FAILED` machine is terminal-pending-cleanup: the shard recovers on a different

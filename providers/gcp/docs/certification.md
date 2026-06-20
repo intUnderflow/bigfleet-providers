@@ -93,10 +93,10 @@ go -C conformance test -tags=certify -count=1 ./suite/... -target=127.0.0.1:9099
 ```
 
 A real run exercises the full lifecycle — `Instances.Insert` → wait-for-RUNNING →
-`SetMetadata`/`Reset` Configure/Drain → `Instances.Delete` — so the endpoint
-needs a provider service account with `compute.instanceAdmin.v1` (see
-[Credentials](/providers/gcp/credentials/)) and an image whose startup-script
-joins the cluster. It will create and destroy real instances; certify in a
+in-band SSH Configure/Drain → `Instances.Delete` — so the endpoint needs a
+provider service account with `compute.instanceAdmin.v1` (see
+[Credentials](/providers/gcp/credentials/)), an `--ssh-key`, and an image whose
+bootstrap hook joins the cluster. It will create and destroy real instances; certify in a
 throwaway project and tear the instances down.
 
 ## Why this provider does not opt out of the CI gate

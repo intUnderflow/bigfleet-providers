@@ -45,15 +45,18 @@ account):
   (`roles/compute.instanceAdmin.v1`), obtained via **Workload Identity** on GKE
   (no key files) or a key-file Secret off-GKE. See
   [Credentials](/providers/gcp/credentials/).
-- **A boot image** that joins your cluster. The provider creates an instance from
-  it with a generic pre-binding `startup-script`, then on Configure overwrites
-  `startup-script` with a per-cluster bootstrap blob and resets the instance so
-  it joins. The model is in [Configuration](/providers/gcp/configuration/).
+- **A boot image** that joins your cluster. The provider creates an instance with
+  a generic pre-binding `startup-script`, then on Configure delivers a per-cluster
+  bootstrap blob **in-band over SSH** (no reboot) and runs the image's bootstrap
+  hook to join. The model is in [Configuration](/providers/gcp/configuration/).
+- **An SSH key** the provider uses to deliver the per-cluster bootstrap and to
+  cordon/drain (its public key is authorised on each instance). See
+  [Credentials](/providers/gcp/credentials/).
 - **Your offerings** — the quota of `(machine_type, zone, capacity_type)` shapes
   it may provision.
 
 There are **two identities**, kept separate: the **provider** service account
-(the process, which calls `instances.insert/delete/reset` and metadata) and the
+(the process, which calls `instances.insert/delete` and `setMetadata`) and the
 service account the **launched instances** run as (`--instance-service-account`).
 See [Credentials](/providers/gcp/credentials/).
 

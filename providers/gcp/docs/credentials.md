@@ -16,7 +16,7 @@ There are **two identities**, and keeping them separate is the whole point:
 
 | Identity | Who | What it does |
 |---|---|---|
-| **Provider service account** | the provider process | calls `instances.insert/delete/reset`, reads instances + machine types, sets metadata/labels |
+| **Provider service account** | the provider process | calls `instances.insert/delete`, reads instances + machine types, sets metadata/labels |
 | **Instance service account** | the VMs the provider launches | whatever your nodes need at runtime (`--instance-service-account`); **not** the provider's identity |
 
 The provider's identity must never be the node identity. A node should not be
@@ -28,11 +28,11 @@ The provider needs exactly one predefined role on the target project:
 
 | Role | Why | Lifecycle call |
 |---|---|---|
-| `roles/compute.instanceAdmin.v1` | create / delete / reset instances, set metadata + labels, read instances and machine types | `Create`, `Delete`, `Configure`, `Drain`, `Describe` |
+| `roles/compute.instanceAdmin.v1` | create / delete instances, set metadata + labels, read instances and machine types | `Create`, `Delete`, `Configure`, `Drain`, `Describe` |
 | `roles/iam.serviceAccountUser` on the **instance** SA | lets the provider launch instances that *run as* `--instance-service-account` | `Create` (only when `--instance-service-account` is set) |
 
 That's the least-privilege set. `instanceAdmin.v1` already covers
-`compute.instances.{insert,delete,reset,setMetadata,get,list}` and
+`compute.instances.{insert,delete,setMetadata,get,list}` and
 `compute.machineTypes.get`. Map each grant to the call that needs it, and grant
 nothing more. (If you later add live Cloud Billing pricing, add a billing viewer
 role then — this provider uses a pinned price table, so it is not needed.)
@@ -157,7 +157,7 @@ Every GCE call the provider makes, and the role permission it needs:
 | `Instances.Insert` | `compute.instances.create` (+ `iam.serviceAccounts.actAs` for the node SA) | Create |
 | `Instances.Delete` | `compute.instances.delete` | Delete |
 | `Instances.AggregatedList` | `compute.instances.list` | Describe / reconcile |
-| `Instances.SetMetadata` + `Reset` | `compute.instances.setMetadata`, `compute.instances.reset` | Configure / Drain (bootstrap blob + cluster binding live in metadata) |
+| `Instances.SetMetadata` | `compute.instances.setMetadata` | Configure / Drain (records/clears the cluster-binding metadata + TOFU host-key pin; the bootstrap itself goes over SSH, never into metadata) |
 | `MachineTypes.Get` | `compute.machineTypes.get` | `allocatable` resolution |
 
 No credential is ever logged. See [Security](/providers/gcp/security/) for the

@@ -17,11 +17,11 @@ import (
 // shard_metadata, and the rest are providerkit's job — this file never touches
 // them.
 //
-// Configure-bootstrap reconciliation: a GCE instance consumes its startup-script
-// metadata at boot, so Insert launches the instance with the generic pre-binding
-// --base-startup-script (not yet joined to any cluster), and the cluster-specific
-// bootstrap blob is delivered later by ConfigureInstance, which writes the blob
-// to the instance's `startup-script` metadata and resets it so the node joins.
+// Configure-bootstrap reconciliation: a slot's target cluster is only known when
+// the shard binds it, so Insert launches the instance with the generic
+// pre-binding --base-startup-script (not yet joined to any cluster), and the
+// cluster-specific bootstrap blob is delivered later by ConfigureInstance, which
+// the real client delivers in-band over SSH (no reboot, secret not persisted).
 // This keeps the kit's invariant that an Idle machine already carries a real,
 // reachable host, and delivers the blob exactly once when the binding is set.
 type gcpBackend struct {
@@ -225,7 +225,8 @@ func (b *gcpBackend) resourcesForType(machineType, zone string) map[string]strin
 
 // CreateInstance launches the GCE instance for a Speculative slot and returns
 // its host. The cluster-specific bootstrap is delivered later by
-// ConfigureInstance, because the startup-script is consumed at boot.
+// ConfigureInstance (in-band over SSH), because a slot's target cluster is only
+// known when the shard binds it.
 func (b *gcpBackend) CreateInstance(ctx context.Context, req providerkit.CreateInstanceRequest) (providerkit.CreateInstanceResult, error) {
 	m := req.Machine
 	inst, err := b.client.Insert(ctx, instanceSpec{
@@ -254,7 +255,9 @@ func (b *gcpBackend) CreateInstance(ctx context.Context, req providerkit.CreateI
 }
 
 // ConfigureInstance binds the running instance to a cluster and delivers the
-// opaque bootstrap blob (real impl: SetMetadata startup-script + Reset).
+// opaque bootstrap blob (real impl: in-band over SSH — no reboot, blob not
+// persisted in metadata; the cluster binding is recorded only after the on-host
+// hook succeeds).
 func (b *gcpBackend) ConfigureInstance(ctx context.Context, req providerkit.ConfigureInstanceRequest) error {
 	inst, err := b.resolveHost(ctx, req.Machine)
 	if err != nil {
@@ -263,9 +266,9 @@ func (b *gcpBackend) ConfigureInstance(ctx context.Context, req providerkit.Conf
 	return b.client.ApplyBootstrap(ctx, inst, req.ClusterID, req.BootstrapBlob)
 }
 
-// DrainInstance strips the cluster binding (removes the delivered startup-script
-// metadata + clears the binding label), leaving the instance running but unbound
-// (Idle).
+// DrainInstance removes the cluster binding (real impl: cordon/drain the kubelet
+// over SSH, then clear the bigfleet-cluster binding metadata), leaving the
+// instance running but unbound (Idle).
 func (b *gcpBackend) DrainInstance(ctx context.Context, req providerkit.DrainInstanceRequest) error {
 	inst, err := b.resolveHost(ctx, req.Machine)
 	if err != nil {

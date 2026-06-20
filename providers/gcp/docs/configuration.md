@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Every flag, the offerings JSON schema, the backend modes, and the create-then-bootstrap (startup-script) model for the BigFleet GCP provider.
+description: Every flag, the offerings JSON schema, the backend modes, and the create-then-bootstrap (in-band SSH) model for the BigFleet GCP provider.
 sidebar:
   order: 2
   label: Configuration
@@ -75,7 +75,7 @@ off-GKE). See [Credentials](/providers/gcp/credentials/).
 
 - **`gcp`** — the real GCE client backed by `cloud.google.com/go/compute`.
   Requires `--project` **and** `--region`; startup fails without them. This is
-  what creates real instances, writes startup-script metadata, and resets.
+  what creates real instances and delivers the bootstrap in-band over SSH.
 - **`fake`** — an in-memory simulator. No GCP project, credentials, or network
   needed; no real instances are created. Used for dev and the credential-free
   certification run. Selecting it logs a loud warning so it is never mistaken for

@@ -49,7 +49,7 @@ What it grants, and why (each line maps to a call the code makes):
 
 | Binding | Role | When |
 |---|---|---|
-| Compute lifecycle + inventory | `roles/compute.instanceAdmin.v1` (insert/delete/reset/setMetadata/get/list, machineTypes.get) | always |
+| Compute lifecycle + inventory | `roles/compute.instanceAdmin.v1` (insert/delete/setMetadata/get/list, machineTypes.get) | always |
 | Act as the node SA | `roles/iam.serviceAccountUser` on `--instance-service-account` | only with `--instance-service-account` (omit `instance_service_account` otherwise) |
 | Workload Identity | `roles/iam.workloadIdentityUser` for `PROJECT.svc.id.goog[NS/KSA]` | always (GKE) |
 

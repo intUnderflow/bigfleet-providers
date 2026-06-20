@@ -173,7 +173,7 @@ func run() error {
 		Timeouts: providerkit.Timeouts{
 			// GCE Instances.Insert + boot + kubelet-ready: minutes, not seconds.
 			Create:    5 * time.Minute,
-			Configure: 10 * time.Minute, // metadata reset + kubelet join
+			Configure: 10 * time.Minute, // in-band SSH bootstrap + kubelet join
 			Drain:     15 * time.Minute, // strict PDBs can take a while
 			Delete:    3 * time.Minute,
 		},

@@ -4,7 +4,7 @@
 # with no key file (the GKE analogue of AWS IRSA).
 #
 # The role mirrors the credentials doc page and the actions the code calls:
-#   compute.instances.{insert,delete,reset,setMetadata,get,list} and
+#   compute.instances.{insert,delete,setMetadata,get,list} and
 #   compute.machineTypes.get  → all covered by roles/compute.instanceAdmin.v1
 #   iam.serviceAccounts.actAs  → roles/iam.serviceAccountUser on the NODE SA
 #     (only needed when --instance-service-account is set).
@@ -60,7 +60,7 @@ resource "google_service_account" "provider" {
   description  = "Least-privilege identity for the BigFleet GCE capacity provider."
 }
 
-# Least-privilege Compute role: create/delete/reset instances, set metadata +
+# Least-privilege Compute role: create/delete instances, set metadata +
 # labels, read instances and machine types.
 resource "google_project_iam_member" "instance_admin" {
   project = var.project_id
