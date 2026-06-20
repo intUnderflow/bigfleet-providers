@@ -9,13 +9,14 @@ import (
 
 // buildNoCloudISO builds a cloud-init NoCloud datasource as an ISO9660 image
 // with the volume label "cidata" (the label cloud-init's NoCloud datasource
-// looks for). It contains user-data (= the opaque bootstrap blob, or a generic
-// pre-binding bootstrap) and a minimal meta-data carrying the instance id and
-// hostname.
+// looks for). It carries the userData passed in — in this provider's design that
+// is the generic, pre-binding base-user-data baked in at Create
+// (--base-user-data); the opaque per-cluster bootstrap blob is NOT placed here,
+// it is delivered later over the qemu guest agent — plus a minimal meta-data
+// carrying the instance id and hostname.
 //
 // The image is attached to the domain as a read-only CD-ROM; cloud-init consumes
-// it on (re)boot. The blob is opaque — never parsed — so it is written to
-// user-data verbatim.
+// it on boot. userData is written verbatim (never parsed).
 func buildNoCloudISO(instanceID, hostname string, userData []byte) ([]byte, error) {
 	writer, err := iso9660.NewWriter()
 	if err != nil {

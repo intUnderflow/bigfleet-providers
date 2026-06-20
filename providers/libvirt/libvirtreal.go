@@ -149,9 +149,16 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 	}
 
 	// Idempotent define: a retried Create with the same operation id maps to the
-	// same domain name; if it already exists, recover it instead of failing.
-	if existing, err := c.lv.DomainLookupByName(name); err == nil {
+	// same domain name; if it already exists, recover it instead of failing. Only
+	// a genuine "no such domain" means we should go on to create — any other
+	// lookup error (RPC/connection failure) leaves the precondition inconclusive,
+	// so fail fast rather than provisioning volumes on a shaky connection.
+	existing, err := c.lv.DomainLookupByName(name)
+	if err == nil {
 		return r.domainView(c, existing)
+	}
+	if !libvirt.IsNotFound(err) {
+		return domainInstance{}, fmt.Errorf("look up domain %s: %w", name, err)
 	}
 
 	pool, err := c.lv.StoragePoolLookupByName(r.cfg.StoragePool)
