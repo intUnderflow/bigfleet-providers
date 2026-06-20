@@ -27,6 +27,23 @@ func TestAgentToken_DeterministicAndPerMachine(t *testing.T) {
 	}
 }
 
+// The bootstrap secret is required for the real backend: a flag or env value is
+// accepted, but an unset secret hard-fails rather than falling back to a random
+// per-process value (which would invalidate issued agent tokens on restart).
+func TestResolveBootstrapSecret(t *testing.T) {
+	t.Setenv("BIGFLEET_BOOTSTRAP_SECRET", "")
+	if _, err := resolveBootstrapSecret(""); err == nil {
+		t.Error("unset bootstrap secret returned nil error, want a hard failure")
+	}
+	if got, err := resolveBootstrapSecret("from-flag"); err != nil || string(got) != "from-flag" {
+		t.Errorf("flag secret: got (%q, %v), want (from-flag, nil)", got, err)
+	}
+	t.Setenv("BIGFLEET_BOOTSTRAP_SECRET", "from-env")
+	if got, err := resolveBootstrapSecret(""); err != nil || string(got) != "from-env" {
+		t.Errorf("env secret: got (%q, %v), want (from-env, nil)", got, err)
+	}
+}
+
 // Enqueue blocks until the agent fetches the command and posts a successful ack,
 // and rejects an unauthenticated fetch.
 func TestBootstrapVault_DeliverAndAck(t *testing.T) {

@@ -152,7 +152,7 @@ reference (defaults, semantics, the bootstrap model) is in
 | `--bootstrap-endpoint` | _(empty)_ | Externally-reachable URL of the channel, injected into Droplet `user_data`. **Required** |
 | `--bootstrap-tls-cert` / `--bootstrap-tls-key` | _(empty)_ | Server certificate + key (PEM) for the channel. **Required** |
 | `--bootstrap-ca` | _(server cert)_ | CA bundle the agent pins to verify the provider (defaults to the server cert) |
-| `--bootstrap-secret` | _(random)_ | HMAC secret minting per-machine agent tokens (or set `BIGFLEET_BOOTSTRAP_SECRET`); pin it in production |
+| `--bootstrap-secret` | _(empty)_ | Stable HMAC secret minting per-machine agent tokens (or set `BIGFLEET_BOOTSTRAP_SECRET`). **Required** for the digitalocean backend — the provider refuses to start without it (a random per-process secret would invalidate issued tokens on restart) |
 
 **Offerings**
 
@@ -180,9 +180,9 @@ The real backend will not start without `--bootstrap-addr`,
 is a **join secret**, so the provider serves it only over TLS. The on-host agent
 (installed by `--base-user-data` at create) fetches its cluster-join blob from
 `--bootstrap-endpoint`, pinning `--bootstrap-ca` (or the server cert), and
-authenticates with a per-machine token the provider mints. Pin
-`--bootstrap-secret` (or `BIGFLEET_BOOTSTRAP_SECRET`) in production so issued
-agent tokens survive a provider restart. The full model is in
+authenticates with a per-machine token the provider mints. The real backend
+**requires** `--bootstrap-secret` (or `BIGFLEET_BOOTSTRAP_SECRET`) — a stable
+key so issued agent tokens survive a provider restart. The full model is in
 [Configuration](configuration.md) and [Security](security.md).
 
 ## mTLS

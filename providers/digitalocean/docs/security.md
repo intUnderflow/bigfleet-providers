@@ -89,8 +89,10 @@ Hetzner provider's SSH host-key-pinned delivery. The model:
   per-machine bearer token = `HMAC(--bootstrap-secret, machine_id)`, injected into
   its Create-time `user_data`. The provider re-derives and constant-time-compares
   it on every fetch, so one Droplet can never read another's blob. The token is
-  re-derivable (never stored) and so restart-safe — provided you **pin
-  `--bootstrap-secret`** (a random secret invalidates issued tokens on restart).
+  re-derivable (never stored) and so restart-safe. **`--bootstrap-secret` is
+  required** (the provider refuses to start without it) and must be a stable,
+  pinned value — a random per-process secret would invalidate issued tokens on
+  restart.
 - **The blob is opaque.** The provider never parses it; the agent consumes it
   verbatim and acks. A failed apply surfaces as `FAILED`. Drain is delivered over
   the same channel.

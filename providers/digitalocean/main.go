@@ -12,10 +12,8 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -66,7 +64,7 @@ func run() error {
 		bootstrapCert     = flag.String("bootstrap-tls-cert", "", "server certificate (PEM) for the bootstrap channel")
 		bootstrapKey      = flag.String("bootstrap-tls-key", "", "server private key (PEM) for the bootstrap channel")
 		bootstrapCA       = flag.String("bootstrap-ca", "", "CA bundle (PEM) the on-host agent pins to verify the provider (default: the server cert)")
-		bootstrapSecret   = flag.String("bootstrap-secret", "", "HMAC secret minting per-machine agent tokens (or set BIGFLEET_BOOTSTRAP_SECRET; random if unset)")
+		bootstrapSecret   = flag.String("bootstrap-secret", "", "stable HMAC secret minting per-machine agent tokens (or set BIGFLEET_BOOTSTRAP_SECRET); required for the digitalocean backend")
 
 		metricsAddr = flag.String("metrics-addr", ":9090", "address for /metrics, /healthz, /readyz (empty = disabled)")
 		reflectFlag = flag.Bool("reflection", true, "register gRPC server reflection (for grpcurl/debugging)")
@@ -293,10 +291,13 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
-// resolveBootstrapSecret reads the HMAC secret from the flag, then the
-// environment, generating a random one (with a warning) if neither is set. A
-// random secret works within one process lifetime but invalidates already-issued
-// agent tokens on restart, so production should pin it.
+// resolveBootstrapSecret reads the HMAC secret that mints per-machine agent
+// tokens from the flag, then the environment. It is REQUIRED for the real
+// backend: the secret must be stable across restarts (the per-machine token is
+// HMAC(secret, machineID), re-derived to authenticate every agent), so a random
+// per-process secret would silently invalidate every already-issued token on
+// restart and break Configure/Drain for every live Droplet. Rather than paper
+// over that with a random fallback, hard-fail and make the operator pin one.
 func resolveBootstrapSecret(flagVal string) ([]byte, error) {
 	if flagVal != "" {
 		return []byte(flagVal), nil
@@ -304,12 +305,7 @@ func resolveBootstrapSecret(flagVal string) ([]byte, error) {
 	if env := os.Getenv("BIGFLEET_BOOTSTRAP_SECRET"); env != "" {
 		return []byte(env), nil
 	}
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return nil, fmt.Errorf("generate bootstrap secret: %w", err)
-	}
-	slog.Warn("no --bootstrap-secret / BIGFLEET_BOOTSTRAP_SECRET set: using a random secret (agent tokens won't survive a provider restart; pin one in production)")
-	return []byte(hex.EncodeToString(buf)), nil
+	return nil, errors.New("the digitalocean backend requires --bootstrap-secret or BIGFLEET_BOOTSTRAP_SECRET: a stable HMAC key minting per-machine agent tokens (a random per-process secret would invalidate already-issued tokens on restart and break Configure for every live Droplet)")
 }
 
 // runReconciler periodically re-reads DigitalOcean truth into kit inventory (new

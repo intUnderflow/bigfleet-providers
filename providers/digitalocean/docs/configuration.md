@@ -38,7 +38,7 @@ token the flags imply see [Credentials](credentials.md).
 | `--bootstrap-tls-cert` | _(empty)_ | Server certificate (PEM) for the bootstrap channel. **Required**. |
 | `--bootstrap-tls-key` | _(empty)_ | Server private key (PEM) for the bootstrap channel. **Required**. |
 | `--bootstrap-ca` | _(server cert)_ | CA bundle (PEM) the on-host agent pins to verify the provider (default: the server cert). |
-| `--bootstrap-secret` | _(random)_ | HMAC secret minting per-machine agent tokens (or set `BIGFLEET_BOOTSTRAP_SECRET`; random if unset — pin it in production). |
+| `--bootstrap-secret` | _(empty)_ | Stable HMAC secret minting per-machine agent tokens (or set `BIGFLEET_BOOTSTRAP_SECRET`). **Required** for the digitalocean backend; the provider refuses to start without it, since a random per-process secret would invalidate issued tokens on restart. |
 | `--price-refresh` | `30m` | Price refresh interval (never on the List hot path). |
 | `--reconcile-interval` | `2m` | Background DigitalOcean→inventory reconcile interval (`0` = off). |
 | `--metrics-addr` | `:9090` | Address for `/metrics`, `/healthz`, `/readyz`. Empty = disabled. |

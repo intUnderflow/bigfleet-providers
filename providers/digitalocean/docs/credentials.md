@@ -88,8 +88,9 @@ populated, only that it exists.
 The provider also holds an HMAC **bootstrap secret** (`--bootstrap-secret` /
 `BIGFLEET_BOOTSTRAP_SECRET`). This is **not** a DigitalOcean credential — it
 mints the per-machine bearer tokens the on-host agent uses to fetch its
-cluster-join blob over the TLS channel. Pin it (don't rely on the random
-default), because a random secret invalidates already-issued agent tokens on a
+cluster-join blob over the TLS channel. It is **required** for the real backend
+(the provider refuses to start without it), and must be a stable, pinned value:
+a random per-process secret would invalidate already-issued agent tokens on a
 provider restart. Store it as its own Secret (or alongside the bootstrap TLS
 material), and treat it like the cluster-join secret it protects. The trust model
 is on the [Security](security.md) page.
