@@ -96,7 +96,7 @@ func TestBootstrapVault_DeliverAndAck(t *testing.T) {
 		t.Fatalf("fetched command = %+v, want configure/c1", cmd)
 	}
 
-	ackBody, _ := json.Marshal(bootstrapAck{OK: true})
+	ackBody, _ := json.Marshal(bootstrapAck{CommandID: cmd.CommandID, OK: true})
 	ar, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/ack?machine_id="+machineID, bytes.NewReader(ackBody))
 	ar.Header.Set("Authorization", "Bearer "+token)
 	aresp, err := http.DefaultClient.Do(ar)
@@ -128,9 +128,25 @@ func TestBootstrapVault_FailureAck(t *testing.T) {
 		done <- v.Enqueue(ctx, machineID, bootstrapCommand{Type: "configure"})
 	}()
 
-	// Give Enqueue a moment to register the pending command, then ack failure.
-	time.Sleep(20 * time.Millisecond)
-	ackBody, _ := json.Marshal(bootstrapAck{OK: false, Error: "join failed"})
+	// Fetch the command to learn its command_id (the agent must echo it), then ack
+	// failure with that id.
+	var cmd bootstrapCommand
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		gr := httptest.NewRequest(http.MethodGet, "/v1/command?machine_id="+machineID, nil)
+		gr.Header.Set("Authorization", "Bearer "+token)
+		gw := httptest.NewRecorder()
+		v.ServeHTTP(gw, gr)
+		if gw.Code == http.StatusOK {
+			_ = json.NewDecoder(gw.Body).Decode(&cmd)
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if cmd.CommandID == "" {
+		t.Fatal("did not fetch a command with a command_id")
+	}
+	ackBody, _ := json.Marshal(bootstrapAck{CommandID: cmd.CommandID, OK: false, Error: "join failed"})
 	r := httptest.NewRequest(http.MethodPost, "/v1/ack?machine_id="+machineID, bytes.NewReader(ackBody))
 	r.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
@@ -146,6 +162,45 @@ func TestBootstrapVault_FailureAck(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Enqueue did not return after failure ack")
+	}
+}
+
+// An ack carrying a stale command_id (one that has since been superseded) must
+// NOT complete the current waiter — otherwise a Configure/Drain could report
+// success for a command the agent never executed.
+func TestBootstrapVault_StaleAckIgnored(t *testing.T) {
+	v := newBootstrapVault([]byte("secret"), quietLogger())
+	const machineID = "m-stale"
+	token := v.Token(machineID)
+
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		done <- v.Enqueue(ctx, machineID, bootstrapCommand{Type: "configure"})
+	}()
+	time.Sleep(20 * time.Millisecond)
+
+	// Ack a DIFFERENT (stale) command id.
+	ackBody, _ := json.Marshal(bootstrapAck{CommandID: "stale-deadbeef", OK: true})
+	r := httptest.NewRequest(http.MethodPost, "/v1/ack?machine_id="+machineID, bytes.NewReader(ackBody))
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	v.ServeHTTP(w, r)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("stale ack status = %d, want 409", w.Code)
+	}
+
+	// The waiter must NOT have completed on the stale ack — it should still be
+	// blocked, and only return (with an error) when ctx expires.
+	select {
+	case err := <-done:
+		t.Fatalf("Enqueue completed on a stale ack (err=%v); it must ignore mismatched command_id", err)
+	case <-time.After(100 * time.Millisecond):
+		// still blocked — correct
+	}
+	if err := <-done; err == nil {
+		t.Fatal("Enqueue should return an error once ctx expires with no matching ack")
 	}
 }
 

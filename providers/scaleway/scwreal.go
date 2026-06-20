@@ -397,10 +397,15 @@ func (r *scwReal) toServerInstance(srv *instance.Server) serverInstance {
 	return out
 }
 
+// serverByName finds a BigFleet-managed server by its derived name, used to make
+// CreateServer idempotent across a retried Create. It filters on the managed tag
+// so a name collision with a server BigFleet does not own can never be "adopted"
+// as an idempotent retry.
 func (r *scwReal) serverByName(ctx context.Context, name string) *instance.Server {
 	res, err := r.api.ListServers(&instance.ListServersRequest{
 		Zone:    r.zone,
 		Name:    scw.StringPtr(name),
+		Tags:    []string{tagManaged},
 		Project: optStr(r.cfg.Creds.projectID),
 	}, scw.WithContext(ctx))
 	if err != nil || res == nil {

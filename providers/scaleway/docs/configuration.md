@@ -228,9 +228,12 @@ Your base image must satisfy two things:
 - **Dial the channel, apply the blob, ack.** On Configure the agent long-polls the
   provider's `GET /v1/command` over TLS (pinning the provided CA, presenting its
   bearer token), applies the opaque blob it receives, and POSTs the result to
-  `/v1/ack`. It must ack a **failure** (or simply not ack a success) when the join
-  fails, so a broken join becomes `FAILED` rather than a falsely-Idle node. The
-  blob is opaque — the agent consumes it verbatim.
+  `/v1/ack`. The command carries a `command_id` nonce that the agent **must echo**
+  in its ack; the provider ignores an ack whose `command_id` does not match the
+  currently-pending command, so a stale ack for a superseded command can never
+  complete the wrong transition. The agent must ack a **failure** (or simply not
+  ack a success) when the join fails, so a broken join becomes `FAILED` rather
+  than a falsely-Idle node. The blob is opaque — the agent consumes it verbatim.
 
 The provider serves this channel only on the real backend, and it **requires**
 `--bootstrap-addr`, `--bootstrap-tls-cert`/`--bootstrap-tls-key`, and

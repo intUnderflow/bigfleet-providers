@@ -33,8 +33,8 @@ type scwClient interface {
 	DeleteServer(ctx context.Context, serverID string) error
 
 	// DescribeManaged returns every BigFleet-managed server on this substrate
-	// (servers carrying the bigfleet-managed=true tag), so a provider with no
-	// persisted store can still rebuild inventory.
+	// (servers carrying the bigfleet:managed tag), so a provider with no persisted
+	// store can still rebuild inventory.
 	DescribeManaged(ctx context.Context) ([]serverInstance, error)
 
 	// ApplyBootstrap binds a running server to a cluster and delivers the opaque

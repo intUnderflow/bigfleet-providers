@@ -263,8 +263,10 @@ func (b *scalewayBackend) DrainInstance(ctx context.Context, req providerkit.Dra
 	return b.client.DrainNode(ctx, srv, req.GracePeriodSeconds)
 }
 
-// resolveHost recovers the substrate server view (including the public IP the
-// control channel needs) for a machine the kit holds, by its server id.
+// resolveHost recovers the substrate server view (id, machine-id tag, cluster
+// binding) for a machine the kit holds, by its server id. The bootstrap/drain
+// control channel is addressed by machine id (the agent dials the provider), so
+// no host address is needed here.
 func (b *scalewayBackend) resolveHost(ctx context.Context, m providerkit.Machine) (serverInstance, error) {
 	if m.Host.Ref == "" {
 		return serverInstance{}, fmt.Errorf("machine %s has no host", m.ID)

@@ -76,9 +76,12 @@ bootstrap:
   # Service port exposing the agent channel.
   port: 9443
   # Secret holding the bootstrap-channel server cert: tls.crt, tls.key, and
-  # optionally ca.crt (the CA the agent pins; defaults to the server cert).
+  # optionally ca.crt (the CA the agent pins). A kubernetes.io/tls Secret usually
+  # has only tls.crt/tls.key; set includeCA=true only if the Secret also carries
+  # ca.crt, otherwise the provider defaults the pinned CA to the server cert.
   tls:
     secretName: ""
+    includeCA: false
   # Secret holding the HMAC secret that mints per-machine agent tokens
   # (key: bootstrap-secret), exposed as BIGFLEET_BOOTSTRAP_SECRET. Pin it so
   # tokens survive a provider restart.

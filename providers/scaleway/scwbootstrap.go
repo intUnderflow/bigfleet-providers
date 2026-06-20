@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -49,6 +51,10 @@ func agentToken(secret []byte, machineID string) string {
 
 // bootstrapCommand is the JSON the agent fetches from GET /v1/command.
 type bootstrapCommand struct {
+	// CommandID is a per-enqueue nonce. The agent MUST echo it in its ack so a
+	// stale ack (for a command that has since been superseded) cannot complete the
+	// current waiter — see handleAck.
+	CommandID    string `json:"command_id"`
 	Type         string `json:"type"`                    // "configure" | "drain"
 	ClusterID    string `json:"cluster_id,omitempty"`    // configure: the cluster to join
 	Blob         string `json:"blob,omitempty"`          // configure: base64 of the opaque bootstrap blob
@@ -56,10 +62,18 @@ type bootstrapCommand struct {
 }
 
 // bootstrapAck is the JSON the agent posts to /v1/ack once it has applied a
-// command.
+// command. CommandID echoes the command the agent actually executed.
 type bootstrapAck struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	CommandID string `json:"command_id"`
+	OK        bool   `json:"ok"`
+	Error     string `json:"error,omitempty"`
+}
+
+// newCommandID mints a random per-enqueue command nonce.
+func newCommandID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // pendingCommand couples a queued command with the channel its Enqueue caller is
@@ -102,6 +116,7 @@ func (v *bootstrapVault) Enqueue(ctx context.Context, machineID string, cmd boot
 	if machineID == "" {
 		return fmt.Errorf("bootstrap: empty machine id")
 	}
+	cmd.CommandID = newCommandID()
 	pc := &pendingCommand{cmd: cmd, done: make(chan error, 1)}
 	v.mu.Lock()
 	if old := v.pending[machineID]; old != nil {
@@ -196,6 +211,14 @@ func (v *bootstrapVault) handleAck(w http.ResponseWriter, r *http.Request) {
 	v.mu.Unlock()
 	if pc == nil {
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	// Ignore an ack for a command that has since been superseded: the current
+	// waiter is a DIFFERENT command, so completing it on this stale ack would
+	// report success/failure for work the agent never did. The agent will
+	// re-poll and pick up the current command.
+	if ack.CommandID != pc.cmd.CommandID {
+		w.WriteHeader(http.StatusConflict)
 		return
 	}
 	var result error
