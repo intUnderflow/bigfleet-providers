@@ -154,6 +154,20 @@ func (r *ovhReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 		return serverInstance{}, err
 	}
 
+	// Idempotency PRE-CHECK (before any create). gophercloud's servers.CreateOpts
+	// carries no idempotency token, and Nova's unique_server_name policy is OFF by
+	// default, so a lost-response retry of the SAME operation (Nova created the
+	// server but the HTTP reply was lost → the kit re-dispatches with the same
+	// OperationID) would otherwise launch a SECOND paid instance. The server name
+	// is deterministic from the OperationID (serverName), so look it up first and
+	// recover the existing server instead of double-provisioning — this is the
+	// OpenStack analogue of EC2's RunInstances ClientToken. The post-Create error
+	// branch below is only a backstop for the narrower create-races-create case.
+	name := serverName(spec)
+	if existing := r.serverByName(ctx, name); existing != nil {
+		return r.waitActive(ctx, existing.ID)
+	}
+
 	// Mint an SSH host key for the server and inject it via cloud-init, so the
 	// host boots presenting a key we already know. Its fingerprint is pinned in
 	// metadata and verified on every later Configure/Drain SSH connection —
@@ -169,8 +183,9 @@ func (r *ovhReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 
 	base := servers.CreateOpts{
 		// The operation id (idempotency token) makes the name stable across a
-		// retried Create, so a transport retry maps to the same server name.
-		Name:      serverName(spec),
+		// retried Create, so a transport retry maps to the same server name (see
+		// the pre-check above).
+		Name:      name,
 		FlavorRef: flavorID,
 		ImageRef:  r.cfg.Image,
 		UserData:  []byte(userData),

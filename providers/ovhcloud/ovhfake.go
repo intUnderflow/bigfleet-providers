@@ -29,7 +29,10 @@ func (f *ovhFake) CreateServer(_ context.Context, spec serverSpec) (serverInstan
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// Model create idempotency: a repeated token returns the existing server
-	// instead of launching a second one.
+	// instead of launching a second one. NOTE: Nova itself has no idempotency
+	// token, so the REAL client (openstack.go) achieves this with a name-based
+	// DescribeManaged pre-check before servers.Create — this fake's token map is
+	// only a convenience for the in-memory lifecycle, not a model of Nova.
 	if spec.IdempotencyToken != "" {
 		if id, ok := f.byToken[spec.IdempotencyToken]; ok {
 			if srv, ok := f.servers[id]; ok {
