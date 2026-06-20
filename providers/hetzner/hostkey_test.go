@@ -38,7 +38,9 @@ func TestGenerateHostKey_Shape(t *testing.T) {
 	}
 	// The fingerprint must be a label-safe value (lowercase base32: [a-z2-7]).
 	for _, c := range hk.fingerprint {
-		if !((c >= 'a' && c <= 'z') || (c >= '2' && c <= '7')) {
+		isLower := c >= 'a' && c <= 'z'
+		isBase32Digit := c >= '2' && c <= '7'
+		if !isLower && !isBase32Digit {
 			t.Errorf("fingerprint has non-label-safe char %q in %q", c, hk.fingerprint)
 		}
 	}
