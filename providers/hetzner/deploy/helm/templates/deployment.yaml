@@ -1,0 +1,188 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "bigfleet-hetzner.fullname" . }}
+  labels:
+    {{- include "bigfleet-hetzner.labels" . | nindent 4 }}
+spec:
+  # One process per location: do not scale this beyond 1.
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "bigfleet-hetzner.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bigfleet-hetzner.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- if .Values.offerings.content }}
+        checksum/offerings: {{ .Values.offerings.content | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "bigfleet-hetzner.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: hetzner
+          image: {{ include "bigfleet-hetzner.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - --addr=:{{ .Values.ports.grpc }}
+            - --metrics-addr=:{{ .Values.ports.metrics }}
+            {{- if .Values.provider }}
+            - --provider={{ .Values.provider }}
+            {{- end }}
+            - --hetzner-backend={{ .Values.hetznerBackend }}
+            - --reflection={{ .Values.reflection }}
+            - --price-refresh={{ .Values.priceRefresh }}
+            - --reconcile-interval={{ .Values.reconcileInterval }}
+            {{- if .Values.location }}
+            - --location-a={{ .Values.location }}
+            {{- end }}
+            {{- if .Values.locationB }}
+            - --location-b={{ .Values.locationB }}
+            {{- end }}
+            {{- if .Values.hetzner.image }}
+            - --image={{ .Values.hetzner.image }}
+            {{- end }}
+            - --eur-usd={{ .Values.hetzner.eurToUSD }}
+            - --bootstrap-hook={{ .Values.hetzner.bootstrapHook }}
+            - --seed-count={{ .Values.hetzner.seedCount }}
+            {{- if .Values.ssh.secretName }}
+            - --ssh-key=/etc/bigfleet/ssh/{{ .Values.ssh.secretKey }}
+            - --ssh-user={{ .Values.ssh.user }}
+            {{- end }}
+            {{- if .Values.offerings.content }}
+            - --offerings=/etc/bigfleet/offerings/offerings.json
+            {{- end }}
+            {{- if .Values.baseUserData.content }}
+            - --base-user-data=/etc/bigfleet/base-user-data/base-user-data
+            {{- end }}
+            {{- if .Values.state.enabled }}
+            - --state={{ .Values.state.path }}
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - --tls-cert=/etc/bigfleet/tls/tls.crt
+            - --tls-key=/etc/bigfleet/tls/tls.key
+            {{- if .Values.tls.mtls }}
+            - --tls-ca=/etc/bigfleet/tls/ca.crt
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            {{- if .Values.token.secretName }}
+            - name: HCLOUD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.token.secretName }}
+                  key: {{ .Values.token.secretKey }}
+            {{- end }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.ports.grpc }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.ports.metrics }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.ssh.secretName }}
+            - name: ssh
+              mountPath: /etc/bigfleet/ssh
+              readOnly: true
+            {{- end }}
+            {{- if .Values.offerings.content }}
+            - name: offerings
+              mountPath: /etc/bigfleet/offerings
+              readOnly: true
+            {{- end }}
+            {{- if .Values.baseUserData.content }}
+            - name: base-user-data
+              mountPath: /etc/bigfleet/base-user-data
+              readOnly: true
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: /etc/bigfleet/tls
+              readOnly: true
+            {{- end }}
+            {{- if .Values.state.enabled }}
+            - name: state
+              mountPath: {{ dir .Values.state.path }}
+            {{- end }}
+      volumes:
+        {{- if .Values.ssh.secretName }}
+        - name: ssh
+          secret:
+            secretName: {{ .Values.ssh.secretName }}
+            defaultMode: 0400
+        {{- end }}
+        {{- if .Values.offerings.content }}
+        - name: offerings
+          configMap:
+            name: {{ include "bigfleet-hetzner.fullname" . }}-offerings
+        {{- end }}
+        {{- if .Values.baseUserData.content }}
+        - name: base-user-data
+          configMap:
+            name: {{ include "bigfleet-hetzner.fullname" . }}-base-user-data
+        {{- end }}
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.secretName }}
+        {{- end }}
+        {{- if .Values.state.enabled }}
+        - name: state
+          {{- if .Values.state.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "bigfleet-hetzner.fullname" . }}-state
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
