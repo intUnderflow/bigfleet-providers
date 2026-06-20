@@ -20,10 +20,12 @@ import (
 //     20%+), expressed as a 30-day eviction fraction. evictionBand is a pinned
 //     snapshot of those bands; refresh it on a timer in production. The band's
 //     representative monthly fraction is converted to an hourly probability.
-//   - Observed: once a running VM receives a Scheduled Events Preempt notice (or
-//     is found evicted by the reconcile loop), markWarning raises its probability
-//     toward 1.0. Wire markWarning to the VM's Scheduled Events metadata endpoint
-//     (http://169.254.169.254/metadata/scheduledevents) in production.
+//   - Observed: once a running VM receives a Scheduled Events Preempt notice,
+//     markWarning raises its probability toward 1.0. A node-side agent reads the
+//     per-VM Scheduled Events endpoint
+//     (http://169.254.169.254/metadata/scheduledevents) and POSTs Preempt events
+//     to the provider's eviction ingest endpoint (eviction.go), which calls
+//     markWarning; the background reconcile loop then propagates the raised value.
 type interruption struct {
 	mu       sync.Mutex
 	observed map[string]float64 // machineID -> raised probability from a notice
@@ -110,8 +112,9 @@ func (in *interruption) probability(machineID, vmSize string, capacity providerk
 }
 
 // markWarning records that a running spot VM has received a Scheduled Events
-// Preempt notice, raising its observed probability. Wire this to the Scheduled
-// Events metadata endpoint in production.
+// Preempt notice, raising its observed probability. It is driven by the eviction
+// ingest endpoint (eviction.go), which the node-side Scheduled Events agent
+// POSTs Preempt notices to.
 func (in *interruption) markWarning(machineID string, probability float64) {
 	if probability <= 0 {
 		probability = 1.0

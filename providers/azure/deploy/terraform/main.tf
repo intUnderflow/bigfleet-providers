@@ -11,8 +11,8 @@
 #   Microsoft.Compute/virtualMachines: read/write/delete + the
 #   virtualMachines/extensions it uses for Configure/Drain,
 #   Microsoft.Network/networkInterfaces: read/write/delete,
-#   Microsoft.Compute/locations/* and Microsoft.Compute/skus/read for the
-#   Resource SKUs lookup, and the disks the VM creates.
+#   Microsoft.Compute/skus/read for the Resource SKUs (allocatable) lookup, and
+#   the disks the VM creates.
 #
 # One identity per region is recommended (one provider process per region).
 
@@ -102,7 +102,6 @@ resource "azurerm_role_definition" "provider" {
       "Microsoft.Compute/disks/read",
       "Microsoft.Compute/disks/write",
       "Microsoft.Compute/disks/delete",
-      "Microsoft.Compute/locations/vmSizes/read",
       "Microsoft.Compute/skus/read",
       "Microsoft.Network/networkInterfaces/read",
       "Microsoft.Network/networkInterfaces/write",

@@ -102,6 +102,7 @@ func shortMethod(full string) string {
 // and Prometheus can scrape it.
 type observabilityServer struct {
 	srv   *http.Server
+	mux   *http.ServeMux
 	ready atomic.Bool
 }
 
@@ -124,8 +125,15 @@ func newObservabilityServer(addr string, m *metrics) *observabilityServer {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte("not ready\n"))
 	})
+	o.mux = mux
 	o.srv = &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	return o
+}
+
+// handle registers an extra HTTP handler (e.g. the eviction ingest endpoint)
+// before the server is started.
+func (o *observabilityServer) handle(path string, h http.HandlerFunc) {
+	o.mux.HandleFunc(path, h)
 }
 
 func (o *observabilityServer) setReady(b bool) { o.ready.Store(b) }

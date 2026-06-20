@@ -326,6 +326,23 @@ func (b *azureBackend) offeredSizes() []string {
 	return out
 }
 
+// machineIDFor resolves an Azure resource id to its BigFleet machine id (via the
+// bigfleet-machine-id tag), or "" if it isn't a managed VM. Used by the eviction
+// reporter to attribute a Scheduled Events Preempt notice to a machine when the
+// node-side agent reports a resource id rather than a machine id.
+func (b *azureBackend) machineIDFor(ctx context.Context, resourceID string) string {
+	managed, err := b.client.DescribeManaged(ctx)
+	if err != nil {
+		return ""
+	}
+	for _, vm := range managed {
+		if vm.ResourceID == resourceID {
+			return vm.MachineID
+		}
+	}
+	return ""
+}
+
 // capacityString renders a kit CapacityType as the canonical tag string.
 func capacityString(c providerkit.CapacityType) string {
 	switch c {

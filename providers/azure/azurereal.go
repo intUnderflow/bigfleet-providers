@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6"
@@ -123,10 +125,15 @@ func (a *azureReal) CreateVM(ctx context.Context, spec vmSpec) (vmInstance, erro
 	params := a.vmParams(spec, name, nicID)
 	poller, err := a.vms.BeginCreateOrUpdate(ctx, a.cfg.ResourceGroup, name, params, nil)
 	if err != nil {
+		// The NIC was created but the VM never will be under this name; clean it up
+		// best-effort so a permanently-failing Create doesn't leak NICs. A retried
+		// Create (same operation id → same name) is idempotent either way.
+		a.deleteNIC(ctx, name+"-nic")
 		return vmInstance{}, fmt.Errorf("begin create vm: %w", err)
 	}
 	res, err := poller.PollUntilDone(ctx, nil)
 	if err != nil {
+		a.deleteNIC(ctx, name+"-nic")
 		return vmInstance{}, fmt.Errorf("create vm poll: %w", err)
 	}
 	vm := a.toVMInstance(res.VirtualMachine)
@@ -253,10 +260,7 @@ func (a *azureReal) DeleteVM(ctx context.Context, resourceID string) error {
 		return fmt.Errorf("delete vm %s poll: %w", name, err)
 	}
 	// Best-effort NIC cleanup; the VM is what owns the slot.
-	nicPoller, err := a.nics.BeginDelete(ctx, a.cfg.ResourceGroup, name+"-nic", nil)
-	if err == nil {
-		_, _ = nicPoller.PollUntilDone(ctx, nil)
-	}
+	a.deleteNIC(ctx, name+"-nic")
 	return nil
 }
 
@@ -479,6 +483,16 @@ func (a *azureReal) toVMInstance(vm armcompute.VirtualMachine) vmInstance {
 
 // --- helpers ---------------------------------------------------------------
 
+// deleteNIC deletes a NIC best-effort, polling to completion. Used both on VM
+// teardown and to clean up after a failed VM create. A missing NIC is success.
+func (a *azureReal) deleteNIC(ctx context.Context, nicNameStr string) {
+	poller, err := a.nics.BeginDelete(ctx, a.cfg.ResourceGroup, nicNameStr, nil)
+	if err != nil {
+		return
+	}
+	_, _ = poller.PollUntilDone(ctx, nil)
+}
+
 // vmName derives a valid, deterministic Azure VM name (≤ 64 chars,
 // alphanumeric + hyphen) from the machine id, preferring the idempotency token
 // so a retried Create maps to the same VM.
@@ -591,13 +605,17 @@ func isSpotMeter(meterName, skuName, productName string) bool {
 }
 
 // isNotFound reports whether err is an Azure 404 (resource already gone), so a
-// delete of a missing VM is treated as success.
+// delete of a missing VM is treated as success. It inspects the typed
+// azcore.ResponseError status code rather than matching error strings.
 func isNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
-	s := err.Error()
-	return strings.Contains(s, "ResourceNotFound") || strings.Contains(s, "StatusCode=404") || strings.Contains(s, "404 Not Found")
+	var respErr *azcore.ResponseError
+	if errors.As(err, &respErr) {
+		return respErr.StatusCode == http.StatusNotFound
+	}
+	return false
 }
 
 var _ azureClient = (*azureReal)(nil)

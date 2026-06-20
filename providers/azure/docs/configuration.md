@@ -42,6 +42,7 @@ interruption are sourced see
 | `--base-user-data` | _(empty)_ | Path to the generic, pre-binding cloud-init baked into the VM's customData at create. |
 | `--price-refresh` | `1h` | Spot price refresh interval (never on the List hot path; `0` = off). |
 | `--reconcile-interval` | `2m` | Background Azure→inventory reconcile interval (`0` = off). |
+| `--eviction-token` | _(empty)_ | Shared bearer token the in-node Scheduled Events agent presents to `POST /internal/eviction`. Empty = unauthenticated (in-cluster only). See [Pricing & interruption](/providers/azure/pricing-and-interruption/). |
 | `--metrics-addr` | `:9090` | Address for `/metrics`, `/healthz`, `/readyz`. Empty = disabled. |
 | `--reflection` | `true` | Register gRPC server reflection (for `grpcurl`/debugging). |
 | `--tls-cert` | _(empty)_ | Server certificate (PEM). With `--tls-key`, enables TLS. |

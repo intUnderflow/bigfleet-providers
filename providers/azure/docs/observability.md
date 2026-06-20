@@ -183,3 +183,44 @@ A useful P99 RPC-latency expression for dashboards:
 histogram_quantile(0.99,
   sum(rate(bigfleet_azure_grpc_request_duration_seconds_bucket[5m])) by (le, method))
 ```
+
+## Wiring the Scheduled Events eviction feed
+
+SPOT machines always report a non-zero `interruption_probability` forecast from
+the pinned eviction-rate bands (see
+[Pricing & interruption](/providers/azure/pricing-and-interruption/)). To raise
+that value toward `1.0` on a **real, observed** eviction, the provider exposes an
+ingest endpoint that a node-side agent reports `Preempt` events to — Azure
+Scheduled Events live on the per-VM IMDS endpoint, not a central queue, so the
+agent is what observes them.
+
+**Endpoint:** `POST /internal/eviction` on the metrics port (`--metrics-addr`),
+registered only on the real `azure` backend. Body:
+
+```json
+{ "machine_id": "azure-eastus/Spot/Standard_F8s_v2/eastus-1/000", "event_type": "Preempt" }
+```
+
+It authenticates with the `--eviction-token` bearer when set (strongly
+recommended — pair it with a NetworkPolicy restricting the metrics port to the
+node CIDR). On a `Preempt` it raises the machine's observed probability to
+`0.99`, increments `bigfleet_azure_spot_evictions_total`, logs
+`observed spot eviction notice`, and kicks a reconcile so the value propagates.
+
+**Agent:** install the reference
+[`deploy/agent/scheduled-events-agent.sh`](https://github.com/intUnderflow/bigfleet-providers/tree/main/providers/azure/deploy/agent/scheduled-events-agent.sh)
+via `--base-user-data`. It polls
+`http://169.254.169.254/metadata/scheduledevents`, reads its own
+`bigfleet-machine-id` IMDS tag, and POSTs `Preempt` events to the endpoint:
+
+```sh
+export BIGFLEET_EVICTION_URL=http://bigfleet-azure-eastus.bigfleet.svc:9090/internal/eviction
+export BIGFLEET_EVICTION_TOKEN=<matches --eviction-token>
+/opt/bigfleet/scheduled-events-agent.sh
+```
+
+Confirm the feed is live: wait for (or simulate) a Spot eviction and watch
+`bigfleet_azure_spot_evictions_total` increment alongside the
+`observed spot eviction notice` log line. If the counter never moves, check the
+agent can reach the endpoint (NetworkPolicy / token) and that the VM actually
+carries the `bigfleet-machine-id` tag.

@@ -56,6 +56,9 @@ spec:
             - --reflection={{ .Values.reflection }}
             - --price-refresh={{ .Values.priceRefresh }}
             - --reconcile-interval={{ .Values.reconcileInterval }}
+            {{- if .Values.evictionToken }}
+            - --eviction-token={{ .Values.evictionToken }}
+            {{- end }}
             {{- if .Values.azure.subscriptionId }}
             - --subscription-id={{ .Values.azure.subscriptionId }}
             {{- end }}

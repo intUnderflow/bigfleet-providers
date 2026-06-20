@@ -60,6 +60,7 @@ func run() error {
 		baseUserData = flag.String("base-user-data", "", "path to the generic pre-binding cloud-init baked into customData at create")
 		priceRefresh = flag.Duration("price-refresh", time.Hour, "spot price refresh interval (0 = off)")
 		reconcile    = flag.Duration("reconcile-interval", 2*time.Minute, "background Azure->inventory reconcile interval (0 = off)")
+		evictionTok  = flag.String("eviction-token", "", "shared bearer token the node-side Scheduled Events agent presents to POST /internal/eviction (empty = unauthenticated, in-cluster only)")
 
 		metricsAddr = flag.String("metrics-addr", ":9090", "address for /metrics, /healthz, /readyz (empty = disabled)")
 		reflectFlag = flag.Bool("reflection", true, "register gRPC server reflection (for grpcurl/debugging)")
@@ -195,10 +196,20 @@ func run() error {
 		return fmt.Errorf("listen on %s: %w", *addr, err)
 	}
 
-	// Observability HTTP server (/metrics, /healthz, /readyz).
+	// Observability HTTP server (/metrics, /healthz, /readyz), plus — on the real
+	// backend — the Scheduled Events eviction ingest endpoint that a node-side
+	// agent POSTs Spot Preempt notices to (raising observed interruption
+	// probability). The fake backend never registers it.
 	var obs *observabilityServer
 	if *metricsAddr != "" {
 		obs = newObservabilityServer(*metricsAddr, m)
+		if mode == "azure" {
+			reporter := newEvictionReporter(backend, srv, m, *evictionTok, logger)
+			obs.handle("/internal/eviction", reporter.handle)
+			if *evictionTok == "" {
+				logger.Warn("eviction ingest endpoint /internal/eviction is unauthenticated; set --eviction-token and restrict the metrics port with a NetworkPolicy")
+			}
+		}
 		obs.start(logger)
 	}
 

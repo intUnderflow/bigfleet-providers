@@ -34,7 +34,7 @@ your resource group:
 | `Microsoft.Compute/virtualMachines/delete` | `Delete` | Tear the VM down. |
 | `Microsoft.Compute/virtualMachines/extensions/*` | `Configure` / `Drain` | Run the CustomScript extension that delivers the bootstrap blob and drains the node. |
 | `Microsoft.Compute/disks/*` | `Create` / `Delete` | The OS managed disk the VM creates and releases. |
-| `Microsoft.Compute/locations/vmSizes/read`, `Microsoft.Compute/skus/read` | startup | Resolve each offered size's real vCPU/memory for `Machine.allocatable`. |
+| `Microsoft.Compute/skus/read` | startup | Resolve each offered size's real vCPU/memory (Resource SKUs) for `Machine.allocatable`. |
 | `Microsoft.Network/networkInterfaces/*` | `Create` / `Delete` | Create the VM's NIC and delete it on teardown. |
 | `Microsoft.Network/virtualNetworks/subnets/join/action`, `.../subnets/read` | `Create` | Attach the NIC to the configured subnet. |
 

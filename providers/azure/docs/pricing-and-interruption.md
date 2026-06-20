@@ -124,20 +124,32 @@ for any non-spot capacity), which is correct: they are not reclaimable.
 
 ### Observed: raised by a real eviction notice
 
-Azure signals an impending Spot eviction via the **Scheduled Events** metadata
-endpoint on the VM (`http://169.254.169.254/metadata/scheduledevents`, event type
-`Preempt`). When a node reports such an event, the affected machine's observed
-probability is raised toward `1.0`, and `probability` publishes the observed value
-whenever it exceeds the forecast. The observed value is held per machine id,
-clamped to `[0, 1]`, and cleared only once a `Delete` actuates — so a machine
-about to be evicted keeps its raised probability until it is gone.
+Azure signals an impending Spot eviction via the **Scheduled Events** endpoint,
+which lives on the **per-VM** IMDS endpoint
+(`http://169.254.169.254/metadata/scheduledevents`, event type `Preempt`) — there
+is no central queue the provider control plane can read (unlike AWS's
+EventBridge→SQS). So the observed signal has two halves:
 
-Wire the observed signal by having `--base-user-data` install a small agent that
-polls the Scheduled Events endpoint and reports `Preempt` events; the background
-reconcile loop (`--reconcile-interval`) then propagates the raised value into
-inventory. Independently, the reconcile loop notices a VM that has been
-evicted-and-deleted out from under the provider and returns its slot to
-Speculative (or `FAILED`), so `Get`/`List` reflect reality.
+1. A small **node-side agent** — the reference
+   [`deploy/agent/scheduled-events-agent.sh`](https://github.com/intUnderflow/bigfleet-providers/tree/main/providers/azure/deploy/agent/scheduled-events-agent.sh),
+   installed via `--base-user-data` — polls the VM's Scheduled Events endpoint,
+   reads its own `bigfleet-machine-id` IMDS tag, and `POST`s any `Preempt` event
+   to the provider.
+2. The provider's **eviction ingest endpoint**, `POST /internal/eviction` on the
+   metrics port, authenticated by the `--eviction-token` bearer (set it, and
+   restrict the metrics port with a NetworkPolicy). On a `Preempt` it raises that
+   machine's observed probability to `0.99`, increments
+   `bigfleet_azure_spot_evictions_total`, and kicks a reconcile so the raised
+   value lands in inventory promptly (the periodic `--reconcile-interval` loop
+   also propagates it).
+
+`probability` publishes the observed value whenever it exceeds the forecast. The
+observed value is held per machine id, clamped to `[0, 1]`, and cleared only once
+a `Delete` actuates — so a machine about to be evicted keeps its raised
+probability until it is gone. Independently, the reconcile loop notices a VM that
+has been evicted-and-deleted out from under the provider (Spot
+`evictionPolicy=Delete`) and returns its slot to Speculative, so `Get`/`List`
+reflect reality.
 
 ## What is region-shaped, and what to verify
 
