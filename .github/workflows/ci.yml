@@ -231,39 +231,29 @@ jobs:
             echo "no Dockerfile for ${{ matrix.provider }}; skipping"
           fi
 
-  # Dependency + stdlib vulnerability scan per module (INFORMATIONAL — reports to
-  # the run summary, does NOT gate ci-ok). It is not a required check because it
-  # also surfaces Go-toolchain stdlib advisories that are only fixed by a
-  # toolchain bump, which would otherwise red-line main on an upstream disclosure
-  # unrelated to this repo's own code. Flip it to a gate after bumping the
-  # toolchain if you want enforcement.
+  # Vulnerability scan across every module (reachable/called vulns only). On a PR
+  # it GATES, but only on vulnerabilities the change INTRODUCES — reachable on the
+  # branch but not on the base — so pre-existing or Go-toolchain stdlib advisories
+  # already on the base never red-line a PR. On push to main it is informational.
+  # The delta logic lives in hack/govulncheck.sh.
   govulncheck:
-    needs: changes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need base history for the delta worktree
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - run: go install golang.org/x/vuln/cmd/govulncheck@latest
-      - name: scan modules
-        env:
-          PROVIDERS: ${{ needs.changes.outputs.providers }}
+      - name: scan (delta-gate on PR, informational on push)
         run: |
-          mods=". conformance"
-          for p in $(echo "$PROVIDERS" | jq -r '.[]?'); do mods="$mods providers/$p"; done
-          echo "## govulncheck (informational)" >> "$GITHUB_STEP_SUMMARY"
-          for m in $mods; do
-            echo "::group::govulncheck $m"
-            if (cd "$m" && GOWORK=off govulncheck ./...); then
-              echo "- \`$m\`: no vulnerabilities" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "- \`$m\`: ⚠️ vulnerabilities reported (see job logs)" >> "$GITHUB_STEP_SUMMARY"
-              echo "::warning::govulncheck reported findings in $m (informational; not gating)"
-            fi
-            echo "::endgroup::"
-          done
-          exit 0
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --quiet origin "${{ github.base_ref }}"
+            ./hack/govulncheck.sh "origin/${{ github.base_ref }}"
+          else
+            ./hack/govulncheck.sh
+          fi
 
   # The Astro site build-check (Cloudflare Pages deploys it; this just catches a
   # broken build in review). Runs when site/ OR any provider's docs/ changed.
@@ -286,7 +276,7 @@ jobs:
   # Single aggregation gate for branch protection: green unless a job that
   # actually ran failed (skipped jobs are fine). Make THIS the required check.
   ci-ok:
-    needs: [changes, pins, providerkit, provider, conformance-module, certify, certify-full, deploy, site]
+    needs: [changes, pins, providerkit, provider, conformance-module, certify, certify-full, deploy, govulncheck, site]
     if: always()
     runs-on: ubuntu-latest
     steps:

@@ -1,6 +1,6 @@
 module github.com/intUnderflow/bigfleet-providers/conformance
 
-go 1.26.0
+go 1.26.4
 
 require (
 	github.com/intUnderflow/bigfleet v0.0.0-20260618134658-ea2acc7b1d23
