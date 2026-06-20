@@ -20,7 +20,7 @@ The `CapacityProvider` gRPC service, the `grpc.health.v1` health service, and
 TLS flags:
 
 ```sh
-./bin/libvirt --provider libvirt-dc1 --connect 'rack1=qemu+ssh://bigfleet@host-a/system' \
+./bin/libvirt --provider libvirt-dc1 --connect 'rack1=qemu+libssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts' \
               --image ubuntu-24.04.qcow2 \
               --tls-cert server.pem --tls-key server-key.pem \
               --tls-ca client-ca.pem
@@ -88,7 +88,7 @@ SSH into the VM, no inbound port on the guest. The model:
   on-path window to capture the cluster-join secret the way there would be for an
   SSH-to-guest delivery.
 
-For defence in depth, keep the libvirt management network (the `qemu+ssh://` /
+For defence in depth, keep the libvirt management network (the `qemu+libssh://` /
 `qemu+tls://` path) private to the control plane.
 
 ## Exposure

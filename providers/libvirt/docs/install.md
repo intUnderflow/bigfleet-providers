@@ -80,7 +80,7 @@ image:
 provider: libvirt-dc1
 
 # The libvirt hosts: one zone per host. Each zone maps Machine.zone to a host.
-connect: "rack1=qemu+ssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts,rack2=qemu+ssh://bigfleet@host-b/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts"
+connect: "rack1=qemu+libssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts&known_hosts_verify=normal,rack2=qemu+libssh://bigfleet@host-b/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts&known_hosts_verify=normal"
 
 # The libvirt domain settings.
 libvirt:
@@ -88,7 +88,7 @@ libvirt:
   storagePool: default
   network: default
 
-# The Secret holding the SSH key for the qemu+ssh:// connection.
+# The Secret holding the SSH key for the qemu+libssh:// connection.
 credentials:
   ssh:
     secretName: bigfleet-libvirt-ssh

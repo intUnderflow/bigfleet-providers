@@ -6,7 +6,7 @@
 #
 #   helm install libvirt-dc1 ./helm \
 #     --set provider=libvirt-dc1 \
-#     --set connect='rack1=qemu+ssh://bigfleet@host-a/system,rack2=qemu+ssh://bigfleet@host-b/system' \
+#     --set connect='rack1=qemu+libssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts&known_hosts_verify=normal,rack2=qemu+libssh://bigfleet@host-b/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts&known_hosts_verify=normal' \
 #     --set libvirt.image=ubuntu-24.04.qcow2 \
 #     --set credentials.ssh.secretName=bigfleet-libvirt-ssh
 
@@ -28,9 +28,11 @@ provider: ""
 libvirtBackend: auto
 
 # The libvirt connection(s) (--connect). Either a single bare URI assigned to
-# defaultZone, or a comma-separated zone=uri list for multi-host. Examples:
+# defaultZone, or a comma-separated zone=uri list for multi-host. Use the
+# qemu+libssh:// scheme for SSH (the pinned pure-Go go-libvirt accepts the
+# keyfile/known_hosts URI params only on the libssh transport). Examples:
 #   qemu:///system
-#   rack1=qemu+ssh://bigfleet@host-a/system,rack2=qemu+ssh://bigfleet@host-b/system
+#   rack1=qemu+libssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts&known_hosts_verify=normal
 connect: ""
 # Zone label for a single bare --connect URI, and the seed of the fake backend's
 # two synthetic zones (--default-zone).
@@ -72,11 +74,11 @@ pricing:
 # --connect URIs:
 #   * qemu:///system    — local socket; no credentials Secret (run on a host with
 #                         the libvirt socket bind-mounted, with libvirt-group access).
-#   * qemu+ssh://...     — mount an SSH private key; the host authorises the public
+#   * qemu+libssh://...  — mount an SSH private key; the host authorises the public
 #                         key for a least-privilege libvirt user.
 #   * qemu+tls://...     — mount a libvirt client cert/key + CA.
 credentials:
-  # SSH private key for qemu+ssh:// connections. Mounted at /etc/bigfleet/libvirt-ssh.
+  # SSH private key for qemu+libssh:// connections. Mounted at /etc/bigfleet/libvirt-ssh.
   ssh:
     secretName: ""              # Secret holding the SSH private key (and optional known_hosts)
     secretKey: id_ed25519

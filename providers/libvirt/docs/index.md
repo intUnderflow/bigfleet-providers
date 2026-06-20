@@ -43,7 +43,7 @@ as demand moves.
 To run it against real hosts, have these ready (the
 [Credentials](/providers/libvirt/credentials/) page walks through the connection):
 
-- **One or more libvirt hosts** (`qemu:///system`, or remote `qemu+ssh://` /
+- **One or more libvirt hosts** (`qemu:///system`, or remote `qemu+libssh://` /
   `qemu+tls://`), each with a storage pool and a network the provider can use.
 - **A least-privilege identity** the provider connects as — an SSH key for a
   dedicated `libvirt`-group user, or a libvirt TLS client certificate. There is

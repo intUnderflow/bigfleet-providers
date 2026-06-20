@@ -21,7 +21,7 @@ and fills in the substrate fields (`instance_type`, `zone`, `capacity_type`,
 ```sh
 make build-libvirt
 ./bin/libvirt --provider libvirt-dc1 \
-              --connect 'rack1=qemu+ssh://bigfleet@host-a/system,rack2=qemu+ssh://bigfleet@host-b/system' \
+              --connect 'rack1=qemu+libssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts,rack2=qemu+libssh://bigfleet@host-b/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts' \
               --image ubuntu-24.04.qcow2 \
               --storage-pool default --network default \
               --offerings ./offerings.json \
@@ -71,8 +71,10 @@ in [`docs/configuration.md`](docs/configuration.md).
 
 libvirt has **no IAM/role/token model** — the authorisation surface is the
 **connection** itself. The provider reaches each host over `qemu:///system` (local
-socket), `qemu+ssh://` (an SSH key for a least-privilege `libvirt`-group user), or
-`qemu+tls://` (a libvirt client certificate on the host's `tls_allowed_dn_list`).
+socket), `qemu+libssh://` (an SSH key for a least-privilege `libvirt`-group user;
+use the `libssh` scheme, not `ssh`, so the pinned pure-Go client honours the
+`keyfile`/`known_hosts` URI params), or `qemu+tls://` (a libvirt client
+certificate on the host's `tls_allowed_dn_list`).
 Store the SSH key / client cert as a Kubernetes Secret; scope the connecting
 identity with the polkit rule and per-pool access in
 [`deploy/host-setup/`](deploy/host-setup). The provider's own gRPC listener is

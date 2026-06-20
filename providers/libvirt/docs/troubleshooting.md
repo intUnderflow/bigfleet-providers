@@ -15,7 +15,7 @@ Most problems show up as a machine landing in `FAILED` (read `last_error` via
 |---|---|---|
 | `--image (golden base volume) is required for the libvirt backend` | Real backend with no base image. | Pass `--image` (a qcow2 volume in `--storage-pool`). |
 | `no --connect host connections configured` | `--libvirt-backend=libvirt` (or `--connect`-implied auto) with no connections. | Set `--connect`, or use `--libvirt-backend=fake` for dev. |
-| `connect zone … : …` | A host in `--connect` is unreachable / auth failed. | Check the URI, the SSH key/known_hosts (or TLS client cert), and that libvirtd is listening. |
+| `connect zone … : …` | A host in `--connect` is unreachable / auth failed. | Check the URI (use the `qemu+libssh://` scheme for SSH, not `qemu+ssh://`, so `keyfile`/`known_hosts` params are honoured), the SSH key/known_hosts (or TLS client cert), and that libvirtd is listening. |
 | `both --tls-cert and --tls-key are required` / `--tls-ca set without --tls-cert/--tls-key` | Half-configured gRPC TLS. | Provide cert **and** key (and a CA for mTLS), or none. |
 | Comes up on the **fake** backend unexpectedly (log: "using the IN-MEMORY fake libvirt backend") | No `--connect` set, so `auto` resolved to `fake`. | Set `--connect` to opt into the real backend. |
 | `offering instance_type … is not in the instance-type catalog` | An offering names a type not in the catalog. | Add it via `--instance-types`, or use a catalog name. |

@@ -53,11 +53,16 @@ type hostConn struct {
 // parseConnections parses the --connect flag into a zone -> URI map.
 //
 // Two forms are accepted:
-//   - A single bare URI ("qemu:///system" or "qemu+ssh://user@host/system"),
+//   - A single bare URI ("qemu:///system" or "qemu+libssh://user@host/system"),
 //     which is assigned to the --default-zone.
 //   - A comma-separated list of "zone=uri" pairs for a multi-host deployment
-//     ("rack1=qemu+ssh://user@a/system,rack2=qemu+ssh://user@b/system"), where
-//     each zone maps Machine.zone to a specific libvirt host.
+//     ("rack1=qemu+libssh://user@a/system,rack2=qemu+libssh://user@b/system"),
+//     where each zone maps Machine.zone to a specific libvirt host.
+//
+// For SSH, use the "qemu+libssh://" scheme (libvirt's pure-Go SSH transport),
+// not "qemu+ssh://": the pinned go-libvirt accepts the keyfile/known_hosts URI
+// parameters only on the libssh transport. The string is passed verbatim to
+// go-libvirt's ConnectToURI; this only splits zones from URIs.
 func parseConnections(connect, defaultZone string) ([]hostConn, error) {
 	connect = strings.TrimSpace(connect)
 	if connect == "" {

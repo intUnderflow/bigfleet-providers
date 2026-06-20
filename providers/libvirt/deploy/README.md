@@ -40,7 +40,7 @@ exposes the gRPC port (`9000`) and the metrics/health port (`9090`).
 On each libvirt host, create the least-privilege identity the provider connects
 as and stage the storage pool / network / golden base image — see
 [`host-setup/`](host-setup/). Then create the credential Secret matching your
-transport (SSH key for `qemu+ssh://`, client TLS for `qemu+tls://`):
+transport (SSH key for `qemu+libssh://`, client TLS for `qemu+tls://`):
 
 ```sh
 kubectl -n bigfleet create secret generic bigfleet-libvirt-ssh \
@@ -64,7 +64,7 @@ helm install libvirt-dc1 providers/libvirt/deploy/helm \
   --set image.repository=ghcr.io/intunderflow/bigfleet-libvirt \
   --set image.tag=0.1.0 \
   --set provider=libvirt-dc1 \
-  --set connect='rack1=qemu+ssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts,rack2=qemu+ssh://bigfleet@host-b/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts' \
+  --set connect='rack1=qemu+libssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts&known_hosts_verify=normal,rack2=qemu+libssh://bigfleet@host-b/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts&known_hosts_verify=normal' \
   --set libvirt.image=ubuntu-24.04.qcow2 \
   --set credentials.ssh.secretName=bigfleet-libvirt-ssh \
   --set-file offerings.content=offerings.dc1.json

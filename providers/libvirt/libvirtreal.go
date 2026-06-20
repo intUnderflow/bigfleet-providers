@@ -104,8 +104,10 @@ func newLibvirtReal(cfg libvirtRealConfig, logger *slog.Logger) (*libvirtReal, e
 	return r, nil
 }
 
-// dialLibvirt connects to a libvirt URI (qemu:///system, qemu+ssh://…,
-// qemu+tls://…) using go-libvirt's URI dialer.
+// dialLibvirt connects to a libvirt URI (qemu:///system, qemu+libssh://…,
+// qemu+tls://…) using go-libvirt's URI dialer. Use the qemu+libssh:// scheme for
+// SSH — the pinned go-libvirt accepts the keyfile/known_hosts URI parameters
+// only on the libssh transport, not on plain qemu+ssh://.
 func dialLibvirt(uri string) (*libvirt.Libvirt, error) {
 	u, err := url.Parse(uri)
 	if err != nil {

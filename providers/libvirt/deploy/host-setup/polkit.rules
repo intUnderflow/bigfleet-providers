@@ -7,7 +7,7 @@
  * It grants the dedicated `bigfleet` user (member of the `libvirt` group)
  * permission to manage domains and storage through the SYSTEM libvirtd API
  * without a password prompt — and nothing else. The provider connects as this
- * user over qemu+ssh:// (or its client cert maps to a session subject under
+ * user over qemu+libssh:// (or its client cert maps to a session subject under
  * qemu+tls://). Scope the storage pool and network the provider uses
  * (--storage-pool / --network) to BigFleet-managed resources so this access
  * cannot reach other tenants' VMs.

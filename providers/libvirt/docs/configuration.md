@@ -52,7 +52,7 @@ A minimal production invocation:
 ```sh
 ./bin/libvirt \
   --provider libvirt-dc1 \
-  --connect 'rack1=qemu+ssh://bigfleet@host-a/system,rack2=qemu+ssh://bigfleet@host-b/system' \
+  --connect 'rack1=qemu+libssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts,rack2=qemu+libssh://bigfleet@host-b/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts' \
   --image ubuntu-24.04.qcow2 \
   --storage-pool default --network default \
   --offerings /etc/bigfleet/offerings.json \
@@ -82,11 +82,14 @@ backend — exactly how `make certify-libvirt` runs credential-free — while se
 
 A BigFleet **zone** is a libvirt host. The `--connect` list defines the mapping:
 
-- A single bare URI (`qemu:///system` or `qemu+ssh://user@host/system`) is
+- A single bare URI (`qemu:///system` or `qemu+libssh://user@host/system`) is
   assigned to `--default-zone` — a single-host deployment.
 - A `zone=uri` list maps each zone to a specific host
-  (`rack1=qemu+ssh://user@a/system,rack2=qemu+ssh://user@b/system`), and `Create`
-  places each domain on the host matching the slot's `zone`. The provider holds
+  (`rack1=qemu+libssh://user@a/system?keyfile=…&known_hosts=…,rack2=qemu+libssh://user@b/system?keyfile=…&known_hosts=…`),
+  and `Create` places each domain on the host matching the slot's `zone`. Use the
+  `qemu+libssh://` scheme for SSH (see [Credentials](/providers/libvirt/credentials/)
+  — the pinned pure-Go client accepts the `keyfile`/`known_hosts` params only on
+  the `libssh` transport). The provider holds
   one connection per host (guarded — libvirt connections are not freely
   concurrency-safe).
 

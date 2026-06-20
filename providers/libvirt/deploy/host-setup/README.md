@@ -9,9 +9,11 @@ The goal is the same as least-privilege IAM: the provider can define / start /
 configure / drain / destroy domains **in its own storage pool and network**, and
 nothing more — no access to other tenants' domains, no host root.
 
-## Model A — `qemu+ssh://` (SSH transport)
+## Model A — `qemu+libssh://` (SSH transport)
 
-On each host:
+The provider connects with libvirt's pure-Go `libssh` transport
+(`qemu+libssh://`, not `qemu+ssh://`) so it can use the SSH key and `known_hosts`
+file you mount explicitly. On each host:
 
 1. **Create a dedicated, unprivileged libvirt user** (not root) and put it in the
    `libvirt` group so it can reach the system libvirt socket:

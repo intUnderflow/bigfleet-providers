@@ -1,6 +1,6 @@
 ---
 title: Credentials & auth
-description: How the libvirt provider connects to libvirtd — qemu:///system, qemu+ssh:// (SSH key), qemu+tls:// (client cert) — and how shards authenticate to its gRPC listener. The libvirt analogue of cloud IAM.
+description: How the libvirt provider connects to libvirtd — qemu:///system, qemu+libssh:// (SSH key), qemu+tls:// (client cert) — and how shards authenticate to its gRPC listener. The libvirt analogue of cloud IAM.
 sidebar:
   order: 3
   label: Credentials & auth
@@ -20,11 +20,23 @@ There are **two distinct trust boundaries**, and they are easy to confuse:
 2. **Shard → provider's gRPC listener** (§4) — how BigFleet authenticates to the
    provider.
 
-## 1. `qemu+ssh://` — SSH transport (the common multi-host model)
+## 1. `qemu+libssh://` — SSH transport (the common multi-host model)
 
-The provider connects to each host over SSH and talks to the local libvirt
-socket. You provide an SSH **private key**; each host authorises the matching
-**public key** for a dedicated, least-privilege user.
+The provider connects to each host over SSH (libvirt's pure-Go `libssh`
+transport) and talks to the local libvirt socket. You provide an SSH **private
+key**; each host authorises the matching **public key** for a dedicated,
+least-privilege user.
+
+:::note
+Use the **`qemu+libssh://`** scheme, not `qemu+ssh://`. The provider's pinned
+pure-Go go-libvirt client only honours the explicit `keyfile` and `known_hosts`
+URI parameters on the `libssh` transport — on the plain `ssh` transport it
+rejects them ("option invalid with ssh transport, use libssh transport
+instead"). `libssh` is also the right fit for a distroless pod: it takes the key
+and known-hosts paths you mount explicitly rather than reading a system SSH
+config that isn't there. Both transports use the same CGO-free Go SSH dialer, so
+the static image is unaffected.
+:::
 
 On each host (full steps in
 [`deploy/host-setup/`](https://github.com/intUnderflow/bigfleet-providers/tree/main/providers/libvirt/deploy/host-setup)):
@@ -50,15 +62,19 @@ credentials:
     secretName: bigfleet-libvirt-ssh
 ```
 
-Reference the key in each `--connect` URI's query parameters so the SSH transport
-uses it and verifies the host:
+Reference the key and known-hosts file in each `--connect` URI's query parameters
+so the transport uses the mounted key and strictly verifies the host:
 
 ```
-rack1=qemu+ssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts
+rack1=qemu+libssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts&known_hosts_verify=normal
 ```
 
-Use a **dedicated** key for the provider, not an operator's personal key, and pin
-`known_hosts` so the transport is not trust-on-first-use.
+`known_hosts_verify=normal` (the default) means strict verification against the
+pinned `known_hosts` file — an unknown host or a changed host key aborts the
+connection. Use a **dedicated** key for the provider, not an operator's personal
+key, and pin `known_hosts` so the transport is not trust-on-first-use
+(`known_hosts_verify=auto` would trust-on-first-use; `ignore` would disable
+verification — don't use those in production).
 
 ## 2. `qemu+tls://` — libvirt native TLS
 

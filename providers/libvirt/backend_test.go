@@ -274,7 +274,7 @@ func TestParseConnections(t *testing.T) {
 		t.Fatalf("single uri: got %v, %v", conns, err)
 	}
 	// zone=uri list.
-	conns, err = parseConnections("a=qemu+ssh://h1/system,b=qemu+ssh://h2/system", "local")
+	conns, err = parseConnections("a=qemu+libssh://h1/system,b=qemu+libssh://h2/system", "local")
 	if err != nil || len(conns) != 2 {
 		t.Fatalf("list: got %v, %v", conns, err)
 	}
