@@ -3,6 +3,7 @@ module github.com/intUnderflow/bigfleet-providers/providers/oracle-cloud
 go 1.26.4
 
 require (
+	github.com/intUnderflow/bigfleet v0.0.0-20260620114917-f809069ab3d8
 	github.com/intUnderflow/bigfleet-providers v0.0.0
 	github.com/oracle/oci-go-sdk/v65 v65.118.0
 	github.com/prometheus/client_golang v1.23.2
@@ -14,7 +15,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/gofrs/flock v0.10.0 // indirect
-	github.com/intUnderflow/bigfleet v0.0.0-20260620114917-f809069ab3d8 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
