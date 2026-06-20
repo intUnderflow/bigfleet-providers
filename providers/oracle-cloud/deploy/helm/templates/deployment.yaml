@@ -162,7 +162,7 @@ spec:
         {{- if .Values.credentials.useConfigFile }}
         - name: oci-config
           secret:
-            secretName: {{ .Values.credentials.secretName }}
+            secretName: {{ required "credentials.secretName is required when credentials.useConfigFile=true" .Values.credentials.secretName }}
             defaultMode: 0400
         {{- end }}
         {{- if .Values.offerings.content }}
@@ -183,7 +183,7 @@ spec:
         {{- if .Values.tls.enabled }}
         - name: tls
           secret:
-            secretName: {{ .Values.tls.secretName }}
+            secretName: {{ required "tls.secretName is required when tls.enabled=true" .Values.tls.secretName }}
         {{- end }}
         {{- if .Values.state.enabled }}
         - name: state

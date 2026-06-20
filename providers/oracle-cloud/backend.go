@@ -196,7 +196,7 @@ func (b *ociBackend) resourcesForShape(shape, ad string) map[string]string {
 // because cloud-init user_data is consumed only at first boot.
 func (b *ociBackend) CreateInstance(ctx context.Context, req providerkit.CreateInstanceRequest) (providerkit.CreateInstanceResult, error) {
 	m := req.Machine
-	ocpus, memGiB := b.sizingFor(m.InstanceType)
+	ocpus, memGiB := b.sizingFor(m.InstanceType, m.Zone, m.CapacityType)
 	inst, err := b.client.LaunchInstance(ctx, launchSpec{
 		MachineID:          m.ID,
 		Shape:              m.InstanceType,
@@ -276,19 +276,32 @@ func (b *ociBackend) resolveHost(ctx context.Context, m providerkit.Machine) (oc
 	return ociInstance{InstanceID: m.Host.Ref, Shape: m.InstanceType, AvailabilityDomain: m.Zone}, nil
 }
 
-// sizingFor returns the (OCPUs, MemoryGB) to launch a machine with: the matching
-// offering's declared sizing for a flexible shape, else 0/0 (fixed shapes pin
-// their own OCPU/memory and ignore the ShapeConfig).
-func (b *ociBackend) sizingFor(shape string) (float64, float64) {
+// sizingFor returns the (OCPUs, MemoryGB) to launch a flexible-shape machine
+// with, taken from the originating offering. It matches on the full offering key
+// — (shape, availability domain, capacity type) — so two offerings that declare
+// the same .Flex shape at different sizes (e.g. a 2-OCPU on-demand lane and an
+// 8-OCPU spot lane, or different sizes per AD) each launch with their own
+// ShapeConfig rather than silently inheriting the first one's. Falls back to any
+// same-shape offering if no exact match is found, and returns 0/0 for fixed
+// shapes (which pin their own OCPU/memory and ignore the ShapeConfig).
+func (b *ociBackend) sizingFor(shape, zone string, capacity providerkit.CapacityType) (float64, float64) {
 	if !isFlexShape(shape) {
 		return 0, 0
 	}
+	var fbOCPUs, fbMemGiB float64
 	for _, off := range b.offerings {
-		if off.Shape == shape && off.OCPUs > 0 && off.MemoryGB > 0 {
+		if off.Shape != shape || off.OCPUs <= 0 || off.MemoryGB <= 0 {
+			continue
+		}
+		oc, _ := off.capacityType()
+		if off.AvailabilityDomain == zone && oc == capacity {
 			return off.OCPUs, off.MemoryGB
 		}
+		if fbOCPUs == 0 {
+			fbOCPUs, fbMemGiB = off.OCPUs, off.MemoryGB
+		}
 	}
-	return 0, 0
+	return fbOCPUs, fbMemGiB
 }
 
 func cloneMap(in map[string]string) map[string]string {

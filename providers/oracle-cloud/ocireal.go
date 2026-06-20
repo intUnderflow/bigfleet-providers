@@ -169,10 +169,10 @@ func (r *ociReal) LaunchInstance(ctx context.Context, spec launchSpec) (ociInsta
 	if err != nil {
 		return ociInstance{}, fmt.Errorf("LaunchInstance %s: %w", spec.Shape, err)
 	}
-	if resp.Instance.Id == nil {
+	if resp.Id == nil {
 		return ociInstance{}, fmt.Errorf("LaunchInstance %s: empty instance id", spec.Shape)
 	}
-	return r.waitRunning(ctx, *resp.Instance.Id)
+	return r.waitRunning(ctx, *resp.Id)
 }
 
 // waitRunning polls until the instance reaches RUNNING (so the kit's IDLE means
@@ -187,11 +187,11 @@ func (r *ociReal) waitRunning(ctx context.Context, id string) (ociInstance, erro
 		if err != nil {
 			return ociInstance{}, fmt.Errorf("poll instance %s: %w", id, err)
 		}
-		switch resp.Instance.LifecycleState {
+		switch resp.LifecycleState {
 		case core.InstanceLifecycleStateRunning:
 			return r.toInstance(resp.Instance), nil
 		case core.InstanceLifecycleStateTerminating, core.InstanceLifecycleStateTerminated, core.InstanceLifecycleStateStopped:
-			return ociInstance{}, fmt.Errorf("instance %s entered %s while creating", id, resp.Instance.LifecycleState)
+			return ociInstance{}, fmt.Errorf("instance %s entered %s while creating", id, resp.LifecycleState)
 		}
 		select {
 		case <-ctx.Done():
@@ -269,16 +269,22 @@ func (r *ociReal) ApplyBootstrap(ctx context.Context, inst ociInstance, clusterI
 func (r *ociReal) DrainNode(ctx context.Context, inst ociInstance, gracePeriodSeconds int64) error {
 	grace := gracePeriodSeconds
 	if grace <= 0 {
-		grace = 1
+		// A zero/absent grace must not become a 1s drain timeout — that would fail
+		// routine drains before eviction can complete. Use a sane default pod grace.
+		grace = 30
 	}
-	// cordon tolerates a re-run (|| true); the DRAIN must NOT swallow its failure
-	// — an incomplete drain has to surface as FAILED rather than a false Idle.
+	// --grace-period is the pod termination grace; --timeout=0s lets kubectl wait
+	// for eviction to finish (it must outlast the grace, not equal it). The overall
+	// drain is still bounded — by the Run Command execution timeout and the kit's
+	// Drain timeout — so it can't hang forever. cordon tolerates a re-run (|| true);
+	// the DRAIN must NOT swallow its failure — an incomplete drain has to surface as
+	// FAILED rather than a false Idle.
 	script := fmt.Sprintf(
 		"set -euo pipefail; node=$(hostname -f 2>/dev/null || hostname); "+
 			"kubectl cordon \"$node\" || true; "+
 			"kubectl drain \"$node\" --ignore-daemonsets --delete-emptydir-data "+
-			"--grace-period=%d --timeout=%ds",
-		grace, grace)
+			"--grace-period=%d --timeout=0s",
+		grace)
 	if err := r.runCommand(ctx, inst.InstanceID, "bigfleet-drain", script); err != nil {
 		return err
 	}
@@ -309,10 +315,10 @@ func (r *ociReal) runCommand(ctx context.Context, instanceID, name, script strin
 	if err != nil {
 		return fmt.Errorf("run command %s on %s: %w", name, instanceID, err)
 	}
-	if resp.InstanceAgentCommand.Id == nil {
+	if resp.Id == nil {
 		return fmt.Errorf("run command %s on %s: empty command id", name, instanceID)
 	}
-	return r.waitCommand(ctx, *resp.InstanceAgentCommand.Id, instanceID, name)
+	return r.waitCommand(ctx, *resp.Id, instanceID, name)
 }
 
 func (r *ociReal) waitCommand(ctx context.Context, commandID, instanceID, name string) error {
@@ -327,7 +333,7 @@ func (r *ociReal) waitCommand(ctx context.Context, commandID, instanceID, name s
 		if err != nil {
 			return fmt.Errorf("poll command %s on %s: %w", name, instanceID, err)
 		}
-		switch resp.InstanceAgentCommandExecution.LifecycleState {
+		switch resp.LifecycleState {
 		case computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateSucceeded:
 			return nil
 		case computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateFailed:
@@ -389,7 +395,7 @@ func (r *ociReal) updateTags(ctx context.Context, instanceID string, mutate func
 		return fmt.Errorf("get instance %s: %w", instanceID, err)
 	}
 	tags := map[string]string{}
-	for k, v := range resp.Instance.FreeformTags {
+	for k, v := range resp.FreeformTags {
 		tags[k] = v
 	}
 	mutate(tags)

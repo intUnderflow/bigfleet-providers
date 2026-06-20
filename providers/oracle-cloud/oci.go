@@ -54,8 +54,9 @@ type launchSpec struct {
 	Preemptible bool
 	// IdempotencyToken is the kit's per-operation id. The fake uses it to model
 	// idempotent launch (a repeated token returns the existing instance); the
-	// real client folds it into the display name so a retried launch maps to the
-	// same instance.
+	// real client passes it as OCI's OpcRetryToken (and derives a stable display
+	// name from it) so a retried LaunchInstance maps to the same instance instead
+	// of double-provisioning.
 	IdempotencyToken string
 	// BaseUserData is the generic pre-binding cloud-init baked in at launch (first
 	// boot only). The cluster-specific bootstrap arrives later via ApplyBootstrap,
