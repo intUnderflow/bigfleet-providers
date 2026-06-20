@@ -167,8 +167,33 @@ func (b *hetznerBackend) serverToIdle(machineID string, srv serverInstance) prov
 		CapacityType:            providerkit.CapacityOnDemand,
 		PricePerHour:            b.pricing.price(srv.ServerType, srv.Location, providerkit.CapacityOnDemand),
 		InterruptionProbability: 0,
-		Allocatable:             b.serverTypes.allocatable(srv.ServerType),
+		// Recover the per-replica request shape from a still-configured offering
+		// for this server type, so an orphan / offering-shrank machine that
+		// re-binds via Describe still matches its demand profile. Nil only for a
+		// truly unknown type, where the FileStore (the primary restart path) is
+		// what restores resources.
+		Resources:   b.resourcesForType(srv.ServerType, srv.Location),
+		Allocatable: b.serverTypes.allocatable(srv.ServerType),
 	}
+}
+
+// resourcesForType returns the per-replica resources of an offering matching the
+// given server type, preferring an exact (type, location) match and falling back
+// to the same type in any location. Nil when no offering covers the type.
+func (b *hetznerBackend) resourcesForType(serverType, location string) map[string]string {
+	var fallback map[string]string
+	for _, off := range b.offerings {
+		if off.ServerType != serverType {
+			continue
+		}
+		if off.Location == location {
+			return cloneMap(off.Resources)
+		}
+		if fallback == nil {
+			fallback = off.Resources
+		}
+	}
+	return cloneMap(fallback)
 }
 
 // CreateInstance launches the Hetzner Cloud server for a Speculative slot and

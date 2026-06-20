@@ -77,11 +77,18 @@ server **over SSH**. The trust model:
   cluster-join bootstrap blob is delivered to `<bootstrap-hook>.blob` and the hook
   is run as `<bootstrap-hook> <cluster-id>` — the blob is opaque and the provider
   never parses it.
-- **Host-key verification is relaxed** (`InsecureIgnoreHostKey`): the server is
-  freshly provisioned and addressed by its provider-assigned public IP, so there
-  is no pre-shared host key to pin. If your environment can pin host keys, harden
-  this with a known-hosts callback. The SSH session runs on a private/management
-  network where feasible to reduce exposure.
+:::caution[Host-key verification is disabled]
+The provider connects with `ssh.InsecureIgnoreHostKey()` — it does **not** verify
+the server's host key. A freshly provisioned server has no pre-shared host key to
+pin, and it is addressed by its provider-assigned public IP, so there is nothing
+to trust-on-first-use against at Create time. **The consequence:** a network
+on-path (MITM) attacker between the provider and a new server could impersonate
+the host and intercept the Configure payload — which can carry cluster-join
+material. Mitigate by running the SSH path over a **private/management network**
+the control plane trusts (strongly recommended), and/or by pinning host keys with
+a known-hosts callback if your image bakes a known host key or your environment
+can distribute one. Treat the bootstrap blob's contents accordingly.
+:::
 
 ## Exposure
 

@@ -198,6 +198,20 @@ func TestCreateServer_IdempotentOnToken(t *testing.T) {
 	}
 }
 
+// An orphan / offering-shrank server rebinds with the per-replica resources of a
+// still-configured offering for its type, so it keeps matching its demand profile.
+func TestServerToIdle_RecoversResources(t *testing.T) {
+	b, _ := newTestBackend(t, 4)
+	got := b.serverToIdle("orphan-1", serverInstance{ServerID: "9", ServerType: "cx22", Location: "nbg1"})
+	if got.Resources["cpu"] == "" {
+		t.Errorf("rebound machine has no resources; want the offering's per-replica shape, got %v", got.Resources)
+	}
+	// A type covered by no offering yields nil (FileStore is the recovery path).
+	if r := b.resourcesForType("ccx99-unoffered", "nbg1"); r != nil {
+		t.Errorf("unoffered type resources = %v, want nil", r)
+	}
+}
+
 func TestOffering_CapacityType(t *testing.T) {
 	// Only on-demand is a real Hetzner Cloud substrate; everything else is
 	// rejected so the provider can never mis-declare capacity_type.
