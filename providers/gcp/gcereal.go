@@ -173,9 +173,12 @@ func (r *gceReal) Insert(ctx context.Context, spec instanceSpec) (gceInstance, e
 	})
 	if err != nil {
 		// A retried Insert whose name already exists is the idempotent case:
-		// recover the existing instance instead of failing.
+		// recover the existing instance instead of failing. Route it through
+		// waitRunning (not a bare Get) so recovery is symmetric with the success
+		// path — a retry that lands before the instance is RUNNING must still wait,
+		// preserving the "Idle == reachable host" invariant.
 		if isAlreadyExists(err) {
-			return r.getInstance(ctx, spec.Zone, name)
+			return r.waitRunning(ctx, spec.Zone, name)
 		}
 		return gceInstance{}, fmt.Errorf("insert instance %s: %w", name, err)
 	}
@@ -353,18 +356,6 @@ func (r *gceReal) networkInterface() *computepb.NetworkInterface {
 		ni.Subnetwork = proto.String(r.cfg.Subnetwork)
 	}
 	return ni
-}
-
-func (r *gceReal) getInstance(ctx context.Context, zone, name string) (gceInstance, error) {
-	inst, err := r.instances.Get(ctx, &computepb.GetInstanceRequest{
-		Project:  r.cfg.Project,
-		Zone:     zone,
-		Instance: name,
-	})
-	if err != nil {
-		return gceInstance{}, fmt.Errorf("get instance %s: %w", name, err)
-	}
-	return r.toGCEInstance(inst), nil
 }
 
 func (r *gceReal) toGCEInstance(inst *computepb.Instance) gceInstance {
