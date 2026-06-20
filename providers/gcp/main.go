@@ -182,8 +182,10 @@ func run() error {
 		obs.start(logger)
 	}
 
-	// Background loop: GCE->inventory reconcile.
+	// Background loops: GCE->inventory reconcile, and observe Spot preemptions so
+	// preempted slots publish an elevated (observed) interruption probability.
 	go runReconciler(ctx, srv, m, *reconcile, logger)
+	go runPreemptionObserver(ctx, backend, m, *reconcile, logger)
 
 	// Mark ready: serving traffic + probes go green.
 	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
@@ -237,6 +239,35 @@ func runReconciler(ctx context.Context, srv *providerkit.Server, m *metrics, int
 				logger.Warn("reconcile failed", "err", err)
 			}
 			m.reconcile.WithLabelValues(outcome).Inc()
+		}
+	}
+}
+
+// runPreemptionObserver periodically scans for GCE Spot preemptions and raises
+// the observed interruption probability of the affected slots. Shares the
+// reconcile interval; the persisted store is unaffected (this only feeds the
+// substrate interruption signal).
+func runPreemptionObserver(ctx context.Context, backend *gcpBackend, m *metrics, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			n, err := backend.observePreemptions(rctx)
+			cancel()
+			switch {
+			case err != nil:
+				logger.Warn("observe preemptions failed", "err", err)
+			case n > 0:
+				m.preemptions.Add(float64(n))
+				logger.Info("observed spot preemptions", "count", n)
+			}
 		}
 	}
 }

@@ -90,6 +90,11 @@ type gceInstance struct {
 	// Running reports whether the instance is in a live state (PROVISIONING /
 	// STAGING / RUNNING / REPAIRING), as opposed to STOPPING / TERMINATED.
 	Running bool
+	// Preempted reports that GCE has preempted this SPOT instance. The provider
+	// only ever Deletes instances (never stops them), so a SPOT VM observed in
+	// TERMINATED status was stopped by GCE — a preemption. Drives the observed
+	// interruption-probability signal.
+	Preempted bool
 }
 
 // machineTypeRef identifies one machine type in a specific zone, for capacity

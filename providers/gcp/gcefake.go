@@ -105,6 +105,19 @@ func (f *gceFake) DrainNode(_ context.Context, inst gceInstance, _ int64) error 
 	return nil
 }
 
+// preempt simulates a GCE Spot preemption of the instance: it stops the VM
+// (Running=false) and, for a spot instance, marks it preempted — the same shape
+// the real client derives from a SPOT instance observed in TERMINATED status.
+// Test/dev only.
+func (f *gceFake) preempt(zone, name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if s, ok := f.instances[fakeKey(zone, name)]; ok {
+		s.Running = false
+		s.Preempted = s.Spot
+	}
+}
+
 // DescribeMachineTypeCapacities resolves capacities from the pinned table, so
 // the simulator (and credential-free certification) exercises the resolve path
 // deterministically. Types absent from the table are omitted, exactly as a real

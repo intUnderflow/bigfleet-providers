@@ -379,6 +379,9 @@ func (r *gceReal) toGCEInstance(inst *computepb.Instance) gceInstance {
 	if sched := inst.GetScheduling(); sched != nil {
 		out.Spot = sched.GetProvisioningModel() == "SPOT" || sched.GetPreemptible()
 	}
+	// We only ever Delete instances, never stop them, so a SPOT VM observed in
+	// TERMINATED status was stopped by GCE — i.e. preempted.
+	out.Preempted = out.Spot && inst.GetStatus() == "TERMINATED"
 	return out
 }
 

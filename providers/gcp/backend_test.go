@@ -222,6 +222,87 @@ func TestInstanceToIdle_RecoversResources(t *testing.T) {
 	}
 }
 
+// A simulated GCE preemption of a SPOT instance must be observed and raise that
+// slot's interruption probability above its forecast (the "observed" half of the
+// field-shape contract), while leaving non-preempted slots on the forecast.
+func TestObservePreemptions_RaisesSpotProbability(t *testing.T) {
+	b, fake := newTestBackend(t, 8)
+	ctx := context.Background()
+
+	var spot providerkit.Instance
+	for _, s := range b.speculativeSlots() {
+		if s.CapacityType == providerkit.CapacitySpot {
+			spot = s
+			break
+		}
+	}
+	if spot.ID == "" {
+		t.Fatal("default offerings seeded no SPOT slot")
+	}
+	inst, err := fake.Insert(ctx, instanceSpec{MachineID: spot.ID, MachineType: spot.InstanceType, Zone: spot.Zone, Spot: true})
+	if err != nil {
+		t.Fatalf("insert spot instance: %v", err)
+	}
+
+	before := b.interruption.probability(spot.ID, spot.InstanceType, providerkit.CapacitySpot)
+
+	// No preemption yet: observing finds nothing.
+	if n, err := b.observePreemptions(ctx); err != nil || n != 0 {
+		t.Fatalf("observePreemptions before preemption = (%d, %v), want (0, nil)", n, err)
+	}
+
+	// Simulate GCE preempting the spot VM, then observe it.
+	fake.preempt(inst.Zone, inst.Name)
+	n, err := b.observePreemptions(ctx)
+	if err != nil {
+		t.Fatalf("observePreemptions: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("observed %d preemptions, want 1", n)
+	}
+
+	after := b.interruption.probability(spot.ID, spot.InstanceType, providerkit.CapacitySpot)
+	if !(after > before) {
+		t.Errorf("interruption probability did not rise after preemption: before=%v after=%v", before, after)
+	}
+	if after != observedPreemptionProbability {
+		t.Errorf("observed probability = %v, want %v", after, observedPreemptionProbability)
+	}
+}
+
+// An on-demand instance is never treated as preempted (preemption is a SPOT-only
+// signal), so observing leaves its (zero) probability untouched.
+func TestObservePreemptions_IgnoresOnDemand(t *testing.T) {
+	b, fake := newTestBackend(t, 8)
+	ctx := context.Background()
+
+	var od providerkit.Instance
+	for _, s := range b.speculativeSlots() {
+		if s.CapacityType == providerkit.CapacityOnDemand {
+			od = s
+			break
+		}
+	}
+	if od.ID == "" {
+		t.Fatal("default offerings seeded no on-demand slot")
+	}
+	inst, err := fake.Insert(ctx, instanceSpec{MachineID: od.ID, MachineType: od.InstanceType, Zone: od.Zone, Spot: false})
+	if err != nil {
+		t.Fatalf("insert on-demand instance: %v", err)
+	}
+	fake.preempt(inst.Zone, inst.Name) // a no-op for non-spot in the simulator
+	n, err := b.observePreemptions(ctx)
+	if err != nil {
+		t.Fatalf("observePreemptions: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("observed %d preemptions for an on-demand instance, want 0", n)
+	}
+	if p := b.interruption.probability(od.ID, od.InstanceType, providerkit.CapacityOnDemand); p != 0 {
+		t.Errorf("on-demand interruption probability = %v, want 0", p)
+	}
+}
+
 func TestOffering_CapacityType(t *testing.T) {
 	cases := map[string]providerkit.CapacityType{
 		"on_demand": providerkit.CapacityOnDemand,

@@ -303,6 +303,29 @@ func (b *gcpBackend) resolveHost(ctx context.Context, m providerkit.Machine) (gc
 	return gceInstance{Name: name, Zone: zone, MachineType: m.InstanceType}, nil
 }
 
+// observePreemptions scans managed instances for SPOT VMs that GCE has preempted
+// (a SPOT instance in TERMINATED status — the provider only ever Deletes, never
+// stops, so a stopped spot VM is a preemption) and raises their observed
+// interruption probability. This is the "observed" half of the field-shape
+// contract: once a slot has a real preemption in its history, it publishes an
+// elevated interruption_probability on its next Speculative/Idle description,
+// above the bare per-family forecast. Call it on a timer (the reconcile loop).
+// Returns the number of preemptions observed this pass.
+func (b *gcpBackend) observePreemptions(ctx context.Context) (int, error) {
+	managed, err := b.client.DescribeManaged(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("observe preemptions: %w", err)
+	}
+	n := 0
+	for _, inst := range managed {
+		if inst.Preempted && inst.MachineID != "" {
+			b.interruption.markPreempted(inst.MachineID, observedPreemptionProbability)
+			n++
+		}
+	}
+	return n, nil
+}
+
 // refreshMachineTypes warms the allocatable cache from the GCE MachineTypes API
 // for the offered types. Call once at startup (machine-type specs are
 // immutable). Returns the number of offered types it could not resolve (each

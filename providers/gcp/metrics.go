@@ -21,6 +21,7 @@ type metrics struct {
 	rpcDuration *prometheus.HistogramVec // bigfleet_gcp_grpc_request_duration_seconds{method}
 	panics      prometheus.Counter       // bigfleet_gcp_panics_total
 	reconcile   *prometheus.CounterVec   // bigfleet_gcp_reconcile_total{outcome}
+	preemptions prometheus.Counter       // bigfleet_gcp_spot_preemptions_total
 }
 
 func newMetrics() *metrics {
@@ -54,6 +55,10 @@ func newMetrics() *metrics {
 			Name: "bigfleet_gcp_reconcile_total",
 			Help: "Background reconcile runs by outcome.",
 		}, "outcome"),
+		preemptions: f.counter(prometheus.CounterOpts{
+			Name: "bigfleet_gcp_spot_preemptions_total",
+			Help: "Observed GCE Spot preemptions of managed instances.",
+		}),
 	}
 	reg.MustRegister(collectors.NewGoCollector())
 	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))

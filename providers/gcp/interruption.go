@@ -36,6 +36,12 @@ func newInterruption() *interruption {
 // any time). A conservative middle estimate.
 const defaultSpotProbability = 0.05
 
+// observedPreemptionProbability is the elevated hourly interruption probability
+// recorded for a SPOT slot once a real GCE preemption of it has been observed.
+// It exceeds every forecast bucket so the cost engine treats a slot with proven
+// preemption history as materially riskier than one carrying only a forecast.
+const observedPreemptionProbability = 0.5
+
 // familyProbability is a pinned snapshot of hourly preemption-probability
 // estimates per GCE machine family for Spot VMs. Refine from observed
 // preemptions / instance-hours; values drift by family and zone demand. Keyed by
