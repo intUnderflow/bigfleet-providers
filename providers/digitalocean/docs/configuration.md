@@ -211,8 +211,9 @@ binds it. The lifecycle:
    Configure never races a still-initializing host.
 2. **Configure → on-host agent TLS channel.** Delivers the opaque
    `bootstrap_blob` — a **join secret** — to the already-running Droplet over the
-   on-host agent's mutually-authenticated TLS channel, waits for the agent to
-   apply it, and only then records the cluster binding tag. We wait for the agent
+   on-host agent's TLS channel with mutual authentication (pinned server CA +
+   per-machine token, not mTLS), waits for the agent to apply it, and only then
+   records the cluster binding tag. We wait for the agent
    to **succeed**, so a failed bootstrap surfaces as `FAILED`.
 3. **Drain → the same channel.** Cordons and drains the kubelet (honouring
    `grace_period_seconds`) via the agent, then removes the cluster binding tag —

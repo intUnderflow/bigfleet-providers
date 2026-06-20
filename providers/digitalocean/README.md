@@ -94,8 +94,10 @@ binds it. So the provider splits launch from cluster-join:
   agent**), and blocks until the Droplet is `active` before settling the machine
   Idle.
 - **Configure** delivers the opaque per-cluster `bootstrap_blob` — a **join
-  secret** — to the already-running Droplet over the on-host agent's
-  **mutually-authenticated TLS channel**. The blob is *not* delivered via
+  secret** — to the already-running Droplet over the on-host agent's **TLS
+  channel with mutual authentication** (the agent pins the provider's CA; the
+  provider authenticates the agent with a per-machine bearer token — not mTLS).
+  The blob is *not* delivered via
   `user_data`/Droplet metadata (which is immutable post-create). The provider
   serves the blob from its bootstrap channel; the agent fetches it over TLS,
   pinning the provider's CA, and the provider authorises only that Droplet via a

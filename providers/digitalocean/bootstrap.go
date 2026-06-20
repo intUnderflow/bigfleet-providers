@@ -16,7 +16,10 @@ import (
 
 // The bootstrap control channel is how the provider delivers the
 // cluster-specific, secret-bearing bootstrap blob to an ALREADY-RUNNING Droplet
-// (§4.6 (A): an on-host agent over a mutually-authenticated TLS channel). It is
+// (§4.6 (A): an on-host agent over a TLS channel with MUTUAL authentication —
+// the agent pins the provider's CA to verify the server, and the provider
+// authenticates each agent with a per-machine bearer token. This is mutual
+// authentication, NOT mTLS: the agent presents a token, not a client cert.) It is
 // NOT user_data: a Droplet's user_data is set at Create and read-only afterward
 // (cloud-init consumes it only at first boot), so it cannot carry a post-create
 // secret.

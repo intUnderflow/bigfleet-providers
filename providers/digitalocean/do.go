@@ -35,9 +35,10 @@ type doClient interface {
 	DescribeManaged(ctx context.Context) ([]dropletInstance, error)
 
 	// ApplyBootstrap binds a running Droplet to a cluster and delivers the
-	// opaque bootstrap blob to it over the on-host agent's
-	// mutually-authenticated TLS channel (NOT via user_data, which is read-only
-	// after first boot). The blob is the kubelet join data — never parse it.
+	// opaque bootstrap blob to it over the on-host agent's TLS channel with
+	// mutual authentication (pinned server CA + per-machine bearer token, not
+	// mTLS) — NOT via user_data, which is read-only after first boot. The blob is
+	// the kubelet join data — never parse it.
 	ApplyBootstrap(ctx context.Context, drv dropletInstance, clusterID string, bootstrap []byte) error
 
 	// DrainNode cordons and drains the kubelet off a running Droplet, honouring

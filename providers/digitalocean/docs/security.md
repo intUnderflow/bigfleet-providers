@@ -73,8 +73,11 @@ Consequences for security:
 DigitalOcean has no in-guest command API, and a Droplet's `user_data` is
 immutable after first boot, so the per-cluster bootstrap blob — a **join
 secret** — is delivered to the already-running Droplet over an **on-host agent**
-channel using **mutually-authenticated TLS**. This is the TLS analogue of the
-Hetzner provider's SSH host-key-pinned delivery. The model:
+channel using TLS with **mutual authentication**: the agent pins the provider's
+CA to verify the server, and the provider authenticates each agent with a
+per-machine bearer token. (This is mutual authentication, **not mTLS** — the
+agent presents a token, not a client certificate.) This is the TLS analogue of
+the Hetzner provider's SSH host-key-pinned delivery. The model:
 
 - **The provider serves an HTTPS bootstrap channel** on `--bootstrap-addr`, with
   its own server certificate (`--bootstrap-tls-cert`/`--bootstrap-tls-key`). The

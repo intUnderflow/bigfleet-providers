@@ -20,8 +20,9 @@ import (
 // post-launch (cloud-init consumes it only at first boot), so CreateDroplet
 // launches the Droplet with the generic pre-binding --base-user-data (which
 // installs the on-host agent), and the cluster-specific bootstrap blob is
-// delivered later by ConfigureInstance over the agent's mutually-authenticated
-// TLS channel (the real client's ApplyBootstrap). This keeps the kit's invariant
+// delivered later by ConfigureInstance over the agent's mutually authenticated
+// TLS channel (pinned server CA + per-machine token, not mTLS; the real client's
+// ApplyBootstrap). This keeps the kit's invariant
 // that an Idle machine already carries a real, reachable host, and delivers the
 // secret-bearing blob exactly once when the binding is established.
 type digitaloceanBackend struct {

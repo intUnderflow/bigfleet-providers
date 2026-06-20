@@ -16,7 +16,7 @@ type doFake struct {
 	mu       sync.Mutex
 	seq      int
 	droplets map[string]*dropletInstance // keyed by droplet id
-	byToken  map[string]string           // idempotency token -> droplet id
+	names    map[string]string           // droplet id -> derived name
 	// priceUSD is the deterministic hourly price the simulator reports, so
 	// conformance and tests are reproducible.
 	priceUSD float64
@@ -25,7 +25,7 @@ type doFake struct {
 func newDOFake() *doFake {
 	return &doFake{
 		droplets: make(map[string]*dropletInstance),
-		byToken:  make(map[string]string),
+		names:    make(map[string]string),
 		priceUSD: 0.03571,
 	}
 }
@@ -33,13 +33,19 @@ func newDOFake() *doFake {
 func (f *doFake) CreateDroplet(_ context.Context, spec dropletSpec) (dropletInstance, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	// Model create idempotency: a repeated token returns the existing Droplet
-	// instead of launching a second one.
-	if spec.IdempotencyToken != "" {
-		if id, ok := f.byToken[spec.IdempotencyToken]; ok {
-			if drv, ok := f.droplets[id]; ok {
-				return *drv, nil
-			}
+	// Model the substrate faithfully: the DigitalOcean API has no client
+	// idempotency token and allows duplicate names, so idempotency must come from
+	// the client doing a PRE-CREATE LOOKUP — the same mechanism doReal uses. Reuse
+	// an existing managed Droplet with the same derived name for this machine; only
+	// create a new one otherwise. (A magic idempotency-token map here would model a
+	// capability the real substrate lacks and hide a double-provision regression.)
+	name := dropletName(spec)
+	for id, n := range f.names {
+		if n != name {
+			continue
+		}
+		if drv, ok := f.droplets[id]; ok && drv.MachineID == spec.MachineID {
+			return *drv, nil
 		}
 	}
 	f.seq++
@@ -53,9 +59,7 @@ func (f *doFake) CreateDroplet(_ context.Context, spec dropletSpec) (dropletInst
 		Active:     true,
 	}
 	f.droplets[id] = drv
-	if spec.IdempotencyToken != "" {
-		f.byToken[spec.IdempotencyToken] = id
-	}
+	f.names[id] = name
 	return *drv, nil
 }
 
@@ -66,6 +70,7 @@ func (f *doFake) DeleteDroplet(_ context.Context, dropletID string) error {
 	// treated as success), so a Delete after an out-of-band deletion never
 	// spuriously fails the machine.
 	delete(f.droplets, dropletID)
+	delete(f.names, dropletID)
 	return nil
 }
 

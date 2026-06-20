@@ -55,8 +55,9 @@ token:
 
 # --- on-host agent bootstrap channel ----------------------------------------
 # Configure/Drain deliver the cluster-specific bootstrap blob to the running
-# Droplet over an on-host agent on a mutually-authenticated TLS channel (NOT
-# user_data, which is read-only after first boot). Provide the channel's server
+# Droplet over an on-host agent on a TLS channel with mutual authentication
+# (pinned server CA + per-machine token, not mTLS; NOT user_data, which is
+# read-only after first boot). Provide the channel's server
 # cert/key in a Secret (tls.crt, tls.key, optional ca.crt the agent pins), an
 # externally-reachable endpoint the agent dials, and the HMAC secret that mints
 # per-machine agent tokens. Required for the real backend.

@@ -43,9 +43,9 @@ To run it against a real DigitalOcean account, have these ready (the
   the Sizes/Tags catalogue the provider reads). See [Credentials](credentials.md).
 - **A base image** that joins your cluster. The provider creates a Droplet from
   it with a generic pre-binding cloud-init that installs an **on-host agent**,
-  then delivers a per-cluster bootstrap blob to that agent over a
-  mutually-authenticated TLS channel. The agent contract is in
-  [Configuration](configuration.md).
+  then delivers a per-cluster bootstrap blob to that agent over a TLS channel
+  with mutual authentication (pinned server CA + per-machine token, not mTLS).
+  The agent contract is in [Configuration](configuration.md).
 - **A bootstrap channel** the provider serves over TLS (its own server
   certificate) and that the Droplets can reach. The on-host agent fetches its
   cluster-join blob from it, pinning the provider's CA. The flags are in

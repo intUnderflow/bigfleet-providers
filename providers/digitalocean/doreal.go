@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base32"
 	"encoding/base64"
 	"fmt"
@@ -87,9 +88,10 @@ func (c *doRealConfig) withDefaults() {
 
 // doReal is the production doClient, backed by godo. Inventory and bindings are
 // recovered from Droplet tags; the cluster-specific bootstrap and the drain are
-// delivered over the on-host agent's mutually-authenticated TLS channel
-// (DigitalOcean exposes no in-guest command API), so the base image must ship the
-// agent that the generic Create-time user_data configures.
+// delivered over the on-host agent's mutually authenticated TLS channel (pinned
+// server CA + per-machine bearer token, not mTLS; DigitalOcean exposes no
+// in-guest command API), so the base image must ship the agent that the generic
+// Create-time user_data configures.
 type doReal struct {
 	cfg    doRealConfig
 	client *godo.Client
@@ -153,11 +155,24 @@ func (r *doReal) CreateDroplet(ctx context.Context, spec dropletSpec) (dropletIn
 			tagMachinePrefix + encodeID(spec.MachineID),
 		},
 	}
+	// Pre-create idempotency. godo exposes no client-side idempotency token and
+	// DigitalOcean does NOT enforce unique Droplet names, so a retried or
+	// re-dispatched Create with the same OperationID (a previous attempt whose
+	// waitActive timed out, or a provider restart mid-create) would otherwise
+	// launch a SECOND, untracked, billed Droplet. Look first for the Droplet this
+	// operation already created (same derived name + this machine's id tag) and
+	// reuse it, rather than relying only on post-error recovery.
+	if existing, err := r.existingManagedDroplet(ctx, createReq.Name, spec.MachineID); err != nil {
+		return dropletInstance{}, fmt.Errorf("create droplet: pre-create lookup: %w", err)
+	} else if existing != nil {
+		return r.waitActive(ctx, existing.ID)
+	}
 	drv, _, err := r.client.Droplets.Create(ctx, createReq)
 	if err != nil {
-		// A retried Create whose name already exists is the idempotent case:
-		// recover the existing Droplet instead of failing.
-		if existing := r.dropletByName(ctx, createReq.Name); existing != nil {
+		// Post-error recovery: a create that errored but actually landed (or raced
+		// a concurrent attempt). Reuse the existing managed Droplet, verifying the
+		// machine-id tag so an unrelated same-named Droplet is never adopted.
+		if existing, lerr := r.existingManagedDroplet(ctx, createReq.Name, spec.MachineID); lerr == nil && existing != nil {
 			return r.waitActive(ctx, existing.ID)
 		}
 		return dropletInstance{}, fmt.Errorf("create droplet %s: %w", spec.Size, err)
@@ -175,23 +190,28 @@ func (r *doReal) waitActive(ctx context.Context, id int) (dropletInstance, error
 	deadline := time.Now().Add(r.cfg.CreateWaitTimeout)
 	ticker := time.NewTicker(r.cfg.PollInterval)
 	defer ticker.Stop()
+	var lastErr error
 	for {
 		drv, _, err := r.client.Droplets.Get(ctx, id)
-		if err != nil {
-			return dropletInstance{}, fmt.Errorf("poll droplet %d: %w", id, err)
-		}
-		if drv == nil {
-			return dropletInstance{}, fmt.Errorf("droplet %d vanished while creating", id)
-		}
-		if drv.Status == "active" {
+		switch {
+		case err != nil:
+			// Transient (rate-limit 429, 5xx, or a read-after-write 404 right after
+			// create) — keep polling until the deadline instead of failing the whole
+			// Create on a single blip. ctx cancellation still aborts below.
+			lastErr = err
+		case drv == nil:
+			lastErr = fmt.Errorf("droplet %d not visible yet", id)
+		case drv.Status == "active":
 			return r.toDropletInstance(drv), nil
+		default:
+			lastErr = fmt.Errorf("droplet %d status %q", id, drv.Status)
 		}
 		select {
 		case <-ctx.Done():
-			return dropletInstance{}, fmt.Errorf("waiting for droplet %d to become active: %w", id, ctx.Err())
+			return dropletInstance{}, fmt.Errorf("waiting for droplet %d to become active: %w (last: %v)", id, ctx.Err(), lastErr)
 		case <-ticker.C:
 			if time.Now().After(deadline) {
-				return dropletInstance{}, fmt.Errorf("droplet %d did not become active within %s", id, r.cfg.CreateWaitTimeout)
+				return dropletInstance{}, fmt.Errorf("droplet %d did not become active within %s (last: %v)", id, r.cfg.CreateWaitTimeout, lastErr)
 			}
 		}
 	}
@@ -365,12 +385,36 @@ func (r *doReal) toDropletInstance(drv *godo.Droplet) dropletInstance {
 	return out
 }
 
-func (r *doReal) dropletByName(ctx context.Context, name string) *godo.Droplet {
+// existingManagedDroplet finds the Droplet a given Create operation already
+// produced: a bigfleet-managed Droplet in THIS region whose name matches the
+// derived name and whose machine-id tag matches machineID. Matching on the tag
+// (not just the name) means an unrelated same-named Droplet is never adopted.
+func (r *doReal) existingManagedDroplet(ctx context.Context, name, machineID string) (*godo.Droplet, error) {
 	droplets, _, err := r.client.Droplets.ListByName(ctx, name, &godo.ListOptions{PerPage: 200})
-	if err != nil || len(droplets) == 0 {
-		return nil
+	if err != nil {
+		return nil, err
 	}
-	return &droplets[0]
+	wantTag := tagMachinePrefix + encodeID(machineID)
+	for i := range droplets {
+		d := &droplets[i]
+		if !hasTag(d.Tags, tagManaged) || !hasTag(d.Tags, wantTag) {
+			continue
+		}
+		if d.Region != nil && d.Region.Slug != r.cfg.Region {
+			continue
+		}
+		return d, nil
+	}
+	return nil, nil
+}
+
+func hasTag(tags []string, want string) bool {
+	for _, t := range tags {
+		if t == want {
+			return true
+		}
+	}
+	return false
 }
 
 // setClusterTag tags the Droplet with its cluster binding (creating the tag if
@@ -420,11 +464,11 @@ func dropletName(spec dropletSpec) string {
 	if token == "" {
 		token = spec.MachineID
 	}
-	name := "bigfleet-" + strings.ToLower(idEncoding.EncodeToString([]byte(token)))
-	if len(name) > 63 {
-		name = name[:63]
-	}
-	return name
+	// Hash the token so the name is fixed-length and collision-resistant rather
+	// than a truncation of the raw id (which would weaken this derived
+	// idempotency key for long ids). base32(sha256)=52 chars + prefix < 63.
+	sum := sha256.Sum256([]byte(token))
+	return "bigfleet-" + strings.ToLower(idEncoding.EncodeToString(sum[:]))
 }
 
 // dropletImage interprets the --image flag as a numeric image id when it is all
