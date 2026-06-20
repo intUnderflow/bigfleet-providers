@@ -179,7 +179,10 @@ func (a *azureReal) vmParams(spec vmSpec, name, nicID string) armcompute.Virtual
 		},
 	}
 	if len(spec.BaseUserData) > 0 {
-		props.UserData = to.Ptr(base64.StdEncoding.EncodeToString(spec.BaseUserData))
+		// cloud-init consumes osProfile.customData (base64) at first boot; the
+		// separate userData field is exposed via IMDS but cloud-init does not read
+		// it, so the pre-binding bootstrap goes in customData.
+		props.OSProfile.CustomData = to.Ptr(base64.StdEncoding.EncodeToString(spec.BaseUserData))
 	}
 	if spec.Spot {
 		// Spot: evict by deletion, and pay up to the pay-as-you-go price (maxPrice
@@ -394,6 +397,12 @@ func (a *azureReal) SpotPriceUSD(ctx context.Context, vmSize string) (float64, e
 	best := -1.0
 	for _, it := range body.Items {
 		if !isSpotMeter(it.MeterName, it.SKUName, it.ProductName) {
+			continue
+		}
+		// The Retail Prices API returns both Linux and Windows meters for the same
+		// (region, SKU); Windows carries a licence surcharge, so include only the
+		// Linux meter (Windows productName ends in " Windows").
+		if strings.Contains(strings.ToLower(it.ProductName), "windows") {
 			continue
 		}
 		if it.UnitPrice <= 0 {
