@@ -1,0 +1,145 @@
+# Values for the bigfleet-gcp chart.
+#
+# One release per GCP region. To run several regions, install the chart once per
+# region with a distinct release name, region, and provider service account, e.g.:
+#
+#   helm install gcp-us-central1 ./helm \
+#     --set project=my-project \
+#     --set region=us-central1 \
+#     --set provider=gcp-us-central1 \
+#     --set serviceAccount.gcpServiceAccount=bigfleet-gcp@my-project.iam.gserviceaccount.com \
+#     --set-file offerings.content=offerings.us-central1.json
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-gcp
+  tag: ""            # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Number of replicas. Keep at 1 per region: the provider holds region-scoped
+# state and is the single CapacityProvider process for its region.
+replicaCount: 1
+
+# --- core provider config ---------------------------------------------------
+# GCP project id (required for the real GCE backend; sets --project).
+project: ""
+# GCP region, e.g. us-central1 (required for the real GCE backend; sets --region).
+region: ""
+# HostRef provider label (--provider), e.g. gcp-us-central1.
+provider: ""
+# GCE backend mode: auto | gcp | fake (--gcp-backend). auto = gcp when region set.
+gcpBackend: auto
+
+ports:
+  # gRPC CapacityProvider (--addr).
+  grpc: 9000
+  # /metrics, /healthz, /readyz (--metrics-addr).
+  metrics: 9090
+
+# --- GCE launch parameters (gcp backend) ------------------------------------
+gce:
+  image: projects/debian-cloud/global/images/family/debian-12  # --image (boot disk source image)
+  network: global/networks/default   # --network
+  subnetwork: ""                     # --subnetwork (default: the network's auto subnet)
+  diskSizeGb: 20                     # --disk-size-gb
+  instanceServiceAccount: ""         # --instance-service-account (the identity NODES run as)
+  zoneA: ""                          # --zone-a (default <region>-a)
+  zoneB: ""                          # --zone-b (default <region>-b)
+  seedCount: 32                      # --seed-count (default offerings size)
+
+# --- offerings --------------------------------------------------------------
+# When content is set, it is rendered into a ConfigMap, mounted, and passed via
+# --offerings. Use --set-file offerings.content=offerings.json on install.
+offerings:
+  content: ""
+
+# Optional generic pre-binding startup script baked into the boot instance
+# (--base-startup-script). Same mechanism as offerings: set content to enable.
+baseStartupScript:
+  content: ""
+
+# --- background loops -------------------------------------------------------
+reconcileInterval: 2m           # --reconcile-interval
+
+# --- durable state ----------------------------------------------------------
+# When enabled, --state points at a file on a PersistentVolume so fence marks,
+# the idempotency map, inventory, and bindings survive restarts.
+state:
+  enabled: false
+  path: /var/lib/bigfleet-gcp/state.json
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+
+# --- TLS / mTLS -------------------------------------------------------------
+# Provide a Secret with tls.crt + tls.key (and optionally ca.crt for mTLS).
+# When ca.crt is present the provider requires + verifies client certs (mTLS).
+tls:
+  enabled: false
+  secretName: ""                 # Secret holding tls.crt, tls.key, [ca.crt]
+  mtls: false                   # mount ca.crt and pass --tls-ca
+
+# --- gRPC reflection (--reflection) -----------------------------------------
+reflection: true
+
+# Extra raw flags appended verbatim to the args, e.g. ["--disk-size-gb", "50"].
+extraArgs: []
+
+# --- ServiceAccount / Workload Identity -------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  # Google service account email for Workload Identity. When set, the
+  # ServiceAccount is annotated iam.gke.io/gcp-service-account so the pod
+  # impersonates the provider's least-privilege Google SA (from deploy/sa) —
+  # no key file. Leave empty to use a key-file Secret instead (see credentials).
+  gcpServiceAccount: ""
+  annotations: {}
+
+# --- key-file credentials (off-GKE fallback) --------------------------------
+# When set, mounts the Secret's key.json at /var/secrets/google and sets
+# GOOGLE_APPLICATION_CREDENTIALS. Prefer Workload Identity on GKE.
+credentials:
+  secretName: ""                 # Secret with key key.json
+  key: key.json
+
+# --- Service ----------------------------------------------------------------
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Scrape annotations added to the Service for the metrics port.
+metrics:
+  prometheusScrape: true
+
+# --- pod scheduling / resources ---------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# Hardened defaults to match the distroless/static:nonroot image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
