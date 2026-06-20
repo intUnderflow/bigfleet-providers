@@ -1,0 +1,59 @@
+---
+title: Security
+description: The security posture of the BigFleet OCI provider — least-privilege IAM, mTLS, a hardened non-root image, and a confidential bootstrap channel.
+sidebar:
+  order: 6
+  label: Security
+---
+
+## Identity & least privilege
+
+The provider runs as an OCI principal (Instance Principal, OKE Workload Identity,
+or a config-file API key) authorized by a **dynamic group + IAM policy scoped to
+one compartment**. The policy grants only what the code calls — `manage
+instance-family`, `use volume-family`, `use virtual-network-family`, `read
+instance-images`, `use instance-agent-command-family` — and nothing tenancy-wide.
+See [Credentials & auth](/providers/oracle-cloud/credentials/).
+
+## Transport: mTLS
+
+BigFleet shards dial the provider's gRPC port. In production, enable **mTLS** so
+only authorized shards connect:
+
+```sh
+--set tls.enabled=true --set tls.mtls=true --set tls.secretName=bigfleet-oci-tls
+```
+
+With `--tls-ca` set, the server **requires and verifies** client certificates
+(TLS 1.3 minimum). Plain TLS (`--tls-cert`/`--tls-key` only) or insecure is
+acceptable only for trusted in-cluster traffic; insecure is the certify/dev
+default.
+
+## Confidential bootstrap delivery
+
+The `Configure` bootstrap blob carries **cluster-join secrets**. The provider
+delivers it over the **Oracle Cloud Agent Run Command**, which is authenticated by
+**OCI IAM** (the provider's principal) — an authenticated, confidential channel,
+the control-plane analogue of AWS SSM `SendCommand`. The provider:
+
+- never writes secrets via instance metadata (`user_data` is first-boot only and
+  not confidential for post-create delivery);
+- records the `bigfleet-cluster` binding tag **only after** the bootstrap succeeds,
+  so a failed Configure never leaves an instance mistagged as joined;
+- treats the blob as **opaque** — it is never parsed or logged.
+
+## Hardened runtime
+
+The image is `gcr.io/distroless/static:nonroot`: no shell, no package manager,
+uid 65532. The Helm chart enforces a matching pod security context —
+`runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, all
+capabilities dropped, `seccompProfile: RuntimeDefault`. Mounted Secrets
+(config-file credentials, TLS) are read-only.
+
+## Blast radius
+
+One process owns one region/compartment. It only ever touches instances it
+created — `Describe`/reconcile filter on the `bigfleet-managed=true` freeform tag —
+so capacity it doesn't own, it never modifies or deletes. `FAILED_PRECONDITION`
+is reserved by the kit for fencing, so a stale/zombie shard can never apply a
+mutation.
