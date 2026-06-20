@@ -4,6 +4,7 @@ go 1.26.4
 
 require (
 	github.com/digitalocean/godo v1.196.0
+	github.com/intUnderflow/bigfleet v0.0.0-20260620114917-f809069ab3d8
 	github.com/intUnderflow/bigfleet-providers v0.0.0
 	github.com/prometheus/client_golang v1.23.2
 	google.golang.org/grpc v1.80.0
@@ -15,7 +16,6 @@ require (
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-retryablehttp v0.7.7 // indirect
-	github.com/intUnderflow/bigfleet v0.0.0-20260620114917-f809069ab3d8 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
