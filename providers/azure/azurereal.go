@@ -280,7 +280,10 @@ func (a *azureReal) DescribeManaged(ctx context.Context) ([]vmInstance, error) {
 // that writes the blob and runs the bootstrap hook, then records the cluster
 // binding as a tag. The blob is the kubelet join data — never parsed.
 func (a *azureReal) ApplyBootstrap(ctx context.Context, vm vmInstance, clusterID string, bootstrap []byte) error {
-	script := fmt.Sprintf("base64 -d > /run/bigfleet-bootstrap <<'EOF'\n%s\nEOF\n%s /run/bigfleet-bootstrap",
+	// Decode the blob to a tmpfs path, run the hook, then remove it — preserving
+	// the hook's exit code so a failed bootstrap still surfaces as FAILED. The
+	// blob is the cluster-join secret, so it must not linger on the host.
+	script := fmt.Sprintf("base64 -d > /run/bigfleet-bootstrap <<'EOF'\n%s\nEOF\n%s /run/bigfleet-bootstrap; rc=$?; rm -f /run/bigfleet-bootstrap; exit $rc",
 		base64.StdEncoding.EncodeToString(bootstrap), a.cfg.BootstrapHookPath)
 	if err := a.runExtension(ctx, resourceName(vm.ResourceID), "bigfleet-configure", script); err != nil {
 		return fmt.Errorf("apply bootstrap: %w", err)
@@ -300,8 +303,14 @@ func (a *azureReal) DrainNode(ctx context.Context, vm vmInstance, gracePeriodSec
 
 // runExtension creates/updates a Linux CustomScript extension that runs the
 // given inline command, polling to completion.
+//
+// commandToExecute goes in ProtectedSettings, never Settings: Azure stores
+// extension Settings in cleartext in the ARM control plane and returns them on
+// virtualMachines/extensions/read (readable by any RG Reader / activity-log
+// viewer), whereas ProtectedSettings are encrypted at rest and never returned on
+// read. The configure command embeds the opaque cluster-join blob, so it must
+// stay confidential.
 func (a *azureReal) runExtension(ctx context.Context, vmNameStr, extName, command string) error {
-	settings := map[string]any{"commandToExecute": command}
 	poller, err := a.exts.BeginCreateOrUpdate(ctx, a.cfg.ResourceGroup, vmNameStr, extName, armcompute.VirtualMachineExtension{
 		Location: to.Ptr(a.cfg.Location),
 		Properties: &armcompute.VirtualMachineExtensionProperties{
@@ -310,8 +319,8 @@ func (a *azureReal) runExtension(ctx context.Context, vmNameStr, extName, comman
 			TypeHandlerVersion:      to.Ptr("2.1"),
 			AutoUpgradeMinorVersion: to.Ptr(true),
 			// Force re-run on every Configure/Drain by stamping a fresh value.
-			ForceUpdateTag: to.Ptr(fmt.Sprintf("%d", time.Now().UnixNano())),
-			Settings:       settings,
+			ForceUpdateTag:    to.Ptr(fmt.Sprintf("%d", time.Now().UnixNano())),
+			ProtectedSettings: map[string]any{"commandToExecute": command},
 		},
 	}, nil)
 	if err != nil {

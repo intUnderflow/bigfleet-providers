@@ -97,12 +97,17 @@ break-glass). The extension poller runs to completion; a failed extension become
 a `FAILED` transition rather than a false `Configured`/`Idle`. The trust
 properties that matter:
 
-- **The bootstrap blob is opaque to the provider.** On Configure the provider
-  base64-encodes the `bootstrap_blob`, ships it inside the extension's
-  `commandToExecute`, writes it to a file on the node, and invokes the image hook
-  (`--bootstrap-hook`). The provider never parses, logs, or interprets the blob's
-  bytes — the hook is the only thing that consumes it. Treat the blob as a
-  credential: it is what joins a node to a cluster.
+- **The bootstrap blob is opaque to the provider, and delivered encrypted.** On
+  Configure the provider base64-encodes the `bootstrap_blob` and ships it in the
+  extension's **`protectedSettings.commandToExecute`** — Azure encrypts
+  `protectedSettings` at rest and never returns them on
+  `virtualMachines/extensions/read`, so the join secret is not exposed to RG
+  Readers or the activity log (it is **not** placed in the cleartext `settings`).
+  The node writes it to a tmpfs file, invokes the image hook (`--bootstrap-hook`),
+  and the script removes the file afterwards (preserving the hook's exit code).
+  The provider never parses, logs, or interprets the blob's bytes — the hook is
+  the only thing that consumes it. Treat the blob as a credential: it is what
+  joins a node to a cluster.
 - **The image hook is part of your TCB.** Whatever `--bootstrap-hook` points at
   runs as root on the node with the blob as input. Bake it into the image you
   control, pin the image (`--image`), and review the hook the way you would review
