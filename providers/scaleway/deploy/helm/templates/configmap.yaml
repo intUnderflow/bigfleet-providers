@@ -1,0 +1,23 @@
+{{- if .Values.offerings.content }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bigfleet-scaleway.fullname" . }}-offerings
+  labels:
+    {{- include "bigfleet-scaleway.labels" . | nindent 4 }}
+data:
+  offerings.json: |
+    {{- .Values.offerings.content | nindent 4 }}
+{{- end }}
+{{- if .Values.baseUserData.content }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bigfleet-scaleway.fullname" . }}-base-user-data
+  labels:
+    {{- include "bigfleet-scaleway.labels" . | nindent 4 }}
+data:
+  base-user-data: |
+    {{- .Values.baseUserData.content | nindent 4 }}
+{{- end }}
