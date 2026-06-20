@@ -133,6 +133,15 @@ func (b *ovhBackend) Describe(ctx context.Context) ([]providerkit.Instance, erro
 	for _, srv := range managed {
 		switch {
 		case srv.MachineID != "":
+			if _, dup := bySlot[srv.MachineID]; dup {
+				// Two live servers carry the same machine id (e.g. a botched
+				// create that left a duplicate). Keep the first as the slot
+				// backing and surface the extra as an orphan under its server UUID
+				// — never silently drop it, or a paid instance becomes invisible
+				// to inventory and cleanup.
+				orphans = append(orphans, srv)
+				continue
+			}
 			bySlot[srv.MachineID] = srv // owns its slot, running or not
 		case srv.Running:
 			orphans = append(orphans, srv) // managed + running, but untagged

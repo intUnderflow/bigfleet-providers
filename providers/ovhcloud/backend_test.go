@@ -224,6 +224,44 @@ func TestServerToIdle_RecoversResources(t *testing.T) {
 	}
 }
 
+// Two live servers tagged with the SAME machine id must both appear in
+// inventory: the first backs its slot, the extra is surfaced as an orphan under
+// its server UUID — never silently dropped (a dropped paid instance is invisible
+// to cleanup).
+func TestDescribe_DuplicateMachineIDSurfacedAsOrphan(t *testing.T) {
+	b, fake := newTestBackend(t, 4)
+	ctx := context.Background()
+	slot := b.speculativeSlots()[0]
+
+	// Two distinct servers (distinct tokens => distinct UUIDs) both tagged with
+	// the same machine id.
+	a, err := fake.CreateServer(ctx, serverSpec{MachineID: slot.ID, Flavor: slot.InstanceType, Region: slot.Zone, IdempotencyToken: "tokA"})
+	if err != nil {
+		t.Fatalf("create a: %v", err)
+	}
+	c, err := fake.CreateServer(ctx, serverSpec{MachineID: slot.ID, Flavor: slot.InstanceType, Region: slot.Zone, IdempotencyToken: "tokB"})
+	if err != nil {
+		t.Fatalf("create b: %v", err)
+	}
+	if a.ServerID == c.ServerID {
+		t.Fatalf("expected two distinct servers, got %s twice", a.ServerID)
+	}
+
+	got, err := b.Describe(ctx)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	refs := map[string]bool{}
+	for _, in := range got {
+		if in.Host.Ref != "" {
+			refs[in.Host.Ref] = true
+		}
+	}
+	if !refs[a.ServerID] || !refs[c.ServerID] {
+		t.Errorf("both duplicate-machine-id servers must be surfaced; have refs %v (want %s and %s)", refs, a.ServerID, c.ServerID)
+	}
+}
+
 func TestOffering_CapacityType(t *testing.T) {
 	// Only on-demand is a real OVH Public Cloud substrate; everything else is
 	// rejected so the provider can never mis-declare capacity_type.

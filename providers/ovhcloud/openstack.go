@@ -164,7 +164,15 @@ func (r *ovhReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 	// OpenStack analogue of EC2's RunInstances ClientToken. The post-Create error
 	// branch below is only a backstop for the narrower create-races-create case.
 	name := serverName(spec)
-	if existing := r.serverByName(ctx, name); existing != nil {
+	existing, err := r.serverByName(ctx, name)
+	if err != nil {
+		// The lookup is the idempotency guard, so a failed lookup must ABORT the
+		// Create — proceeding on a transient list error could double-provision a
+		// paid instance. The kit re-dispatches with the same OperationID (same
+		// name), so a later retry re-runs this pre-check cleanly.
+		return serverInstance{}, fmt.Errorf("create idempotency pre-check for %s: %w", name, err)
+	}
+	if existing != nil {
 		return r.waitActive(ctx, existing.ID)
 	}
 
@@ -203,9 +211,10 @@ func (r *ovhReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 	srv, err := servers.Create(ctx, r.compute, createOpts, nil).Extract()
 	if err != nil {
 		// A retried Create whose name already exists is the idempotent case:
-		// recover the existing server instead of failing.
-		if existing := r.serverByName(ctx, base.Name); existing != nil {
-			return r.waitActive(ctx, existing.ID)
+		// recover the existing server instead of failing. (A lookup error here
+		// just falls through to surfacing the original create error.)
+		if recovered, lerr := r.serverByName(ctx, base.Name); lerr == nil && recovered != nil {
+			return r.waitActive(ctx, recovered.ID)
 		}
 		return serverInstance{}, fmt.Errorf("create server %s: %w", spec.Flavor, err)
 	}
@@ -442,21 +451,25 @@ func (r *ovhReal) toServerInstance(srv *servers.Server) serverInstance {
 	return out
 }
 
-func (r *ovhReal) serverByName(ctx context.Context, name string) *servers.Server {
+// serverByName looks up a managed server by its exact name. It returns
+// (nil, nil) when no server matches, and a non-nil error when the lookup itself
+// failed — callers relying on it for Create idempotency MUST treat that error as
+// "unknown, do not create" rather than "no server exists".
+func (r *ovhReal) serverByName(ctx context.Context, name string) (*servers.Server, error) {
 	pages, err := servers.List(r.compute, servers.ListOpts{Name: "^" + regexp.QuoteMeta(name) + "$"}).AllPages(ctx)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("list servers by name %s: %w", name, err)
 	}
 	all, err := servers.ExtractServers(pages)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("extract servers by name %s: %w", name, err)
 	}
 	for i := range all {
 		if all[i].Name == name {
-			return &all[i]
+			return &all[i], nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // ensureIPv4 returns srv with a populated PublicIPv4, re-fetching the server by
