@@ -17,8 +17,9 @@ import "context"
 // (one provider process per project/region, per the author guide).
 type gceClient interface {
 	// Insert launches exactly one instance (compute.Instances.Insert) and
-	// returns its substrate identity. It labels the instance with the BigFleet
-	// machine id so DescribeManaged can recover inventory after a restart.
+	// returns its substrate identity. It records the BigFleet machine id in
+	// instance metadata (and a bigfleet-managed label) so DescribeManaged can
+	// recover inventory after a restart.
 	Insert(ctx context.Context, spec instanceSpec) (gceInstance, error)
 
 	// DeleteInstance deletes the instance identified by (zone, name)
@@ -31,18 +32,21 @@ type gceClient interface {
 	// label), so a provider with no persisted store can still rebuild inventory.
 	DescribeManaged(ctx context.Context) ([]gceInstance, error)
 
-	// ApplyBootstrap binds a running instance to a cluster and delivers the
-	// opaque bootstrap blob by writing it to the instance's `startup-script`
-	// metadata and resetting the instance so the script runs and the node joins
-	// the cluster (real impl: Instances.SetMetadata + Instances.Reset + a
-	// bigfleet-cluster label). The blob is the kubelet join data — never parse
-	// it.
+	// ApplyBootstrap delivers the opaque bootstrap blob and records the cluster
+	// binding by writing the blob to the instance's `startup-script` metadata and
+	// the cluster id to its `bigfleet-cluster` metadata, then resetting the
+	// instance so the script runs on the next boot (real impl:
+	// Instances.SetMetadata + Instances.Reset). Returning nil means the
+	// control-plane mutations succeeded and the reset was issued — not that the
+	// kubelet has finished joining, which completes asynchronously on boot. The
+	// blob is the kubelet join data — never parse it.
 	ApplyBootstrap(ctx context.Context, inst gceInstance, clusterID string, bootstrap []byte) error
 
 	// DrainNode removes the cluster binding: it strips the delivered
 	// `startup-script` metadata (so the node will not rejoin on a future boot),
-	// honours the grace period, and clears the bigfleet-cluster label — leaving
-	// the instance running but unbound (Idle). Real impl: Instances.SetMetadata.
+	// honours the grace period, and clears the `bigfleet-cluster` metadata —
+	// leaving the instance running but unbound (Idle). Real impl:
+	// Instances.SetMetadata.
 	DrainNode(ctx context.Context, inst gceInstance, gracePeriodSeconds int64) error
 
 	// DescribeMachineTypeCapacities resolves the hardware capacity (vCPU +
@@ -61,9 +65,9 @@ type instanceSpec struct {
 	// SPOT) — the current preemptible model.
 	Spot bool
 	// Capacity is the canonical capacity-type string ("on_demand" | "spot" |
-	// "reserved"), stamped as a bigfleet-capacity label so the capacity type is
-	// recoverable from GCE alone (DescribeManaged), not just guessed from the
-	// provisioning model.
+	// "reserved"), stamped as a bigfleet-capacity label (short and label-safe) so
+	// the capacity type is recoverable from GCE alone (DescribeManaged), not just
+	// guessed from the provisioning model.
 	Capacity string
 	// IdempotencyToken is the kit's per-operation id. The real client folds it
 	// into the instance name so a retried Insert maps to the same instance
@@ -81,11 +85,11 @@ type instanceSpec struct {
 type gceInstance struct {
 	Name        string // GCE instance name
 	Zone        string // GCE zone short name
-	MachineID   string // bigfleet-machine-id label (decoded)
+	MachineID   string // from bigfleet-machine-id instance metadata
 	MachineType string // machine type short name
 	Spot        bool
 	Capacity    string // bigfleet-capacity label (canonical capacity string)
-	ClusterID   string // bigfleet-cluster label, empty when unbound
+	ClusterID   string // from bigfleet-cluster instance metadata, empty when unbound
 	SelfLink    string // fully-qualified instance self-link (informational)
 	// Running reports whether the instance is in a live state (PROVISIONING /
 	// STAGING / RUNNING / REPAIRING), as opposed to STOPPING / TERMINATED.

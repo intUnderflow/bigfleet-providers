@@ -174,24 +174,31 @@ is only known when the shard binds it. The lifecycle:
 
 1. **Create → `Instances.Insert`.** Creates the instance from `--image` with
    `--base-startup-script` as the boot script (a generic, cluster-agnostic node
-   bootstrap), in the chosen zone, with the BigFleet labels (`bigfleet-managed`,
-   `bigfleet-machine-id`, `bigfleet-capacity`). Spot offerings set
+   bootstrap), in the chosen zone, with the `bigfleet-managed` and
+   `bigfleet-capacity` labels and the machine id recorded in
+   `bigfleet-machine-id` instance **metadata** (the id is too long for a 63-char
+   label value). Spot offerings set
    `scheduling.provisioningModel = SPOT`. The operation id makes the instance
    **name** stable, so a retried Create maps to the same instance instead of
    creating a second one. **Create blocks until the instance is actually
    `RUNNING`** before returning Idle, so the immediately-following Configure never
    races a still-booting host.
-2. **Configure → `SetMetadata` + `Reset`.** Overwrites the instance's
-   `startup-script` metadata with the opaque `bootstrap_blob` (preserving other
-   metadata items) and resets the instance so the script runs on the next boot and
-   the node joins `cluster_id`'s cluster. The instance is then labelled
-   `bigfleet-cluster=<id>` — only **after** the blob applied, so a failed Configure
-   never leaves an instance mislabelled. The blob is opaque — never parsed.
+2. **Configure → `SetMetadata` + `Reset`.** In one `SetMetadata` call, overwrites
+   the instance's `startup-script` metadata with the opaque `bootstrap_blob` and
+   records the cluster id in `bigfleet-cluster` metadata (preserving other items),
+   then resets the instance so the script runs on the next boot. Configure
+   returning success means the metadata was applied and the reset was issued — it
+   does **not** prove the kubelet has joined, which completes asynchronously on
+   boot (CONFIGURED reflects the control-plane mutations, per the kit's Configure
+   transition timeout). If the reset fails, Configure errors (the machine goes
+   FAILED) and the stale `bigfleet-cluster` metadata is cleared by a later Drain,
+   Delete, or reconcile. The blob is opaque — never parsed.
 3. **Drain → `SetMetadata`.** Strips the delivered `startup-script` metadata (so
-   the node will not rejoin on a future boot) and clears the cluster label —
-   leaving the instance running but unbound (Idle). BigFleet has already cordoned
-   and drained the pods at the k8s layer (honouring `grace_period_seconds`); this
-   is the machine-side cleanup. `cluster` and `shard_metadata` are cleared.
+   the node will not rejoin on a future boot) and clears the `bigfleet-cluster`
+   metadata — leaving the instance running but unbound (Idle). BigFleet has
+   already cordoned and drained the pods at the k8s layer (honouring
+   `grace_period_seconds`); this is the machine-side cleanup. `cluster` and
+   `shard_metadata` are cleared.
 4. **Delete → `Instances.Delete`.** Deletes the instance; the slot returns to
    Speculative (host cleared).
 

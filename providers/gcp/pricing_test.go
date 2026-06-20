@@ -21,6 +21,20 @@ func TestPricing_OnDemandAndSpot(t *testing.T) {
 	}
 }
 
+func TestNewGCPBackend_RejectsUnpricedOffering(t *testing.T) {
+	// An offering whose machine type has no pinned price would publish
+	// price_per_hour = 0; newGCPBackend must reject it at startup.
+	offs := []offering{{
+		MachineType: "zz-unpriced-9", Zone: "us-central1-a", Capacity: "on_demand",
+		Count: 1, Resources: map[string]string{"cpu": "1", "memory": "2Gi"},
+	}}
+	_, err := newGCPBackend("gcp-test", "us-central1", newGCEFake(), offs,
+		newPricing("us-central1"), newInterruption(), nil, quietLogger())
+	if err == nil {
+		t.Fatal("expected newGCPBackend to reject an offering with no pinned price")
+	}
+}
+
 func TestPricing_UnknownRegionFallsBackToBaseline(t *testing.T) {
 	p := newPricing("europe-west99")
 	if p.price("n2-standard-4", providerkit.CapacityOnDemand) <= 0 {

@@ -82,19 +82,21 @@ splits launch from cluster-join:
   is `RUNNING` before settling the machine to Idle. Spot offerings set
   `scheduling.provisioningModel = SPOT`.
 - **Configure** delivers the opaque per-cluster `bootstrap_blob` by writing it to
-  the instance's `startup-script` metadata (`SetMetadata`) and **resetting** the
-  instance (`Reset`) so it runs and the node joins; the `bigfleet-cluster` label
-  is set only after the blob applied.
-- **Drain** strips the `startup-script` metadata (so a future boot won't rejoin)
-  and clears the cluster binding back to Idle, honouring the grace period.
+  the instance's `startup-script` metadata and the cluster id to `bigfleet-cluster`
+  metadata (one `SetMetadata`), then **resetting** the instance (`Reset`) so the
+  script runs on the next boot. Success means the metadata was applied and the
+  reset issued — not that the kubelet has joined (that completes asynchronously).
+- **Drain** strips the `startup-script` and `bigfleet-cluster` metadata (so a
+  future boot won't rejoin) back to Idle, honouring the grace period.
 - **Delete** (`Instances.Delete`) tears the instance down; the slot returns to
   Speculative.
 
 This keeps the kit's invariant that an Idle machine already carries a real,
 reachable host, and delivers the blob exactly once when the binding is set.
-Inventory and bindings are recoverable from instance labels alone
-(`bigfleet-managed`, `bigfleet-machine-id`, `bigfleet-capacity`,
-`bigfleet-cluster`), so `Describe` rebuilds state after a lost cache.
+Inventory and bindings are recoverable from GCE alone — the `bigfleet-managed`
+and `bigfleet-capacity` **labels** plus the `bigfleet-machine-id` and
+`bigfleet-cluster` instance **metadata** (the ids are too long for label values)
+— so `Describe` rebuilds state after a lost cache.
 
 ## Pricing & interruption
 

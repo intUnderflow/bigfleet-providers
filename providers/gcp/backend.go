@@ -52,6 +52,13 @@ func newGCPBackend(providerName, region string, client gceClient, offerings []of
 		if off.Zone == "" {
 			return nil, fmt.Errorf("gcp backend: offering %s with empty zone", off.MachineType)
 		}
+		// Every offered type must be priced; an unpinned type would otherwise
+		// silently publish price_per_hour = 0 (including SPOT via spotFraction×0),
+		// skewing effective-cost ranking and violating the "never zero for a real
+		// VM" intent. Fail loudly so the operator pins the price (see pricing.go).
+		if !pr.hasPrice(off.MachineType) {
+			return nil, fmt.Errorf("gcp backend: offering %s has no pinned price for region %q (add it to pricing.go's onDemand table)", off.MachineType, region)
+		}
 	}
 	return &gcpBackend{
 		providerName:      providerName,
@@ -67,8 +74,8 @@ func newGCPBackend(providerName, region string, client gceClient, offerings []of
 }
 
 // slotID is the stable BigFleet machine id for one offering slot. A Speculative
-// slot keeps this id across its whole lifecycle (Created instances are labelled
-// with it, so DescribeManaged maps back to it).
+// slot keeps this id across its whole lifecycle (Created instances record it in
+// bigfleet-machine-id instance metadata, so DescribeManaged maps back to it).
 func slotID(providerName string, capacity providerkit.CapacityType, off offering, i int) string {
 	return fmt.Sprintf("%s/%s/%s/%s/%03d", providerName, capacity, off.MachineType, off.Zone, i)
 }

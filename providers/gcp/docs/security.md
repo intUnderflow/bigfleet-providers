@@ -80,11 +80,15 @@ and resets the instance so it runs on the next boot. Security implications:
 - The blob is the kubelet join material. It is delivered over the GCE control
   plane (an authenticated `instances.setMetadata` call), not over a node-to-node
   channel, so there is no on-path delivery window to a freshly created host.
-- The binding label (`bigfleet-cluster`) is written **only after** the blob
-  applied, so a failed Configure never leaves an instance mislabelled as bound to
-  a cluster it never joined.
-- On Drain the `startup-script` is **removed**, so a future boot does not rejoin
-  the cluster.
+- The binding (`bigfleet-cluster`) is recorded in instance **metadata**,
+  written in the same `SetMetadata` call as the blob (before the reset). It is a
+  recovery record, not a join receipt: Configure returning success means the
+  metadata was applied and the reset was issued, **not** that the kubelet has
+  joined (the join completes asynchronously on boot). If the reset fails Configure
+  errors and the machine goes FAILED; the stale binding metadata is then cleared
+  by a later Drain, Delete, or reconcile.
+- On Drain the `startup-script` and `bigfleet-cluster` metadata are **removed**,
+  so a future boot does not rejoin the cluster.
 - The blob is opaque — the provider never parses, logs, or rewrites it (the same
   contract as `shard_metadata`). Treat the instance metadata as sensitive; scope
   who can read instance metadata in the project, and prefer the indirect model (a

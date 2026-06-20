@@ -61,6 +61,13 @@ func newPricing(region string) *pricing {
 	return &pricing{region: region, onDemandUSD: table}
 }
 
+// hasPrice reports whether the resolved table has a positive on-demand price for
+// the machine type. newGCPBackend uses it to reject an offering whose type would
+// otherwise publish price_per_hour = 0.
+func (p *pricing) hasPrice(machineType string) bool {
+	return p.onDemandUSD[machineType] > 0
+}
+
 // price returns USD/hour for a machine of the given shape. Pure table lookup —
 // never blocks on the network, so it is safe on the List/seed hot path.
 func (p *pricing) price(machineType string, capacity providerkit.CapacityType) float64 {

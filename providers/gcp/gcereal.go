@@ -275,11 +275,14 @@ func (r *gceReal) ApplyBootstrap(ctx context.Context, inst gceInstance, clusterI
 		return fmt.Errorf("configure: get instance %s: %w", inst.Name, err)
 	}
 	// Overwrite the startup-script with the cluster bootstrap blob and record the
-	// cluster binding, preserving any other metadata items, in a single
-	// SetMetadata; then reset so the script runs and the node joins. The binding
-	// is written together with the blob, so a failed Configure (which fails before
-	// or during this call) never leaves an instance recorded as bound to a cluster
-	// it never joined.
+	// cluster binding (metaCluster), preserving any other metadata items, in a
+	// single SetMetadata; then reset so the script runs on the next boot. The
+	// binding metadata is written before the reset, so if the reset fails this
+	// returns an error (the kit marks the machine FAILED) while the instance still
+	// carries the cluster id in metadata — stale binding state that a later Drain,
+	// Delete, or reconcile clears. Returning nil means the metadata was applied and
+	// the reset was issued; it does NOT prove the kubelet has joined, which
+	// completes asynchronously on boot.
 	md := setMetadataItem(live.GetMetadata(), startupScriptKey, string(bootstrap))
 	md = setMetadataItem(md, metaCluster, clusterID)
 	if err := r.setMetadata(ctx, inst.Zone, inst.Name, md); err != nil {
