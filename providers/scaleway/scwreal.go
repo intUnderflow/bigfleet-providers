@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
+	"mime/multipart"
+	"net/textproto"
 	"strings"
 	"time"
 
@@ -52,9 +56,18 @@ type scwRealConfig struct {
 	Image          string
 	Zone           string
 	EURtoUSD       float64
-	// AgentToken authorises the on-host agent to fetch its own bootstrap blob over
-	// the mutually-authenticated TLS control channel (see scwbootstrap.go).
-	AgentToken string
+
+	// Vault is the on-host agent control channel used by ApplyBootstrap /
+	// DrainNode (Scaleway has no in-guest command API). Required.
+	Vault *bootstrapVault
+	// BootstrapEndpoint is the externally-reachable URL of the provider's
+	// bootstrap channel (e.g. https://scaleway-provider.example:9443). It is
+	// injected into the server's generic user_data so the agent knows where to
+	// fetch.
+	BootstrapEndpoint string
+	// BootstrapCAPEM is the PEM the agent pins to verify the provider's server
+	// certificate — the agent side of the mutual authentication.
+	BootstrapCAPEM string
 
 	// CreateWaitTimeout caps how long CreateServer waits for the server to reach
 	// 'running' (the kit's Create timeout, carried on ctx, usually fires first).
@@ -77,15 +90,16 @@ func (c *scwRealConfig) withDefaults() {
 
 // scwReal is the production Instances scwClient, backed by scaleway-sdk-go.
 // Inventory and bindings are recovered from server tags; the cluster-specific
-// bootstrap is published for the on-host agent to fetch over the
-// mutually-authenticated TLS control channel (Scaleway user-data is consumed
-// only at first boot), and Drain is driven over the same channel.
+// bootstrap and the drain are delivered over the on-host agent's
+// mutually-authenticated TLS channel (Scaleway user-data is consumed only at
+// first boot), so the base image must ship the agent that the generic
+// Create-time user_data configures.
 type scwReal struct {
-	cfg     scwRealConfig
-	zone    scw.Zone
-	api     *instance.API
-	deliver bootstrapDeliverer
-	logger  *slog.Logger
+	cfg    scwRealConfig
+	zone   scw.Zone
+	api    *instance.API
+	vault  *bootstrapVault
+	logger *slog.Logger
 }
 
 // newSCWReal builds the production client for the configured substrate. The
@@ -98,6 +112,12 @@ func newSCWReal(cfg scwRealConfig, logger *slog.Logger) (scwClient, error) {
 	}
 	if cfg.Image == "" {
 		return nil, fmt.Errorf("scaleway: --image is required for the scaleway backend")
+	}
+	if cfg.Vault == nil {
+		return nil, fmt.Errorf("scaleway: the bootstrap agent channel is required (configure --bootstrap-addr + --bootstrap-tls-cert/key)")
+	}
+	if cfg.BootstrapEndpoint == "" {
+		return nil, fmt.Errorf("scaleway: --bootstrap-endpoint is required so the on-host agent can reach the provider")
 	}
 	cfg.withDefaults()
 
@@ -128,11 +148,11 @@ func newSCWReal(cfg scwRealConfig, logger *slog.Logger) (scwClient, error) {
 	}
 
 	return &scwReal{
-		cfg:     cfg,
-		zone:    zone,
-		api:     instance.NewAPI(client),
-		deliver: newHTTPDeliverer(cfg.AgentToken, logger),
-		logger:  logger,
+		cfg:    cfg,
+		zone:   zone,
+		api:    instance.NewAPI(client),
+		vault:  cfg.Vault,
+		logger: logger,
 	}, nil
 }
 
@@ -144,10 +164,14 @@ func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 		return r.waitRunning(ctx, existing.ID)
 	}
 
-	userData, err := r.buildUserData(spec)
-	if err != nil {
-		return serverInstance{}, err
-	}
+	// Bake the generic, pre-binding agent bootstrap into user_data: the operator's
+	// base user-data (installs/starts the agent) plus the agent config carrying
+	// this server's per-machine token and the provider's pinned endpoint/CA. The
+	// cluster-specific blob is delivered later over the agent channel, because
+	// user_data is consumed only at first boot.
+	token := r.vault.Token(spec.MachineID)
+	agentCfg := agentCloudConfig(r.cfg.BootstrapEndpoint, r.cfg.BootstrapCAPEM, spec.MachineID, token)
+	userData := combineUserData(spec.BaseUserData, agentCfg)
 
 	res, err := r.api.CreateServer(&instance.CreateServerRequest{
 		Zone:           r.zone,
@@ -168,13 +192,13 @@ func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 	}
 	srv := res.Server
 
-	// Set the generic base user-data (consumed at first boot only), then power on.
+	// Set the cloud-init user-data (consumed at first boot only), then power on.
 	if len(userData) > 0 {
 		if err := r.api.SetServerUserData(&instance.SetServerUserDataRequest{
 			Zone:     r.zone,
 			ServerID: srv.ID,
 			Key:      "cloud-init",
-			Content:  strings.NewReader(string(userData)),
+			Content:  strings.NewReader(userData),
 		}, scw.WithContext(ctx)); err != nil {
 			return serverInstance{}, fmt.Errorf("set user-data on %s: %w", srv.ID, err)
 		}
@@ -278,15 +302,19 @@ func (r *scwReal) DescribeManaged(ctx context.Context) ([]serverInstance, error)
 }
 
 func (r *scwReal) ApplyBootstrap(ctx context.Context, srv serverInstance, clusterID string, bootstrap []byte) error {
-	srv, err := r.ensureIPv4(ctx, srv)
-	if err != nil {
-		return fmt.Errorf("configure: %w", err)
+	if srv.MachineID == "" {
+		return fmt.Errorf("configure: server %s carries no machine id tag", srv.ServerID)
 	}
-	// Deliver the opaque bootstrap blob over the mutually-authenticated TLS
-	// channel: the on-host agent (installed by the base user-data at Create) fetches
-	// its own machine-specific blob and applies it. We wait for it to SUCCEED, so a
-	// failed bootstrap surfaces as FAILED.
-	if err := r.deliver.Deliver(ctx, srv, clusterID, bootstrap); err != nil {
+	// Deliver the opaque blob to the running server over the agent channel and
+	// wait for the agent to apply it — a failed join surfaces as FAILED. The agent
+	// dials the provider (the provider needs no inbound path to the server), so no
+	// server IP is required here.
+	cmd := bootstrapCommand{
+		Type:      "configure",
+		ClusterID: clusterID,
+		Blob:      base64.StdEncoding.EncodeToString(bootstrap),
+	}
+	if err := r.vault.Enqueue(ctx, srv.MachineID, cmd); err != nil {
 		return err
 	}
 	// Record the binding tag only AFTER the bootstrap actually succeeded, so a
@@ -296,13 +324,11 @@ func (r *scwReal) ApplyBootstrap(ctx context.Context, srv serverInstance, cluste
 }
 
 func (r *scwReal) DrainNode(ctx context.Context, srv serverInstance, gracePeriodSeconds int64) error {
-	srv, err := r.ensureIPv4(ctx, srv)
-	if err != nil {
-		// No reachable host: at least remove the binding tag so the machine returns
-		// to an unbound state in inventory.
-		return r.clearClusterTag(ctx, srv.ServerID)
+	if srv.MachineID == "" {
+		return fmt.Errorf("drain: server %s carries no machine id tag", srv.ServerID)
 	}
-	if err := r.deliver.Drain(ctx, srv, gracePeriodSeconds); err != nil {
+	cmd := bootstrapCommand{Type: "drain", GraceSeconds: drainGrace(gracePeriodSeconds)}
+	if err := r.vault.Enqueue(ctx, srv.MachineID, cmd); err != nil {
 		return err
 	}
 	return r.clearClusterTag(ctx, srv.ServerID)
@@ -368,23 +394,7 @@ func (r *scwReal) toServerInstance(srv *instance.Server) serverInstance {
 		ClusterID:      tagValue(srv.Tags, tagCluster),
 		Running:        srv.State == instance.ServerStateRunning || srv.State == instance.ServerStateStarting,
 	}
-	out.PublicIPv4 = firstPublicIPv4(srv.PublicIPs)
 	return out
-}
-
-// firstPublicIPv4 returns the first IPv4 (inet) address from a server's public
-// IPs, or "". Uses PublicIPs (the deprecated singular PublicIP field is avoided).
-func firstPublicIPv4(ips []*instance.ServerIP) string {
-	for _, ip := range ips {
-		if ip == nil || ip.Address == nil {
-			continue
-		}
-		if ip.Family == instance.ServerIPIPFamilyInet6 {
-			continue
-		}
-		return ip.Address.String()
-	}
-	return ""
 }
 
 func (r *scwReal) serverByName(ctx context.Context, name string) *instance.Server {
@@ -434,29 +444,43 @@ func (r *scwReal) updateTags(ctx context.Context, serverID string, mutate func([
 	return err
 }
 
-func (r *scwReal) ensureIPv4(ctx context.Context, srv serverInstance) (serverInstance, error) {
-	if srv.PublicIPv4 != "" {
-		return srv, nil
+// combineUserData assembles the cloud-init user-data delivered at server create:
+// the operator's base user-data (if any) plus the agent cloud-config. With no
+// base it returns the bare agent config; with a base it wraps both in a MIME
+// multipart archive cloud-init understands, so the agent injection composes with
+// whatever the operator supplied.
+func combineUserData(base []byte, agentCfg string) string {
+	if len(bytes.TrimSpace(base)) == 0 {
+		return agentCfg
 	}
-	res, err := r.api.GetServer(&instance.GetServerRequest{Zone: r.zone, ServerID: srv.ServerID}, scw.WithContext(ctx))
-	if err != nil {
-		return srv, fmt.Errorf("look up server %s: %w", srv.ServerID, err)
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	header := fmt.Sprintf("Content-Type: multipart/mixed; boundary=%q\nMIME-Version: 1.0\n\n", mw.Boundary())
+	addPart := func(ctype string, body []byte) {
+		h := textproto.MIMEHeader{}
+		h.Set("Content-Type", ctype)
+		h.Set("MIME-Version", "1.0")
+		pw, _ := mw.CreatePart(h)
+		_, _ = pw.Write(body)
 	}
-	if res == nil || res.Server == nil {
-		return srv, fmt.Errorf("server %s not found", srv.ServerID)
-	}
-	full := r.toServerInstance(res.Server)
-	if full.PublicIPv4 == "" {
-		return srv, fmt.Errorf("server %s has no public IPv4 for bootstrap delivery", srv.ServerID)
-	}
-	return full, nil
+	addPart(baseUserDataContentType(base), base)
+	addPart("text/cloud-config", []byte(agentCfg))
+	_ = mw.Close()
+	return header + buf.String()
 }
 
-func (r *scwReal) buildUserData(spec serverSpec) ([]byte, error) {
-	if len(spec.BaseUserData) == 0 {
-		return nil, nil
+func baseUserDataContentType(base []byte) string {
+	s := strings.TrimLeft(string(base), " \t\r\n")
+	switch {
+	case strings.HasPrefix(s, "#cloud-config"):
+		return "text/cloud-config"
+	case strings.HasPrefix(s, "#!"):
+		return "text/x-shellscript"
+	case strings.HasPrefix(s, "#cloud-boothook"):
+		return "text/cloud-boothook"
+	default:
+		return "text/cloud-config"
 	}
-	return spec.BaseUserData, nil
 }
 
 // createTags builds the tag set stamped on a created server: the managed marker

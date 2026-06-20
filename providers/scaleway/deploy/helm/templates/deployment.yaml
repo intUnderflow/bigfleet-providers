@@ -81,6 +81,15 @@ spec:
             - --tls-ca=/etc/bigfleet/tls/ca.crt
             {{- end }}
             {{- end }}
+            {{- if .Values.bootstrap.tls.secretName }}
+            - --bootstrap-addr={{ .Values.bootstrap.addr }}
+            - --bootstrap-tls-cert=/etc/bigfleet/bootstrap-tls/tls.crt
+            - --bootstrap-tls-key=/etc/bigfleet/bootstrap-tls/tls.key
+            - --bootstrap-ca=/etc/bigfleet/bootstrap-tls/ca.crt
+            {{- if .Values.bootstrap.endpoint }}
+            - --bootstrap-endpoint={{ .Values.bootstrap.endpoint }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -102,12 +111,12 @@ spec:
                   name: {{ .Values.credentials.secretName }}
                   key: SCW_DEFAULT_PROJECT_ID
             {{- end }}
-            {{- if .Values.agentToken.secretName }}
-            - name: BIGFLEET_AGENT_TOKEN
+            {{- if .Values.bootstrap.secret.secretName }}
+            - name: BIGFLEET_BOOTSTRAP_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.agentToken.secretName }}
-                  key: {{ .Values.agentToken.secretKey }}
+                  name: {{ .Values.bootstrap.secret.secretName }}
+                  key: {{ .Values.bootstrap.secret.secretKey }}
             {{- end }}
           ports:
             - name: grpc
@@ -116,6 +125,11 @@ spec:
             - name: metrics
               containerPort: {{ .Values.ports.metrics }}
               protocol: TCP
+            {{- if .Values.bootstrap.tls.secretName }}
+            - name: bootstrap
+              containerPort: {{ .Values.bootstrap.port }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -150,6 +164,11 @@ spec:
               mountPath: /etc/bigfleet/tls
               readOnly: true
             {{- end }}
+            {{- if .Values.bootstrap.tls.secretName }}
+            - name: bootstrap-tls
+              mountPath: /etc/bigfleet/bootstrap-tls
+              readOnly: true
+            {{- end }}
             {{- if .Values.state.enabled }}
             - name: state
               mountPath: {{ dir .Values.state.path }}
@@ -169,6 +188,11 @@ spec:
         - name: tls
           secret:
             secretName: {{ .Values.tls.secretName }}
+        {{- end }}
+        {{- if .Values.bootstrap.tls.secretName }}
+        - name: bootstrap-tls
+          secret:
+            secretName: {{ .Values.bootstrap.tls.secretName }}
         {{- end }}
         {{- if .Values.state.enabled }}
         - name: state

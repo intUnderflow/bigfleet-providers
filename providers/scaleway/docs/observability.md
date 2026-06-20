@@ -69,8 +69,9 @@ reporting `SERVING`/`NOT_SERVING` for gRPC-native health checking.
 
 Structured `slog` text on stderr. Every RPC is logged through the interceptor
 chain with its method, gRPC code, and duration; the mutating RPCs log at `INFO`,
-reads at `DEBUG`, and any error at `WARN`. **Neither the API key, the agent token,
-nor the opaque bootstrap blob is ever logged.** A panic in a handler is recovered,
+reads at `DEBUG`, and any error at `WARN`. **Neither the API key, the bootstrap
+secret (nor any derived per-machine token), nor the opaque bootstrap blob is ever
+logged.** A panic in a handler is recovered,
 counted (`bigfleet_scaleway_panics_total`), logged at `ERROR`, and turned into
 `codes.Internal` — it never crashes the process.
 

@@ -122,9 +122,12 @@ extension suite at it:
   --addr 127.0.0.1:9099 \
   --substrate instances \
   --image ubuntu_jammy \
-  --agent-token "$AGENT_TOKEN" \
+  --bootstrap-addr :9443 \
+  --bootstrap-endpoint https://127.0.0.1:9443 \
+  --bootstrap-tls-cert bootstrap.pem --bootstrap-tls-key bootstrap-key.pem \
   --offerings ./offerings.json
-# SCW_ACCESS_KEY / SCW_SECRET_KEY / SCW_DEFAULT_PROJECT_ID from the environment
+# SCW_ACCESS_KEY / SCW_SECRET_KEY / SCW_DEFAULT_PROJECT_ID and
+# BIGFLEET_BOOTSTRAP_SECRET from the environment
 
 # 2. In another shell, run the extension suite against that endpoint.
 go -C conformance test -tags=certify -count=1 ./suite/... -target=127.0.0.1:9099

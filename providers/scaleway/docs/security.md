@@ -1,6 +1,6 @@
 ---
 title: Security
-description: mTLS, the least-privilege Scaleway API key, and the agent bootstrap trust model for the BigFleet Scaleway provider.
+description: mTLS, the least-privilege Scaleway API key, and the on-host agent bootstrap channel trust model for the BigFleet Scaleway provider.
 sidebar:
   order: 5
   label: Security
@@ -72,28 +72,36 @@ profile. Consequences for security:
 
 The per-cluster bootstrap blob carries the cluster-join material, so its delivery
 must be authenticated both ways. Scaleway has no privileged in-guest command API
-the provider can lean on, so delivery runs through the **on-host agent** that the
-generic base `user_data` installs at first boot. The trust model:
+the provider can lean on, so delivery runs through a provider-served, mutually
+authenticated **bootstrap channel** that the **on-host agent** (installed by the
+generic base `user_data` at first boot) dials. This is the HTTP/agent analogue of
+the Hetzner provider's SSH host-key-pinned delivery. The trust model:
 
 - **Generic base `user_data` carries no secret.** The cloud-init baked in at
   `CreateServer` only installs and starts the agent. No cluster-specific material
   is present before a cluster is chosen, so a leaked image reveals nothing useful.
-- **Per-machine token (the analogue of host-key pinning).** At Configure the agent
-  fetches the blob over a **mutually-authenticated TLS** channel. The agent
-  presents a **per-machine token derived from the shared `--agent-token` + the
-  server id**; the provider verifies it before releasing the blob, so an attacker
-  who has neither the shared token nor that specific server's identity cannot
-  capture another machine's cluster-join material. The agent in turn verifies the
-  provider's TLS certificate, so an on-path (MITM) attacker cannot impersonate the
-  provider and feed a forged blob. Because the token is derived per machine, a
-  compromise of one node's token does not unlock any other node's blob.
+- **Per-machine HMAC token (the analogue of host-key pinning).** At Configure the
+  agent **dials** the provider's HTTPS bootstrap channel (`--bootstrap-addr`) and
+  long-polls for its own command; the provider authorises every request before any
+  command or blob is released. The agent presents a **per-machine bearer token =
+  `base64(HMAC-SHA256(--bootstrap-secret, machine_id))`**, which the provider
+  re-derives and compares in constant time, so an attacker who has neither the
+  HMAC secret nor that specific machine's identity cannot capture another
+  machine's cluster-join material. The agent in turn pins the provider's CA
+  (`--bootstrap-ca`, the server cert by default) and verifies it over TLS, so an
+  on-path (MITM) attacker cannot impersonate the provider and feed a forged blob.
+  The blob is released only to the authenticated, correct machine, and because the
+  token is per machine, compromising one node's token unlocks no other node's blob.
+  The token is re-derivable and never stored.
 - **The blob is opaque.** It is delivered to the agent and consumed verbatim; the
   provider never parses it, and it is never logged.
 
-For defence in depth, run the agent fetch over a **private/management network** the
-control plane trusts, and use a dedicated, high-entropy `--agent-token` stored as
-its own Secret (see [Credentials](/providers/scaleway/credentials/)) — never an
-operator's personal secret.
+For defence in depth, run the bootstrap channel over a **private/management
+network** the control plane trusts, and use a dedicated, high-entropy
+`--bootstrap-secret` stored as its own Secret (see
+[Credentials](/providers/scaleway/credentials/)) — never an operator's personal
+secret. Pin it (rather than the random default) so per-machine tokens survive a
+provider restart.
 
 ## Exposure
 

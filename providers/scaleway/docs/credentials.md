@@ -72,35 +72,61 @@ If you use an external secrets manager (External Secrets Operator, Vault, …),
 point it at the same Secret name/keys — the chart does not care how the Secret is
 populated, only that it exists.
 
-## 3. The agent token
+## 3. The bootstrap secret and channel TLS cert
 
-Configure delivers the per-cluster bootstrap blob to the on-host agent, which
-authenticates the fetch with a **per-machine token derived from a shared
-`--agent-token`** (see [Configuration](/providers/scaleway/configuration/)). Store
-that shared token as its own Secret:
+Configure delivers the per-cluster bootstrap blob to the on-host agent over the
+provider's mutually-authenticated TLS **bootstrap channel** (see
+[Configuration](/providers/scaleway/configuration/)). Two pieces of material back
+that channel, each stored as its own Secret.
+
+**The HMAC secret.** The provider authorises each agent with a per-machine bearer
+token = `base64(HMAC-SHA256(secret, machine_id))`, where `secret` is
+`--bootstrap-secret` (env `BIGFLEET_BOOTSTRAP_SECRET`). Pin it so tokens survive a
+provider restart; if it is left unset the provider generates a random one and
+already-issued tokens stop authenticating after a restart. Store it as a Secret:
 
 ```sh
-kubectl -n bigfleet create secret generic bigfleet-scaleway-agent \
-  --from-literal=agent-token="$(openssl rand -hex 32)"
+kubectl -n bigfleet create secret generic bigfleet-scaleway-bootstrap \
+  --from-literal=bootstrap-secret="$(openssl rand -hex 32)"
 ```
 
 ```yaml
-agentToken:
-  secretName: bigfleet-scaleway-agent
+bootstrap:
+  secret:
+    secretName: bigfleet-scaleway-bootstrap
+    secretKey: bootstrap-secret   # exposed as BIGFLEET_BOOTSTRAP_SECRET
 ```
 
 Use a dedicated, high-entropy value, not an operator's personal secret, and rotate
 it alongside the API key. The base image needs no copy of it — the per-machine
-token is derived at Configure time from this shared secret plus the server id.
+token is derived from this secret plus the machine id and baked into the server's
+`user_data` at create time.
+
+**The bootstrap channel TLS cert.** The channel serves a secret-bearing blob, so
+it is always TLS. Provide a `kubernetes.io/tls` Secret holding the server cert and
+key (`tls.crt`/`tls.key`) and, optionally, the CA the agent pins (`ca.crt`;
+defaults to the server cert). Its SAN must match `--bootstrap-endpoint`:
+
+```yaml
+bootstrap:
+  addr: ":9443"
+  endpoint: https://scaleway-fr-par.bigfleet.svc:9443
+  tls:
+    secretName: bigfleet-scaleway-bootstrap-tls   # tls.crt, tls.key, [ca.crt]
+```
+
+Ready-to-edit manifests for both Secrets ship in
+[`deploy/secret/scaleway-creds.example.yaml`](https://github.com/intUnderflow/bigfleet-providers/tree/main/providers/scaleway/deploy/secret)
+(`bigfleet-scaleway-bootstrap` and the TLS Secret `bigfleet-scaleway-bootstrap-tls`).
 
 ## 4. Rotate
 
-Both secrets are read by the running process — the API key on every Scaleway API
-call (so a rotated Secret is picked up on the **next process start**), the agent
-token at startup. To rotate without downtime:
+All of these are read by the running process — the API key on every Scaleway API
+call (so a rotated Secret is picked up on the **next process start**), the
+bootstrap secret and the channel TLS cert at startup. To rotate without downtime:
 
 1. Mint a new API key (`tofu taint scaleway_iam_api_key.provider && tofu apply`)
-   or a new agent token **before** revoking the old one.
+   or a new bootstrap secret / TLS cert **before** revoking the old one.
 2. Update the Secret (`kubectl create secret … --dry-run=client -o yaml |
    kubectl apply -f -`, or your secrets operator).
 3. Roll the Deployment (`kubectl -n bigfleet rollout restart deploy/…`) so the
@@ -120,11 +146,12 @@ step):
 | `CreateServer` | Create (Speculative → Idle) |
 | `DeleteServer` | Delete (Idle → Speculative) — Instances only |
 | `DescribeManaged` (label-filtered) | Describe / reconcile inventory |
-| `ApplyBootstrap` (Configure) | Record the binding + release the bootstrap blob to the agent |
-| `DrainNode` (Drain) | Cordon/drain + clear the binding |
+| `ApplyBootstrap` (Configure) | Deliver the blob to the agent over the bootstrap channel, wait for the ack, then tag the binding |
+| `DrainNode` (Drain) | Drain via the agent + clear the binding |
 | `PriceUSD` (Pricing) | `price_per_hour` (catalogue refresh) |
 | `DescribeCommercialTypeCapacities` (Catalogue) | `allocatable` (vCPU/memory/GPU) |
 
-The key is **never logged** — neither the access/secret key, the agent token, nor
-the opaque bootstrap blob appears in the structured logs. See
+The key is **never logged** — neither the access/secret key, the bootstrap secret
+(nor any derived per-machine token), nor the opaque bootstrap blob appears in the
+structured logs. See
 [Security](/providers/scaleway/security/) for the full trust model.

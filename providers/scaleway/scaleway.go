@@ -10,12 +10,12 @@ import "context"
 //
 // One client serves one substrate (Instances OR Elastic Metal) in one
 // zone/region, fixed at construction — one provider process per
-// region/backend pair, per the author guide. Three implementations ship:
+// region/backend pair, per the author guide. Two implementations ship:
 //
-//   - scwInstances (scwinstances.go) wraps the Instances API — the primary,
-//     cloud (ON_DEMAND) path: a deletable VM.
-//   - scwBaremetal (scwbaremetal.go) wraps the Elastic Metal / baremetal API —
-//     the BARE_METAL path: a free-pool server that is never torn down.
+//   - scwReal (scwreal.go) wraps the Scaleway Instances API — the primary, cloud
+//     (ON_DEMAND) path: a deletable VM. (The Elastic Metal / baremetal real path
+//     is not yet built into the binary; newSCWReal rejects it loudly so a
+//     bare-metal deployment never silently provisions Instances.)
 //   - scwFake (scwfake.go) is an in-memory simulator that backs unit tests and
 //     credential-free certification runs.
 type scwClient interface {
@@ -86,7 +86,6 @@ type serverInstance struct {
 	MachineID      string // bigfleet-machine-id tag
 	CommercialType string
 	Zone           string
-	PublicIPv4     string // for the agent-fetch / drain control channel
 	ClusterID      string // bigfleet-cluster tag, empty when unbound
 	// Running reports whether the server is in a live state (starting /
 	// running), as opposed to stopped / deleting / installing-failed.

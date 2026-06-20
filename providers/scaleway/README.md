@@ -35,7 +35,10 @@ make build-scaleway
                --substrate instances \
                --zone-a fr-par-1 \
                --image ubuntu_jammy \
-               --agent-token "$BIGFLEET_AGENT_TOKEN" \
+               --bootstrap-addr :9443 \
+               --bootstrap-endpoint https://scaleway-fr-par.bigfleet.svc:9443 \
+               --bootstrap-tls-cert bootstrap.pem --bootstrap-tls-key bootstrap-key.pem \
+               --bootstrap-secret "$BIGFLEET_BOOTSTRAP_SECRET" \
                --offerings ./offerings.json \
                --state /var/lib/bigfleet-scaleway/state.json \
                --tls-cert server.pem --tls-key server-key.pem --tls-ca client-ca.pem
@@ -66,7 +69,11 @@ backend — exactly how `make certify-scaleway` runs credential-free.
 | `--access-key` / `--secret-key` | Scaleway API key (or `SCW_ACCESS_KEY` / `SCW_SECRET_KEY`) |
 | `--project-id` | Scaleway project (or `SCW_DEFAULT_PROJECT_ID`) |
 | `--image` | base image for `CreateServer` (required for the real backend) |
-| `--agent-token` | shared secret authorising the on-host agent's bootstrap fetch |
+| `--bootstrap-addr` | address the provider serves the on-host agent bootstrap channel on (HTTPS, e.g. `:9443`); empty disables it |
+| `--bootstrap-endpoint` | externally-reachable URL of the channel, injected into server `user_data` so the agent can dial back |
+| `--bootstrap-tls-cert` / `--bootstrap-tls-key` | server cert/key (PEM) for the bootstrap channel |
+| `--bootstrap-ca` | CA bundle (PEM) the agent pins to verify the provider (default: the server cert) |
+| `--bootstrap-secret` | HMAC secret minting per-machine agent tokens (or `BIGFLEET_BOOTSTRAP_SECRET`; random if unset) |
 | `--eur-usd` | EUR→USD rate applied to Scaleway prices (default `1.08`) |
 | `--offerings` / `--seed-count` | offerings JSON file (or a default mix sized by seed-count) |
 | `--zone-a` / `--zone-b` | zones for the default offerings (`fr-par-1`/`nl-ams-1`) |
@@ -92,17 +99,26 @@ target cluster is only known when the shard binds it. So the provider splits
 launch from cluster-join:
 
 - **Create** (`CreateServer` + poweron, wait for `running`) launches the server
-  from `--image` with the generic, cluster-agnostic `--base-user-data` (which
-  installs a small on-host agent), and blocks until the server is running before
-  settling the machine to Idle.
-- **Configure** delivers the opaque per-cluster `bootstrap_blob` over a
-  **mutually-authenticated TLS** channel: the on-host agent fetches its OWN
-  machine-specific blob (authorised by a per-machine token derived from
-  `--agent-token` + the server id) and applies it. This is the HTTP/agent
-  analogue of the Hetzner provider's SSH host-key-pinned delivery, and delivers
-  the blob exactly once when the binding is established.
-- **Drain** cordons/drains the kubelet via the agent (honouring the grace period)
-  and clears the cluster binding back to Idle.
+  from `--image` with the generic, cluster-agnostic `--base-user-data`. At create
+  the provider also bakes a small cloud-config that hands the base image's on-host
+  agent its per-machine credentials: the provider's `--bootstrap-endpoint`, the
+  pinned CA (`--bootstrap-ca`), the machine id, and a per-machine bearer token. It
+  blocks until the server is running before settling the machine to Idle.
+- **Configure** delivers the opaque per-cluster `bootstrap_blob` over the
+  provider-served, **mutually-authenticated TLS** bootstrap channel
+  (`--bootstrap-addr`, endpoints `GET /v1/command` + `POST /v1/ack`). The on-host
+  agent **dials the provider** (no inbound path / public IP / SSH to the server),
+  long-polls for its OWN `configure` command, applies the blob, and acks. Mutual
+  auth: the agent verifies the provider via the pinned CA; the provider authorises
+  each agent with a per-machine bearer token =
+  `base64(HMAC-SHA256(--bootstrap-secret, machine_id))` (re-derivable, never
+  stored). Configure **blocks until the agent acks** — success → `CONFIGURED` (and
+  only then is the cluster-binding tag set); a failure ack or the Configure
+  transition timeout drives the machine to `FAILED`. This is the HTTP/agent
+  analogue of the Hetzner provider's SSH host-key-pinned delivery, and is
+  essentially identical to the DigitalOcean provider's bootstrap channel.
+- **Drain** sends a `drain` command (with a grace period) over the same channel,
+  then clears the cluster binding back to Idle.
 - **Delete** (Instances only) powers off + tears the server down; the slot
   returns to Speculative. Elastic Metal returns `codes.Unimplemented`.
 

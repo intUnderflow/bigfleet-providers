@@ -50,9 +50,14 @@ kubectl -n bigfleet create secret generic bigfleet-scaleway-creds \
   --from-literal=SCW_SECRET_KEY="$(tofu output -raw secret_key)" \
   --from-literal=SCW_DEFAULT_PROJECT_ID="$(tofu output -raw project_id)"
 
-# Shared token the on-host bootstrap agent uses during Configure:
-kubectl -n bigfleet create secret generic bigfleet-scaleway-agent \
-  --from-literal=agent-token="$(openssl rand -hex 32)"
+# HMAC secret minting the on-host agents' per-machine bootstrap tokens:
+kubectl -n bigfleet create secret generic bigfleet-scaleway-bootstrap \
+  --from-literal=bootstrap-secret="$(openssl rand -hex 32)"
+
+# TLS server cert for the provider's bootstrap channel (the agent pins ca.crt).
+# Use cert-manager or your CA; the SAN must match bootstrap.endpoint.
+kubectl -n bigfleet create secret tls bigfleet-scaleway-bootstrap-tls \
+  --cert=bootstrap.crt --key=bootstrap.key
 ```
 
 A ready-to-edit manifest for both Secrets is in
@@ -77,7 +82,9 @@ helm install scaleway-fr-par-1 providers/scaleway/deploy/helm \
   --set scaleway.image=ubuntu_jammy \
   --set scaleway.eurToUSD=1.08 \
   --set credentials.secretName=bigfleet-scaleway-creds \
-  --set agentToken.secretName=bigfleet-scaleway-agent \
+  --set bootstrap.secret.secretName=bigfleet-scaleway-bootstrap \
+  --set bootstrap.tls.secretName=bigfleet-scaleway-bootstrap-tls \
+  --set bootstrap.endpoint=https://scaleway-fr-par.bigfleet.svc:9443 \
   --set-file offerings.content=offerings.fr-par-1.json
 ```
 

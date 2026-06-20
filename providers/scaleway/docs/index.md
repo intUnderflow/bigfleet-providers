@@ -53,8 +53,9 @@ To run it against a real project, have these ready (the
   [Credentials](/providers/scaleway/credentials/).
 - **A base image** that joins your cluster (e.g. `ubuntu_jammy`). The provider
   creates a server from it with a generic pre-binding `user_data`, which installs
-  a small on-host agent; the agent then fetches the per-cluster bootstrap blob at
-  Configure over a mutually-authenticated TLS channel. The model is in
+  a small on-host agent; at Configure that agent dials the provider's
+  mutually-authenticated TLS bootstrap channel, receives the per-cluster bootstrap
+  blob, and applies it. The model is in
   [Configuration](/providers/scaleway/configuration/).
 
 Scaleway auth is **API-key based** — an IAM application, a least-privilege policy,

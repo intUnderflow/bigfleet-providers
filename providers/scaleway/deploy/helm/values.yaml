@@ -60,12 +60,31 @@ credentials:
 # --- bootstrap delivery (Configure) -----------------------------------------
 # Configure delivers the cluster-join bootstrap to the running host. Scaleway
 # user-data is consumed only at first boot, so the base image installs a small
-# on-host agent that fetches its OWN machine-specific blob over a
-# mutually-authenticated TLS channel. The agent presents a token derived from
-# this shared secret + its server id; provide the shared secret in a Secret.
-agentToken:
-  secretName: ""                # Secret holding the shared agent token (key below)
-  secretKey: agent-token
+# on-host agent that, on Configure, dials the provider's HTTPS bootstrap channel,
+# long-polls for its OWN machine-specific command, applies the blob, and acks.
+# The channel is mutually authenticated: the agent pins the provider's CA, and
+# the provider authorises each agent with a per-machine HMAC bearer token derived
+# from the shared --bootstrap-secret + the machine id. Required for the real
+# backend.
+bootstrap:
+  # --bootstrap-addr: in-pod HTTPS listen address for the agent channel.
+  addr: ":9443"
+  # --bootstrap-endpoint: externally-reachable URL the agent dials (injected into
+  # server user_data). REQUIRED for the real backend, e.g.
+  # https://scaleway-fr-par.bigfleet.svc:9443
+  endpoint: ""
+  # Service port exposing the agent channel.
+  port: 9443
+  # Secret holding the bootstrap-channel server cert: tls.crt, tls.key, and
+  # optionally ca.crt (the CA the agent pins; defaults to the server cert).
+  tls:
+    secretName: ""
+  # Secret holding the HMAC secret that mints per-machine agent tokens
+  # (key: bootstrap-secret), exposed as BIGFLEET_BOOTSTRAP_SECRET. Pin it so
+  # tokens survive a provider restart.
+  secret:
+    secretName: ""
+    secretKey: bootstrap-secret
 
 # --- offerings --------------------------------------------------------------
 # When content is set, it is rendered into a ConfigMap, mounted, and passed via

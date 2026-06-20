@@ -18,13 +18,16 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -65,9 +68,16 @@ func run() error {
 		image        = flag.String("image", "", "base image label/id for CreateServer (scaleway backend)")
 		eurUSD       = flag.Float64("eur-usd", defaultEURtoUSD, "EUR->USD conversion rate applied to Scaleway prices")
 		baseUserData = flag.String("base-user-data", "", "path to the generic pre-binding cloud-init baked in at server create (installs the on-host agent)")
-		agentToken   = flag.String("agent-token", "", "shared token the on-host agent presents to fetch its bootstrap blob (scaleway backend)")
 		priceRefresh = flag.Duration("price-refresh", 30*time.Minute, "price refresh interval (0 = off)")
 		reconcile    = flag.Duration("reconcile-interval", 2*time.Minute, "background Scaleway->inventory reconcile interval (0 = off)")
+
+		// On-host agent bootstrap channel (§4.5). Used only by the real backend.
+		bootstrapAddr     = flag.String("bootstrap-addr", "", "address to serve the on-host agent bootstrap channel (HTTPS); empty disables it")
+		bootstrapEndpoint = flag.String("bootstrap-endpoint", "", "externally-reachable URL of the bootstrap channel, injected into server user_data (e.g. https://scaleway-provider.example:9443)")
+		bootstrapCert     = flag.String("bootstrap-tls-cert", "", "server certificate (PEM) for the bootstrap channel")
+		bootstrapKey      = flag.String("bootstrap-tls-key", "", "server private key (PEM) for the bootstrap channel")
+		bootstrapCA       = flag.String("bootstrap-ca", "", "CA bundle (PEM) the on-host agent pins to verify the provider (default: the server cert)")
+		bootstrapSecret   = flag.String("bootstrap-secret", "", "HMAC secret minting per-machine agent tokens (or set BIGFLEET_BOOTSTRAP_SECRET; random if unset)")
 
 		metricsAddr = flag.String("metrics-addr", ":9090", "address for /metrics, /healthz, /readyz (empty = disabled)")
 		reflectFlag = flag.Bool("reflection", true, "register gRPC server reflection (for grpcurl/debugging)")
@@ -96,21 +106,38 @@ func run() error {
 		region:    *zoneA,
 	}
 
-	// Pick the Scaleway client.
+	// Pick the Scaleway client. The bootstrap agent channel is required by the
+	// real backend; build and serve it only when the real backend is selected (so
+	// the credential-free certification run on the fake never needs TLS material).
 	mode := resolveBackendMode(*backendSel, creds)
-	var client scwClient
+	var (
+		client  scwClient
+		bootSrv *http.Server
+	)
 	switch mode {
 	case "fake":
 		logger.Warn("using the IN-MEMORY fake Scaleway backend (dev / certification only) — no real servers will be created")
 		client = newSCWFake()
 	case "scaleway":
+		secret, err := resolveBootstrapSecret(*bootstrapSecret)
+		if err != nil {
+			return err
+		}
+		vault := newBootstrapVault(secret, logger)
+		caPEM, srv, err := startBootstrapChannel(*bootstrapAddr, *bootstrapCert, *bootstrapKey, *bootstrapCA, vault, logger)
+		if err != nil {
+			return err
+		}
+		bootSrv = srv
 		real, err := newSCWReal(scwRealConfig{
-			Creds:          creds,
-			CommercialKind: capacity,
-			Image:          *image,
-			Zone:           *zoneA,
-			EURtoUSD:       *eurUSD,
-			AgentToken:     *agentToken,
+			Creds:             creds,
+			CommercialKind:    capacity,
+			Image:             *image,
+			Zone:              *zoneA,
+			EURtoUSD:          *eurUSD,
+			Vault:             vault,
+			BootstrapEndpoint: *bootstrapEndpoint,
+			BootstrapCAPEM:    caPEM,
 		}, logger)
 		if err != nil {
 			return err
@@ -228,6 +255,11 @@ func run() error {
 			obs.setReady(false)
 			sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
 			obs.stop(sctx)
+			scancel()
+		}
+		if bootSrv != nil {
+			sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = bootSrv.Shutdown(sctx)
 			scancel()
 		}
 		gs.GracefulStop()
@@ -403,4 +435,56 @@ func serverCredentials(certFile, keyFile, caFile string) (credentials.TransportC
 		cfg.ClientAuth = tls.RequireAndVerifyClientCert
 	}
 	return credentials.NewTLS(cfg), nil
+}
+
+// startBootstrapChannel starts the HTTPS server that serves the on-host agent
+// control channel and returns the CA PEM the agent should pin (the explicit
+// --bootstrap-ca, else the server certificate). It requires a cert/key; the blob
+// it carries is a join secret, so the channel is always TLS.
+func startBootstrapChannel(addr, certFile, keyFile, caFile string, vault *bootstrapVault, logger *slog.Logger) (string, *http.Server, error) {
+	if addr == "" || certFile == "" || keyFile == "" {
+		return "", nil, fmt.Errorf("the scaleway backend requires --bootstrap-addr, --bootstrap-tls-cert and --bootstrap-tls-key (the bootstrap blob is a join secret and must travel over TLS)")
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return "", nil, fmt.Errorf("load bootstrap TLS keypair: %w", err)
+	}
+	caBytes, err := os.ReadFile(firstNonEmpty(caFile, certFile))
+	if err != nil {
+		return "", nil, fmt.Errorf("read bootstrap CA: %w", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/v1/", vault)
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+	}
+	go func() {
+		if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("bootstrap channel server", "err", err)
+		}
+	}()
+	logger.Info("serving on-host agent bootstrap channel", "addr", addr)
+	return string(caBytes), srv, nil
+}
+
+// resolveBootstrapSecret reads the HMAC secret from the flag, then the
+// environment, generating a random one (with a warning) if neither is set. A
+// random secret works within one process lifetime but invalidates already-issued
+// agent tokens on restart, so production should pin it.
+func resolveBootstrapSecret(flagVal string) ([]byte, error) {
+	if flagVal != "" {
+		return []byte(flagVal), nil
+	}
+	if env := os.Getenv("BIGFLEET_BOOTSTRAP_SECRET"); env != "" {
+		return []byte(env), nil
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return nil, fmt.Errorf("generate bootstrap secret: %w", err)
+	}
+	slog.Warn("no --bootstrap-secret / BIGFLEET_BOOTSTRAP_SECRET set: using a random secret (agent tokens won't survive a provider restart; pin one in production)")
+	return []byte(hex.EncodeToString(buf)), nil
 }

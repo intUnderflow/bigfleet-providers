@@ -53,10 +53,12 @@ The container exposes two ports:
 The chart lives at
 [`deploy/helm/`](https://github.com/intUnderflow/bigfleet-providers/tree/main/providers/scaleway/deploy/helm).
 It renders a `Deployment` (single replica, `Recreate` — one process per zone, owns
-its `--state`), a `Service` exposing the gRPC + metrics ports (with Prometheus
-scrape annotations), a `ServiceAccount`, a `ConfigMap` for the offerings (and
+its `--state`), a `Service` exposing the gRPC + metrics ports — plus the
+`bootstrap` port (`9443`) when the bootstrap channel is enabled — with Prometheus
+scrape annotations, a `ServiceAccount`, a `ConfigMap` for the offerings (and
 optional base user-data), and — when enabled — a `PersistentVolumeClaim` for
-durable state. It consumes the `SCW_*` credentials Secret you create in
+durable state. It consumes the `SCW_*` credentials Secret, plus the bootstrap HMAC
+and TLS Secrets, you create in
 [Credentials](/providers/scaleway/credentials/).
 
 Install it with a values file per zone:
@@ -90,9 +92,17 @@ scaleway:
 credentials:
   secretName: bigfleet-scaleway-creds
 
-# The Secret holding the shared agent token (key: agent-token).
-agentToken:
-  secretName: bigfleet-scaleway-agent
+# The Configure bootstrap channel: the on-host agent dials this endpoint, the
+# provider authorises it with a per-machine HMAC token and serves the blob over TLS.
+bootstrap:
+  endpoint: https://scaleway-fr-par.bigfleet.svc:9443
+  # kubernetes.io/tls Secret with tls.crt, tls.key, [ca.crt].
+  tls:
+    secretName: bigfleet-scaleway-bootstrap-tls
+  # Secret with the HMAC secret (key: bootstrap-secret), exposed as
+  # BIGFLEET_BOOTSTRAP_SECRET. Pin it so tokens survive a restart.
+  secret:
+    secretName: bigfleet-scaleway-bootstrap
 
 # Durable state on a PersistentVolume: fence marks, the idempotency map, and
 # bindings survive restarts. Without it the provider is in-memory only.
@@ -151,7 +161,11 @@ reference (defaults, semantics, the bootstrap model) is in
 |---|---|---|
 | `--image` | _(empty)_ | Base image label/id for `CreateServer`. **Required** for the scaleway backend |
 | `--base-user-data` | _(empty)_ | File with the generic pre-binding cloud-init baked in at create (installs the on-host agent) |
-| `--agent-token` | _(empty)_ | Shared token the on-host agent presents to fetch its bootstrap blob at Configure |
+| `--bootstrap-addr` | _(empty)_ | Address the provider serves the on-host agent bootstrap channel on (HTTPS, e.g. `:9443`). **Required** for the scaleway backend |
+| `--bootstrap-endpoint` | _(empty)_ | Externally-reachable URL of the channel, injected into server `user_data` so the agent can dial back. **Required** for the scaleway backend |
+| `--bootstrap-tls-cert` / `--bootstrap-tls-key` | _(empty)_ | Server cert/key (PEM) for the bootstrap channel. **Required** for the scaleway backend |
+| `--bootstrap-ca` | _(server cert)_ | CA bundle (PEM) the agent pins to verify the provider (defaults to the server cert) |
+| `--bootstrap-secret` | _(random)_ | HMAC secret minting per-machine agent tokens (or `BIGFLEET_BOOTSTRAP_SECRET`; random if unset — pin it in production) |
 | `--eur-usd` | `1.08` | EUR→USD conversion rate applied to Scaleway prices |
 
 **Offerings**

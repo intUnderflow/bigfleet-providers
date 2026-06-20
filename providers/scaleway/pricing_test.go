@@ -63,23 +63,3 @@ func TestSlotLabels_GPUAndArch(t *testing.T) {
 		t.Errorf("Arm64 type arch label = %v, want arm64", arm)
 	}
 }
-
-// The per-machine fetch token is machine-specific and authorises only that
-// machine (the bootstrap-delivery authorisation model).
-func TestBootstrap_PerMachineAuthorization(t *testing.T) {
-	d := newHTTPDeliverer("shared-secret", quietLogger())
-	tokA := d.fetchToken("srv-a")
-	tokB := d.fetchToken("srv-b")
-	if tokA == tokB {
-		t.Fatal("per-machine fetch tokens must differ")
-	}
-	if !d.authorize("srv-a", tokA) {
-		t.Error("correct token for srv-a must authorize")
-	}
-	if d.authorize("srv-a", tokB) {
-		t.Error("srv-b's token must NOT authorize a fetch for srv-a")
-	}
-	if d.authorize("srv-a", "garbage") {
-		t.Error("garbage token must not authorize")
-	}
-}

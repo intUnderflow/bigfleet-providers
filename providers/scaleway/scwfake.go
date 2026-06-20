@@ -50,7 +50,6 @@ func (f *scwFake) CreateServer(_ context.Context, spec serverSpec) (serverInstan
 		MachineID:      spec.MachineID,
 		CommercialType: spec.CommercialType,
 		Zone:           spec.Zone,
-		PublicIPv4:     fmt.Sprintf("51.158.%d.%d", f.seq/250%250+1, f.seq%250+1),
 		Running:        true,
 	}
 	f.servers[id] = srv

@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Every flag, the offerings JSON schema, the backend modes, and the create-then-bootstrap (on-host agent) model for the BigFleet Scaleway provider.
+description: Every flag, the offerings JSON schema, the backend modes, and the create-then-bootstrap (on-host agent control channel) model for the BigFleet Scaleway provider.
 sidebar:
   order: 2
   label: Configuration
@@ -36,7 +36,12 @@ sourced see [Pricing](/providers/scaleway/pricing-and-interruption/).
 | `--state` | _(empty)_ | Durable state file. Empty = in-memory only (state is lost on restart). |
 | `--image` | _(empty)_ | Base image label/id for `CreateServer`. **Required** for the `scaleway` backend. |
 | `--base-user-data` | _(empty)_ | Path to the generic, pre-binding cloud-init baked into `user_data` at create (installs the on-host agent). |
-| `--agent-token` | _(empty)_ | Shared token the on-host agent presents to fetch its bootstrap blob at Configure. See [Create then bootstrap](#create-then-bootstrap). |
+| `--bootstrap-addr` | _(empty)_ | Address the provider serves the on-host agent bootstrap channel on (HTTPS, e.g. `:9443`). Empty disables it; **required** for the `scaleway` backend. See [Create then bootstrap](#create-then-bootstrap). |
+| `--bootstrap-endpoint` | _(empty)_ | Externally-reachable URL of the bootstrap channel, injected into the server's `user_data` so the agent can dial back (e.g. `https://scaleway-fr-par.bigfleet.svc:9443`). **Required** for the `scaleway` backend. |
+| `--bootstrap-tls-cert` | _(empty)_ | Server certificate (PEM) for the bootstrap channel. **Required** for the `scaleway` backend (the blob is a join secret, so the channel is always TLS). |
+| `--bootstrap-tls-key` | _(empty)_ | Server private key (PEM) for the bootstrap channel. **Required** for the `scaleway` backend. |
+| `--bootstrap-ca` | _(server cert)_ | CA bundle (PEM) the on-host agent pins to verify the provider. Defaults to the server certificate. |
+| `--bootstrap-secret` | _(random)_ | HMAC secret minting each agent's per-machine bearer token. Falls back to `BIGFLEET_BOOTSTRAP_SECRET`; if neither is set a random one is generated (with a warning) and tokens won't survive a restart — pin it in production. |
 | `--eur-usd` | `1.08` | EUR→USD conversion rate applied to Scaleway's EUR prices. See [Pricing](/providers/scaleway/pricing-and-interruption/). |
 | `--price-refresh` | `30m` | Price refresh interval (never on the List hot path). |
 | `--reconcile-interval` | `2m` | Background Scaleway→inventory reconcile interval (`0` = off). |
@@ -54,11 +59,14 @@ A minimal production invocation:
   --substrate instances \
   --image ubuntu_jammy \
   --offerings /etc/bigfleet/offerings.json \
-  --agent-token "$AGENT_TOKEN" \
+  --bootstrap-addr :9443 \
+  --bootstrap-endpoint https://scaleway-fr-par.bigfleet.svc:9443 \
+  --bootstrap-tls-cert bootstrap.pem --bootstrap-tls-key bootstrap-key.pem \
   --state /var/lib/bigfleet-scaleway/state.json \
   --eur-usd 1.08 \
   --tls-cert server.pem --tls-key server-key.pem --tls-ca client-ca.pem
-# SCW_ACCESS_KEY / SCW_SECRET_KEY / SCW_DEFAULT_PROJECT_ID from the environment
+# SCW_ACCESS_KEY / SCW_SECRET_KEY / SCW_DEFAULT_PROJECT_ID and
+# BIGFLEET_BOOTSTRAP_SECRET from the environment
 ```
 
 ## Backend modes
@@ -172,24 +180,36 @@ only known when the shard binds it. The lifecycle:
 
 1. **Create → `CreateServer`.** Creates the server from `--image` with
    `--base-user-data` as the first-boot `user_data`, in the chosen zone, with the
-   BigFleet labels. The generic base `user_data` installs a small **on-host
-   agent** — it carries no cluster-specific material, so it is safe to bake at
-   create time before any cluster is chosen. The operation id makes the server
-   name stable, so a retried Create maps to the same server instead of creating a
-   second one. **Create blocks until the server is actually running** before
-   returning Idle, so the immediately following Configure never races a
-   still-initializing host.
-2. **Configure → agent fetch.** The provider records the cluster binding on the
-   server, then makes the opaque `bootstrap_blob` available to the on-host agent.
-   The agent fetches it over a **mutually-authenticated TLS** channel: it presents
-   a **per-machine token derived from `--agent-token` + the server id**, the
-   provider verifies it before releasing the blob, and the agent verifies the
-   provider's TLS certificate — so neither side trusts an impostor. The agent then
-   joins the node to the cluster. We wait for join to **succeed**, so a failed
-   bootstrap surfaces as `FAILED`.
-3. **Drain → agent.** Cordons and drains the kubelet (honouring
-   `grace_period_seconds`), then clears the cluster binding — leaving the server
-   running but unbound (Idle). `cluster` and `shard_metadata` are cleared.
+   BigFleet labels. The base `user_data` installs a small **on-host agent**; the
+   provider additionally bakes a generic cloud-config that hands that agent its
+   per-machine credentials — the provider's `--bootstrap-endpoint`, the pinned CA
+   (`--bootstrap-ca`), the machine id, and a per-machine bearer token. None of
+   this is cluster-specific, so it is safe to bake at create time before any
+   cluster is chosen. The operation id makes the server name stable, so a retried
+   Create maps to the same server instead of creating a second one. **Create
+   blocks until the server is actually running** before returning Idle, so the
+   immediately following Configure never races a still-initializing host.
+2. **Configure → agent control channel.** The provider serves a small HTTPS
+   **bootstrap channel** (`--bootstrap-addr`, e.g. `:9443`) with two endpoints —
+   `GET /v1/command` and `POST /v1/ack`. At Configure it queues the opaque
+   `bootstrap_blob` (as a `configure` command) for this machine. The on-host
+   agent **dials the provider** (the provider needs no inbound path to the server,
+   so no public IP / SSH is used): it long-polls `GET /v1/command?machine_id=…`
+   with `Authorization: Bearer <token>`, receives the command, applies the blob,
+   and POSTs the result to `/v1/ack`. Authentication is mutual — the agent
+   verifies the provider via the pinned CA (TLS), and the provider authorises each
+   agent with a per-machine bearer token =
+   `base64(HMAC-SHA256(--bootstrap-secret, machine_id))`, which is re-derivable
+   and never stored, so no other machine can read this one's blob. **Configure
+   blocks until the agent acks:** a success ack settles the machine to Configured
+   and only then sets the cluster-binding tag; a failure ack or the Configure
+   transition timeout (ctx cancellation) drives the machine to `FAILED` with
+   `last_error`. So we wait for join to **succeed**, and a failed bootstrap
+   surfaces as `FAILED`.
+3. **Drain → agent.** Sends a `drain` command (with `grace_period_seconds`) over
+   the same channel, waits for the agent's ack, then clears the cluster binding —
+   leaving the server running but unbound (Idle). `cluster` and `shard_metadata`
+   are cleared.
 4. **Delete → `DeleteServer`** (Instances only). Deletes the server; the slot
    returns to Speculative (host cleared). On Elastic Metal there is no `Delete`
    (the kit answers `Unimplemented`); a drained physical server returns to the
@@ -199,15 +219,24 @@ only known when the shard binds it. The lifecycle:
 
 Your base image must satisfy two things:
 
-- **Run the generic base `user_data`.** The `--base-user-data` cloud-init installs
-  and starts the on-host agent at first boot. The agent carries no cluster secret
-  — only the means to authenticate its later fetch.
-- **Let the agent join with the delivered blob.** At Configure the agent
-  authenticates with its per-machine token (derived from `--agent-token` + the
-  server id), fetches the opaque blob, and joins the cluster. The agent must exit
-  non-zero on failure (so a broken join becomes `FAILED`, not a falsely-Idle
-  node). The blob is opaque — the agent consumes it verbatim.
+- **Ship and start the on-host agent.** The `--base-user-data` cloud-init installs
+  and starts the agent at first boot. At create the provider writes the agent's
+  per-machine config (its `/etc/bigfleet-agent/config.json`: the provider
+  `--bootstrap-endpoint`, the pinned CA, the machine id, and the per-machine
+  bearer token), so the agent has everything it needs to reach the channel — but
+  no cluster secret.
+- **Dial the channel, apply the blob, ack.** On Configure the agent long-polls the
+  provider's `GET /v1/command` over TLS (pinning the provided CA, presenting its
+  bearer token), applies the opaque blob it receives, and POSTs the result to
+  `/v1/ack`. It must ack a **failure** (or simply not ack a success) when the join
+  fails, so a broken join becomes `FAILED` rather than a falsely-Idle node. The
+  blob is opaque — the agent consumes it verbatim.
 
-If you run without `--agent-token`, the agent cannot authenticate its fetch and
-the machine ends up `FAILED`. For a real deployment, always set `--agent-token`
-(stored as its own Secret — see [Credentials](/providers/scaleway/credentials/)).
+The provider serves this channel only on the real backend, and it **requires**
+`--bootstrap-addr`, `--bootstrap-tls-cert`/`--bootstrap-tls-key`, and
+`--bootstrap-endpoint`; without them the backend refuses to start. Pin
+`--bootstrap-secret` (or `BIGFLEET_BOOTSTRAP_SECRET`) in production so per-machine
+tokens survive a provider restart — if it is left to the random default, tokens
+minted before a restart stop authenticating and an in-flight Configure ends up
+`FAILED`. The secret and the bootstrap TLS cert are each stored as their own
+Secret — see [Credentials](/providers/scaleway/credentials/).

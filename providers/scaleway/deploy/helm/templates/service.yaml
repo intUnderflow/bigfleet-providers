@@ -27,3 +27,9 @@ spec:
       port: {{ .Values.ports.metrics }}
       targetPort: metrics
       protocol: TCP
+    {{- if .Values.bootstrap.tls.secretName }}
+    - name: bootstrap
+      port: {{ .Values.bootstrap.port }}
+      targetPort: bootstrap
+      protocol: TCP
+    {{- end }}

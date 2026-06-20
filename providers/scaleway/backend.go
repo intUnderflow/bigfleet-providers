@@ -278,9 +278,10 @@ func (b *scalewayBackend) resolveHost(ctx context.Context, m providerkit.Machine
 			return srv, nil
 		}
 	}
-	// Fall back to a minimal view; the real client can still address the server
-	// by id even if a transient describe missed it.
-	return serverInstance{ServerID: m.Host.Ref, CommercialType: m.InstanceType, Zone: m.Zone}, nil
+	// Fall back to a minimal view; the real client addresses the agent channel by
+	// machine id (which the kit always knows), so carry it through even when a
+	// transient describe missed the server.
+	return serverInstance{ServerID: m.Host.Ref, MachineID: m.ID, CommercialType: m.InstanceType, Zone: m.Zone}, nil
 }
 
 // pricePairs lists the distinct (commercialType, zone) pairs across offerings, to
