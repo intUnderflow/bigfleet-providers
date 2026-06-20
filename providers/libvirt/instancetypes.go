@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 )
 
 // vmCapacity is the hardware shape of an instance type: the vCPU count and the
@@ -101,49 +100,4 @@ func (c *instanceCatalog) names() []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-// parseInstanceType parses a "vcpu/memory" spec like "4/8Gi" into a vmCapacity,
-// used by --instance-types entries supplied as compact strings on the CLI. The
-// JSON form ({"vcpu":4,"memory_mib":8192}) is handled in config.go.
-func parseInstanceType(spec string) (vmCapacity, error) {
-	parts := strings.SplitN(spec, "/", 2)
-	if len(parts) != 2 {
-		return vmCapacity{}, fmt.Errorf("instance type spec %q must be vcpu/memory (e.g. 4/8Gi)", spec)
-	}
-	vcpu, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-	if err != nil || vcpu <= 0 {
-		return vmCapacity{}, fmt.Errorf("instance type spec %q: bad vcpu", spec)
-	}
-	mib, err := parseMemMiB(strings.TrimSpace(parts[1]))
-	if err != nil {
-		return vmCapacity{}, fmt.Errorf("instance type spec %q: %w", spec, err)
-	}
-	return vmCapacity{VCPU: vcpu, MemMiB: mib}, nil
-}
-
-// parseMemMiB parses a memory quantity (Gi/Mi suffix, or a bare MiB number)
-// into MiB.
-func parseMemMiB(s string) (int64, error) {
-	s = strings.TrimSpace(s)
-	switch {
-	case strings.HasSuffix(s, "Gi"):
-		n, err := strconv.ParseInt(strings.TrimSuffix(s, "Gi"), 10, 64)
-		if err != nil || n <= 0 {
-			return 0, fmt.Errorf("bad memory %q", s)
-		}
-		return gib(n), nil
-	case strings.HasSuffix(s, "Mi"):
-		n, err := strconv.ParseInt(strings.TrimSuffix(s, "Mi"), 10, 64)
-		if err != nil || n <= 0 {
-			return 0, fmt.Errorf("bad memory %q", s)
-		}
-		return n, nil
-	default:
-		n, err := strconv.ParseInt(s, 10, 64)
-		if err != nil || n <= 0 {
-			return 0, fmt.Errorf("bad memory %q (want Gi/Mi suffix or a MiB number)", s)
-		}
-		return n, nil
-	}
 }
