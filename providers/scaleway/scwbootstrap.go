@@ -69,11 +69,15 @@ type bootstrapAck struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// newCommandID mints a random per-enqueue command nonce.
-func newCommandID() string {
+// newCommandID mints a random per-enqueue command nonce. It surfaces an entropy
+// failure rather than returning an all-zero id, which would defeat the stale-ack
+// protection (a colliding id could let an ack complete the wrong command).
+func newCommandID() (string, error) {
 	var b [16]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate command id: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 // pendingCommand couples a queued command with the channel its Enqueue caller is
@@ -116,7 +120,11 @@ func (v *bootstrapVault) Enqueue(ctx context.Context, machineID string, cmd boot
 	if machineID == "" {
 		return fmt.Errorf("bootstrap: empty machine id")
 	}
-	cmd.CommandID = newCommandID()
+	id, err := newCommandID()
+	if err != nil {
+		return err
+	}
+	cmd.CommandID = id
 	pc := &pendingCommand{cmd: cmd, done: make(chan error, 1)}
 	v.mu.Lock()
 	if old := v.pending[machineID]; old != nil {

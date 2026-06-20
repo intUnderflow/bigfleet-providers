@@ -39,11 +39,14 @@ type scwCredentials struct {
 	region    string // a zone like fr-par-1; the region is derived from it
 }
 
-// complete reports whether enough credentials are present to talk to the real
-// Scaleway API. Used by `--scaleway-backend=auto` to fall back to the fake when
-// no credentials are configured (the credential-free certification path).
+// complete reports whether the full Scaleway credential set (access key, secret
+// key, and project id) is present to talk to the real API. Used by
+// `--scaleway-backend=auto` to fall back to the fake when credentials are not
+// fully configured (the credential-free certification path). The project id is
+// required up front so a missing it fails fast at startup rather than as a
+// confusing runtime CreateServer error.
 func (c scwCredentials) complete() bool {
-	return c.accessKey != "" && c.secretKey != ""
+	return c.accessKey != "" && c.secretKey != "" && c.projectID != ""
 }
 
 // scwRealConfig is the launch configuration for the production Scaleway client.
@@ -110,7 +113,7 @@ type scwReal struct {
 // bare-metal offering; the Instances path is fully implemented.
 func newSCWReal(cfg scwRealConfig, logger *slog.Logger) (scwClient, error) {
 	if !cfg.Creds.complete() {
-		return nil, fmt.Errorf("scaleway: access key + secret key are required for the scaleway backend")
+		return nil, fmt.Errorf("scaleway: access key, secret key, and project id (SCW_ACCESS_KEY / SCW_SECRET_KEY / SCW_DEFAULT_PROJECT_ID) are all required for the scaleway backend")
 	}
 	if cfg.Image == "" {
 		return nil, fmt.Errorf("scaleway: --image is required for the scaleway backend")
@@ -174,7 +177,10 @@ func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 	// user_data is consumed only at first boot.
 	token := r.vault.Token(spec.MachineID)
 	agentCfg := agentCloudConfig(r.cfg.BootstrapEndpoint, r.cfg.BootstrapCAPEM, spec.MachineID, token)
-	userData := combineUserData(spec.BaseUserData, agentCfg)
+	userData, err := combineUserData(spec.BaseUserData, agentCfg)
+	if err != nil {
+		return serverInstance{}, err
+	}
 
 	res, err := r.api.CreateServer(&instance.CreateServerRequest{
 		Zone:           r.zone,
@@ -536,24 +542,34 @@ func (r *scwReal) updateTags(ctx context.Context, serverID string, mutate func([
 // base it returns the bare agent config; with a base it wraps both in a MIME
 // multipart archive cloud-init understands, so the agent injection composes with
 // whatever the operator supplied.
-func combineUserData(base []byte, agentCfg string) string {
+func combineUserData(base []byte, agentCfg string) (string, error) {
 	if len(bytes.TrimSpace(base)) == 0 {
-		return agentCfg
+		return agentCfg, nil
 	}
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	header := fmt.Sprintf("Content-Type: multipart/mixed; boundary=%q\nMIME-Version: 1.0\n\n", mw.Boundary())
-	addPart := func(ctype string, body []byte) {
+	addPart := func(ctype string, body []byte) error {
 		h := textproto.MIMEHeader{}
 		h.Set("Content-Type", ctype)
 		h.Set("MIME-Version", "1.0")
-		pw, _ := mw.CreatePart(h)
-		_, _ = pw.Write(body)
+		pw, err := mw.CreatePart(h)
+		if err != nil {
+			return err
+		}
+		_, err = pw.Write(body)
+		return err
 	}
-	addPart(baseUserDataContentType(base), base)
-	addPart("text/cloud-config", []byte(agentCfg))
-	_ = mw.Close()
-	return header + buf.String()
+	if err := addPart(baseUserDataContentType(base), base); err != nil {
+		return "", fmt.Errorf("assemble user-data: %w", err)
+	}
+	if err := addPart("text/cloud-config", []byte(agentCfg)); err != nil {
+		return "", fmt.Errorf("assemble user-data: %w", err)
+	}
+	if err := mw.Close(); err != nil {
+		return "", fmt.Errorf("assemble user-data: %w", err)
+	}
+	return header + buf.String(), nil
 }
 
 func baseUserDataContentType(base []byte) string {

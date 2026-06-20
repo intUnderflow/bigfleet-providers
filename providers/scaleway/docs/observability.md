@@ -56,9 +56,12 @@ Two distinct probes, served on `--metrics-addr`:
 - **`/healthz` (liveness)** — always `200 ok` once the HTTP server is up. Wire it
   to a liveness probe; a failure means the process is wedged and should be
   restarted.
-- **`/readyz` (readiness)** — `200 ready` only after the gRPC server is serving and
-  the price cache is warm; `503 not ready` during startup and shutdown. Wire it to
-  a readiness probe so BigFleet only dials the Service once the provider can serve.
+- **`/readyz` (readiness)** — `200 ready` once the gRPC server is serving;
+  `503 not ready` during startup and shutdown. A best-effort price/spec warm-up
+  runs before readiness is signalled, but readiness is **not** gated on its
+  success — a catalogue outage or pricing-auth hiccup leaves the provider ready
+  and serving (it falls back to the pinned price/spec tables). Wire it to a
+  readiness probe so BigFleet only dials the Service once the provider can serve.
   On `SIGTERM` it flips to `not ready` first, so traffic drains before the gRPC
   server stops.
 
