@@ -32,7 +32,7 @@ The provider needs exactly one predefined role on the target project:
 | `roles/iam.serviceAccountUser` on the **instance** SA | lets the provider launch instances that *run as* `--instance-service-account` | `Create` (only when `--instance-service-account` is set) |
 
 That's the least-privilege set. `instanceAdmin.v1` already covers
-`compute.instances.{insert,delete,reset,setMetadata,setLabels,get,list}` and
+`compute.instances.{insert,delete,reset,setMetadata,get,list}` and
 `compute.machineTypes.get`. Map each grant to the call that needs it, and grant
 nothing more. (If you later add live Cloud Billing pricing, add a billing viewer
 role then — this provider uses a pinned price table, so it is not needed.)
@@ -131,8 +131,7 @@ Every GCE call the provider makes, and the role permission it needs:
 | `Instances.Insert` | `compute.instances.create` (+ `iam.serviceAccounts.actAs` for the node SA) | Create |
 | `Instances.Delete` | `compute.instances.delete` | Delete |
 | `Instances.AggregatedList` | `compute.instances.list` | Describe / reconcile |
-| `Instances.SetMetadata` + `Reset` | `compute.instances.setMetadata`, `compute.instances.reset` | Configure / Drain |
-| `Instances.SetLabels` | `compute.instances.setLabels` | Configure / Drain (binding label) |
+| `Instances.SetMetadata` + `Reset` | `compute.instances.setMetadata`, `compute.instances.reset` | Configure / Drain (bootstrap blob + cluster binding live in metadata) |
 | `MachineTypes.Get` | `compute.machineTypes.get` | `allocatable` resolution |
 
 No credential is ever logged. See [Security](/providers/gcp/security/) for the

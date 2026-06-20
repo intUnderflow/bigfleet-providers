@@ -4,7 +4,7 @@
 # with no key file (the GKE analogue of AWS IRSA).
 #
 # The role mirrors the credentials doc page and the actions the code calls:
-#   compute.instances.{insert,delete,reset,setMetadata,setLabels,get,list} and
+#   compute.instances.{insert,delete,reset,setMetadata,get,list} and
 #   compute.machineTypes.get  → all covered by roles/compute.instanceAdmin.v1
 #   iam.serviceAccounts.actAs  → roles/iam.serviceAccountUser on the NODE SA
 #     (only needed when --instance-service-account is set).

@@ -16,17 +16,20 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// BigFleet instance-label keys. bigfleet-managed marks our instances so
-// DescribeManaged never touches anything else; the rest let inventory and
-// bindings be recovered from GCE alone. GCE label VALUES are constrained
-// (lowercase letters, digits, '-' and '_', max 63 chars), so the (slash-bearing,
-// mixed-case) machine id and cluster id are base32-encoded into their values and
-// decoded back on read.
+// BigFleet recovery keys. bigfleet-managed is a LABEL that marks our instances
+// so DescribeManaged (an AggregatedList label filter) never touches anything
+// else; bigfleet-capacity is a short, label-safe LABEL. The machine id and
+// cluster id, by contrast, are arbitrary-length, mixed-case strings (a slotID
+// like "gcp-us-central1/Spot/n2-standard-8/us-central1-a/000" is ~56 bytes) that
+// would overflow GCE's 63-char label-VALUE limit, so they are stored as instance
+// METADATA — which has no length limit and accepts arbitrary bytes — and
+// round-trip verbatim.
 const (
-	labelManaged   = "bigfleet-managed"
-	labelMachineID = "bigfleet-machine-id"
-	labelCluster   = "bigfleet-cluster"
-	labelCapacity  = "bigfleet-capacity"
+	labelManaged  = "bigfleet-managed"  // label: marks our instances for the AggregatedList filter
+	labelCapacity = "bigfleet-capacity" // label: canonical capacity string (short, label-safe)
+
+	metaMachineID = "bigfleet-machine-id" // metadata: the BigFleet machine id (verbatim)
+	metaCluster   = "bigfleet-cluster"    // metadata: the bound cluster id (verbatim), absent when unbound
 )
 
 // startupScriptKey is the GCE metadata key whose value is run on every boot.
@@ -34,30 +37,10 @@ const (
 // removes it so the node will not rejoin on a future boot.
 const startupScriptKey = "startup-script"
 
-// labelEncoding encodes an arbitrary string into a GCE-label-safe value
-// (lowercase base32 without padding → only [a-z2-7], well within the value
-// charset). Round-trips any id up to ~39 bytes within the 63-char label limit;
-// longer ids rely on the FileStore for restart recovery (the documented primary
-// path).
-var labelEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
-
-func encodeLabel(s string) string {
-	if s == "" {
-		return ""
-	}
-	return strings.ToLower(labelEncoding.EncodeToString([]byte(s)))
-}
-
-func decodeLabel(v string) string {
-	if v == "" {
-		return ""
-	}
-	b, err := labelEncoding.DecodeString(strings.ToUpper(v))
-	if err != nil {
-		return ""
-	}
-	return string(b)
-}
+// nameEncoding renders an opaque token into a DNS-safe instance-name suffix
+// (lowercase base32 without padding → only [a-z2-7]). Used by instanceName so a
+// retried Insert maps to the same instance.
+var nameEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 // gceRealConfig is the launch configuration for the production GCE client.
 type gceRealConfig struct {
@@ -145,9 +128,8 @@ func (r *gceReal) Insert(ctx context.Context, spec instanceSpec) (gceInstance, e
 		Name:        proto.String(name),
 		MachineType: proto.String(fmt.Sprintf("zones/%s/machineTypes/%s", spec.Zone, spec.MachineType)),
 		Labels: map[string]string{
-			labelManaged:   "true",
-			labelMachineID: encodeLabel(spec.MachineID),
-			labelCapacity:  spec.Capacity,
+			labelManaged:  "true",
+			labelCapacity: spec.Capacity,
 		},
 		Disks: []*computepb.AttachedDisk{{
 			Boot:       proto.Bool(true),
@@ -159,11 +141,17 @@ func (r *gceReal) Insert(ctx context.Context, spec instanceSpec) (gceInstance, e
 		}},
 		NetworkInterfaces: []*computepb.NetworkInterface{r.networkInterface()},
 	}
+	// The machine id and (later) cluster id live in metadata, not labels — they
+	// exceed the 63-char label-value limit. The base startup script rides along.
+	var items []*computepb.Items
+	if spec.MachineID != "" {
+		items = append(items, metadataItem(metaMachineID, spec.MachineID))
+	}
 	if len(spec.BaseStartupScript) > 0 {
-		res.Metadata = &computepb.Metadata{Items: []*computepb.Items{{
-			Key:   proto.String(startupScriptKey),
-			Value: proto.String(string(spec.BaseStartupScript)),
-		}}}
+		items = append(items, metadataItem(startupScriptKey, string(spec.BaseStartupScript)))
+	}
+	if len(items) > 0 {
+		res.Metadata = &computepb.Metadata{Items: items}
 	}
 	if spec.Spot {
 		res.Scheduling = &computepb.Scheduling{
@@ -205,12 +193,19 @@ func (r *gceReal) waitRunning(ctx context.Context, zone, name string) (gceInstan
 	ticker := time.NewTicker(r.cfg.PollInterval)
 	defer ticker.Stop()
 	for {
-		inst, err := r.getInstance(ctx, zone, name)
+		inst, err := r.instances.Get(ctx, &computepb.GetInstanceRequest{
+			Project:  r.cfg.Project,
+			Zone:     zone,
+			Instance: name,
+		})
 		if err != nil {
-			return gceInstance{}, err
+			return gceInstance{}, fmt.Errorf("get instance %s: %w", name, err)
 		}
-		if inst.Running {
-			return inst, nil
+		// Block until the instance is actually RUNNING — not merely a live state
+		// like PROVISIONING/STAGING — so the immediately-following Configure does
+		// not race a still-booting host.
+		if inst.GetStatus() == "RUNNING" {
+			return r.toGCEInstance(inst), nil
 		}
 		select {
 		case <-ctx.Done():
@@ -279,9 +274,14 @@ func (r *gceReal) ApplyBootstrap(ctx context.Context, inst gceInstance, clusterI
 	if err != nil {
 		return fmt.Errorf("configure: get instance %s: %w", inst.Name, err)
 	}
-	// Overwrite the startup-script with the cluster bootstrap blob, preserving any
-	// other metadata items, then reset so the script runs and the node joins.
+	// Overwrite the startup-script with the cluster bootstrap blob and record the
+	// cluster binding, preserving any other metadata items, in a single
+	// SetMetadata; then reset so the script runs and the node joins. The binding
+	// is written together with the blob, so a failed Configure (which fails before
+	// or during this call) never leaves an instance recorded as bound to a cluster
+	// it never joined.
 	md := setMetadataItem(live.GetMetadata(), startupScriptKey, string(bootstrap))
+	md = setMetadataItem(md, metaCluster, clusterID)
 	if err := r.setMetadata(ctx, inst.Zone, inst.Name, md); err != nil {
 		return fmt.Errorf("configure: set metadata %s: %w", inst.Name, err)
 	}
@@ -296,11 +296,6 @@ func (r *gceReal) ApplyBootstrap(ctx context.Context, inst gceInstance, clusterI
 	if err := op.Wait(ctx); err != nil {
 		return fmt.Errorf("configure: wait for reset %s: %w", inst.Name, err)
 	}
-	// Record the binding label only AFTER the bootstrap was applied, so a failed
-	// Configure never leaves an instance mislabelled as bound to a cluster.
-	if err := r.setLabel(ctx, inst.Zone, inst.Name, labelCluster, encodeLabel(clusterID)); err != nil {
-		return fmt.Errorf("configure: label cluster binding: %w", err)
-	}
 	return nil
 }
 
@@ -313,14 +308,16 @@ func (r *gceReal) DrainNode(ctx context.Context, inst gceInstance, _ int64) erro
 	if err != nil {
 		return fmt.Errorf("drain: get instance %s: %w", inst.Name, err)
 	}
-	// Strip the cluster bootstrap so the node will not rejoin on a future boot,
-	// leaving the instance running but unbound. BigFleet has already cordoned and
-	// drained the pods at the k8s layer; this is the machine-side cleanup.
+	// Strip the cluster bootstrap (so the node will not rejoin on a future boot)
+	// and the binding record, leaving the instance running but unbound. BigFleet
+	// has already cordoned and drained the pods at the k8s layer; this is the
+	// machine-side cleanup.
 	md := removeMetadataItem(live.GetMetadata(), startupScriptKey)
+	md = removeMetadataItem(md, metaCluster)
 	if err := r.setMetadata(ctx, inst.Zone, inst.Name, md); err != nil {
 		return fmt.Errorf("drain: set metadata %s: %w", inst.Name, err)
 	}
-	return r.clearLabel(ctx, inst.Zone, inst.Name, labelCluster)
+	return nil
 }
 
 func (r *gceReal) DescribeMachineTypeCapacities(ctx context.Context, refs []machineTypeRef) (map[string]machineCapacity, error) {
@@ -368,12 +365,13 @@ func (r *gceReal) getInstance(ctx context.Context, zone, name string) (gceInstan
 }
 
 func (r *gceReal) toGCEInstance(inst *computepb.Instance) gceInstance {
+	md := inst.GetMetadata()
 	out := gceInstance{
 		Name:        inst.GetName(),
 		Zone:        lastPathSegment(inst.GetZone()),
 		MachineType: lastPathSegment(inst.GetMachineType()),
-		MachineID:   decodeLabel(inst.GetLabels()[labelMachineID]),
-		ClusterID:   decodeLabel(inst.GetLabels()[labelCluster]),
+		MachineID:   metadataValue(md, metaMachineID),
+		ClusterID:   metadataValue(md, metaCluster),
 		Capacity:    inst.GetLabels()[labelCapacity],
 		SelfLink:    inst.GetSelfLink(),
 		Running:     isRunningStatus(inst.GetStatus()),
@@ -397,45 +395,19 @@ func (r *gceReal) setMetadata(ctx context.Context, zone, name string, md *comput
 	return op.Wait(ctx)
 }
 
-func (r *gceReal) setLabel(ctx context.Context, zone, name, key, value string) error {
-	return r.updateLabels(ctx, zone, name, func(labels map[string]string) {
-		labels[key] = value
-	})
+// metadataItem builds a single metadata key/value item.
+func metadataItem(key, value string) *computepb.Items {
+	return &computepb.Items{Key: proto.String(key), Value: proto.String(value)}
 }
 
-func (r *gceReal) clearLabel(ctx context.Context, zone, name, key string) error {
-	return r.updateLabels(ctx, zone, name, func(labels map[string]string) {
-		delete(labels, key)
-	})
-}
-
-func (r *gceReal) updateLabels(ctx context.Context, zone, name string, mutate func(map[string]string)) error {
-	live, err := r.instances.Get(ctx, &computepb.GetInstanceRequest{
-		Project:  r.cfg.Project,
-		Zone:     zone,
-		Instance: name,
-	})
-	if err != nil {
-		return err
+// metadataValue returns the value of a metadata item by key, or "" if absent.
+func metadataValue(md *computepb.Metadata, key string) string {
+	for _, it := range md.GetItems() {
+		if it.GetKey() == key {
+			return it.GetValue()
+		}
 	}
-	labels := map[string]string{}
-	for k, v := range live.GetLabels() {
-		labels[k] = v
-	}
-	mutate(labels)
-	op, err := r.instances.SetLabels(ctx, &computepb.SetLabelsInstanceRequest{
-		Project:  r.cfg.Project,
-		Zone:     zone,
-		Instance: name,
-		InstancesSetLabelsRequestResource: &computepb.InstancesSetLabelsRequest{
-			LabelFingerprint: proto.String(live.GetLabelFingerprint()),
-			Labels:           labels,
-		},
-	})
-	if err != nil {
-		return err
-	}
-	return op.Wait(ctx)
+	return ""
 }
 
 // setMetadataItem returns a copy of md with key set to value (preserving the
@@ -479,7 +451,7 @@ func instanceName(spec instanceSpec) string {
 	if token == "" {
 		token = spec.MachineID
 	}
-	name := "bf-" + strings.ToLower(labelEncoding.EncodeToString([]byte(token)))
+	name := "bf-" + strings.ToLower(nameEncoding.EncodeToString([]byte(token)))
 	if len(name) > 63 {
 		name = name[:63]
 	}

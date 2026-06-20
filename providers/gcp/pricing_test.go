@@ -64,10 +64,19 @@ func TestMachineTypeResolver_AllocatableDensity(t *testing.T) {
 	}
 }
 
-func TestLabelEncode_RoundTrip(t *testing.T) {
-	for _, id := range []string{"gcp-test/Spot/n2-standard-8/us-central1-a/000", "simple", ""} {
-		if got := decodeLabel(encodeLabel(id)); got != id {
-			t.Errorf("round-trip %q -> %q", id, got)
-		}
+func TestInstanceName_StableAndDNSSafe(t *testing.T) {
+	// A retried Insert (same operation id) must derive the same instance name, so
+	// a transport retry maps to the existing instance instead of a duplicate.
+	spec := instanceSpec{MachineID: "gcp-test/Spot/n2-standard-8/us-central1-a/000", IdempotencyToken: "op-42"}
+	a, b := instanceName(spec), instanceName(spec)
+	if a != b {
+		t.Errorf("instanceName not stable: %q vs %q", a, b)
+	}
+	if len(a) > 63 || a[:3] != "bf-" {
+		t.Errorf("instanceName %q is not a valid GCE name (<=63, bf- prefix)", a)
+	}
+	// A fresh operation id yields a distinct name (re-Create after Delete).
+	if c := instanceName(instanceSpec{MachineID: spec.MachineID, IdempotencyToken: "op-43"}); c == a {
+		t.Errorf("distinct operation ids must yield distinct names; both %q", a)
 	}
 }

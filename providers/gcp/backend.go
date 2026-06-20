@@ -129,10 +129,16 @@ func (b *gcpBackend) Describe(ctx context.Context) ([]providerkit.Instance, erro
 	bySlot := make(map[string]gceInstance, len(managed))
 	var orphans []gceInstance
 	for _, inst := range managed {
+		// Only a live instance is a reachable host; a STOPPING/TERMINATED/
+		// SUSPENDED managed instance is releasing its slot, so skip it and let the
+		// slot return to Speculative (an Idle machine must carry a reachable host).
+		if !inst.Running {
+			continue
+		}
 		switch {
 		case inst.MachineID != "":
-			bySlot[inst.MachineID] = inst // owns its slot, running or not
-		case inst.Running:
+			bySlot[inst.MachineID] = inst // a running, machine-id-labelled instance owns its slot
+		default:
 			orphans = append(orphans, inst) // managed + running, but unlabelled
 		}
 	}
