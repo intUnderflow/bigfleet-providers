@@ -229,8 +229,9 @@ func TestOffering_CapacityType(t *testing.T) {
 	if ct, err := (offering{Capacity: "bare_metal"}).capacityType(); err != nil || ct != providerkit.CapacityBareMetal {
 		t.Errorf("bare_metal: got (%v, %v), want (BareMetal, nil)", ct, err)
 	}
-	// spot has no meaning for a local libvirt host and must be rejected.
-	for _, bad := range []string{"spot", "nonsense"} {
+	// spot and reserved have no meaning for a local libvirt host and must be
+	// rejected (no preemption market, no reservation/commitment billing).
+	for _, bad := range []string{"spot", "reserved", "nonsense"} {
 		if _, err := (offering{Capacity: bad}).capacityType(); err == nil {
 			t.Errorf("expected capacity_type %q to be rejected", bad)
 		}

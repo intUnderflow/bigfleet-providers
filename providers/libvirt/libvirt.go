@@ -36,10 +36,9 @@ type libvirtClient interface {
 	DescribeManaged(ctx context.Context) ([]domainInstance, error)
 
 	// ApplyBootstrap binds a running domain to a cluster and delivers the opaque
-	// bootstrap blob by regenerating the domain's cloud-init NoCloud datasource
-	// (user-data = the blob) and applying it via the qemu guest agent (or a
-	// datasource swap + reboot). The blob is the kubelet join data — never parse
-	// it.
+	// bootstrap blob by writing it into the guest and running the in-image
+	// bootstrap hook via the qemu guest agent (guest-exec), waiting for the hook
+	// to complete. The blob is the kubelet join data — never parse it.
 	ApplyBootstrap(ctx context.Context, dom domainInstance, clusterID string, bootstrap []byte) error
 
 	// DrainNode gracefully drains the kubelet off a running domain, honouring the

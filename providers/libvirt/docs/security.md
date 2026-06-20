@@ -74,10 +74,12 @@ Authorisation to libvirt is the **connection** — there is no token. Consequenc
 Configure and Drain reach the guest through the **qemu guest agent** channel — no
 SSH into the VM, no inbound port on the guest. The model:
 
-- The provider regenerates the domain's cloud-init NoCloud datasource with the
-  opaque `bootstrap_blob` as user-data, and runs the image's hook
-  (`/opt/bigfleet/bootstrap <cluster-id>`) via `guest-exec`. The blob is delivered
-  base64-encoded and decoded in-guest; the provider **never parses it**.
+- The provider writes the opaque `bootstrap_blob` into the guest (to
+  `/opt/bigfleet/bootstrap.blob`) and runs the image's hook
+  (`/opt/bigfleet/bootstrap <cluster-id>`) via the guest agent's `guest-exec`,
+  polling `guest-exec-status` until the hook exits and surfacing a non-zero exit
+  as `FAILED`. The blob is delivered base64-encoded and decoded in-guest; the
+  provider **never parses it**.
 - The cluster binding is recorded in the domain's libvirt metadata only **after**
   the bootstrap hook succeeds, so a failed Configure never leaves a domain tagged
   as bound to a cluster it never joined.

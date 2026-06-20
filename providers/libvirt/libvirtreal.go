@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base32"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"log/slog"
@@ -45,8 +47,6 @@ type libvirtRealConfig struct {
 	// OverlayGiB caps the overlay disk's logical capacity (thin; only written
 	// blocks consume space).
 	OverlayGiB int64
-	// ConnectTimeout bounds the initial connect to each host.
-	ConnectTimeout time.Duration
 }
 
 func (c *libvirtRealConfig) withDefaults() {
@@ -58,9 +58,6 @@ func (c *libvirtRealConfig) withDefaults() {
 	}
 	if c.OverlayGiB <= 0 {
 		c.OverlayGiB = 40
-	}
-	if c.ConnectTimeout <= 0 {
-		c.ConnectTimeout = 20 * time.Second
 	}
 }
 
@@ -76,8 +73,9 @@ type hostConnection struct {
 // libvirtReal is the production libvirtClient, backed by the pure-Go go-libvirt
 // (CGO-free, so the distroless/static image builds). Inventory and bindings are
 // recovered from each domain's bigfleet metadata element; the cluster-specific
-// bootstrap is delivered by regenerating the cloud-init NoCloud datasource and
-// running the in-guest bootstrap via the qemu guest agent.
+// bootstrap is delivered by writing the opaque blob into the guest and running
+// the in-image bootstrap hook via the qemu guest agent (guest-exec), waiting for
+// it to complete.
 type libvirtReal struct {
 	cfg    libvirtRealConfig
 	logger *slog.Logger
@@ -97,7 +95,7 @@ func newLibvirtReal(cfg libvirtRealConfig, logger *slog.Logger) (*libvirtReal, e
 		if _, dup := r.conns[hc.Zone]; dup {
 			return nil, fmt.Errorf("libvirt: duplicate zone %q in connections", hc.Zone)
 		}
-		conn, err := dialLibvirt(hc.URI, cfg.ConnectTimeout)
+		conn, err := dialLibvirt(hc.URI)
 		if err != nil {
 			return nil, fmt.Errorf("libvirt: connect zone %q (%s): %w", hc.Zone, hc.URI, err)
 		}
@@ -108,7 +106,7 @@ func newLibvirtReal(cfg libvirtRealConfig, logger *slog.Logger) (*libvirtReal, e
 
 // dialLibvirt connects to a libvirt URI (qemu:///system, qemu+ssh://…,
 // qemu+tls://…) using go-libvirt's URI dialer.
-func dialLibvirt(uri string, _ time.Duration) (*libvirt.Libvirt, error) {
+func dialLibvirt(uri string) (*libvirt.Libvirt, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
 		return nil, fmt.Errorf("parse libvirt uri %q: %w", uri, err)
@@ -213,7 +211,7 @@ func (r *libvirtReal) writeSeed(c *hostConnection, pool libvirt.StoragePool, nam
 	if err != nil {
 		return "", fmt.Errorf("create cloud-init volume: %w", err)
 	}
-	if err := c.lv.StorageVolUpload(seed, strings.NewReader(string(iso)), 0, uint64(len(iso)), 0); err != nil {
+	if err := c.lv.StorageVolUpload(seed, bytes.NewReader(iso), 0, uint64(len(iso)), 0); err != nil {
 		return "", fmt.Errorf("upload cloud-init seed: %w", err)
 	}
 	path, err := c.lv.StorageVolGetPath(seed)
@@ -240,9 +238,10 @@ func (r *libvirtReal) DeleteDomain(_ context.Context, zone, name string) error {
 	// managed-save + NVRAM state.
 	_ = c.lv.DomainDestroy(dom)
 	if err := c.lv.DomainUndefineFlags(dom, libvirt.DomainUndefineManagedSave|libvirt.DomainUndefineNvram); err != nil {
-		// Fall back to plain undefine for hypervisors that reject the flags.
+		// Fall back to plain undefine for hypervisors that reject the flags;
+		// report the fallback's own failure, not the flagged call's.
 		if uerr := c.lv.DomainUndefine(dom); uerr != nil {
-			return fmt.Errorf("undefine domain %s: %w", name, err)
+			return fmt.Errorf("undefine domain %s: %w", name, uerr)
 		}
 	}
 	// Best-effort overlay + seed volume cleanup (keep the golden base image).
@@ -285,7 +284,7 @@ func (r *libvirtReal) DescribeManaged(_ context.Context) ([]domainInstance, erro
 	return out, nil
 }
 
-func (r *libvirtReal) ApplyBootstrap(_ context.Context, dom domainInstance, clusterID string, bootstrap []byte) error {
+func (r *libvirtReal) ApplyBootstrap(ctx context.Context, dom domainInstance, clusterID string, bootstrap []byte) error {
 	c, err := r.conn(dom.Zone)
 	if err != nil {
 		return err
@@ -301,7 +300,7 @@ func (r *libvirtReal) ApplyBootstrap(_ context.Context, dom domainInstance, clus
 	// (write the blob to a file, then run the in-image bootstrap hook). The guest
 	// must run qemu-guest-agent and ship the hook; we wait for it to succeed so a
 	// failed bootstrap surfaces as FAILED.
-	if err := r.guestWriteAndRun(c, d, bootstrap, clusterID); err != nil {
+	if err := r.guestWriteAndRun(ctx, c, d, bootstrap, clusterID); err != nil {
 		return err
 	}
 	// Record the binding in the domain metadata only AFTER the bootstrap
@@ -310,7 +309,7 @@ func (r *libvirtReal) ApplyBootstrap(_ context.Context, dom domainInstance, clus
 	return r.setMetadata(c, d, dom.MachineID, clusterID)
 }
 
-func (r *libvirtReal) DrainNode(_ context.Context, dom domainInstance, gracePeriodSeconds int64) error {
+func (r *libvirtReal) DrainNode(ctx context.Context, dom domainInstance, gracePeriodSeconds int64) error {
 	c, err := r.conn(dom.Zone)
 	if err != nil {
 		return err
@@ -333,7 +332,7 @@ func (r *libvirtReal) DrainNode(_ context.Context, dom domainInstance, gracePeri
 			"kubectl drain \"$node\" --ignore-daemonsets --delete-emptydir-data "+
 			"--grace-period=%d --timeout=%ds",
 		grace, grace)
-	if err := r.guestExec(c, d, script); err != nil {
+	if err := r.guestExec(ctx, c, d, script); err != nil {
 		return err
 	}
 	return r.setMetadata(c, d, dom.MachineID, "")
@@ -403,25 +402,115 @@ func (r *libvirtReal) setMetadata(c *hostConnection, dom libvirt.Domain, machine
 // in-image bootstrap hook with the cluster id, via the qemu guest agent. The
 // blob is opaque, so it is delivered base64-encoded (never parsed) and the
 // in-image hook decodes + applies it.
-func (r *libvirtReal) guestWriteAndRun(c *hostConnection, dom libvirt.Domain, blob []byte, clusterID string) error {
+func (r *libvirtReal) guestWriteAndRun(ctx context.Context, c *hostConnection, dom libvirt.Domain, blob []byte, clusterID string) error {
 	script := fmt.Sprintf(
 		"set -e; umask 077; mkdir -p /opt/bigfleet; "+
 			"printf '%%s' %q | base64 -d > /opt/bigfleet/bootstrap.blob; "+
 			"/opt/bigfleet/bootstrap %q",
 		base64.StdEncoding.EncodeToString(blob), clusterID)
-	return r.guestExec(c, dom, script)
+	return r.guestExec(ctx, c, dom, script)
 }
 
-// guestExec runs a shell command in the guest via the qemu guest agent's
-// guest-exec, waiting for it to complete. A non-zero exit (or agent error)
-// returns an error so the transition surfaces as FAILED.
-func (r *libvirtReal) guestExec(c *hostConnection, dom libvirt.Domain, script string) error {
-	// guest-exec with the command captured; the guest agent must be running.
+// guestExecPollInterval is how often guestExec polls guest-exec-status for
+// completion. The transition timeout (carried on ctx) is the real bound.
+const guestExecPollInterval = 2 * time.Second
+
+// guestExec runs a shell command in the guest via the qemu guest agent and waits
+// for it to ACTUALLY complete. guest-exec is asynchronous — it returns a pid —
+// so we poll guest-exec-status until the process exits and then check its exit
+// code. A non-zero exit (agent error, or ctx cancellation when the transition
+// times out) returns an error so the transition surfaces as FAILED. Caller holds
+// c.mu.
+func (r *libvirtReal) guestExec(ctx context.Context, c *hostConnection, dom libvirt.Domain, script string) error {
 	cmd := fmt.Sprintf(`{"execute":"guest-exec","arguments":{"path":"/bin/sh","arg":["-c",%q],"capture-output":true}}`, script)
-	if _, err := c.lv.QEMUDomainAgentCommand(dom, cmd, 60, 0); err != nil {
+	raw, err := c.lv.QEMUDomainAgentCommand(dom, cmd, 60, 0)
+	if err != nil {
 		return fmt.Errorf("guest agent exec: %w", err)
 	}
-	return nil
+	pid, err := parseGuestExecPID(optStringValue(raw))
+	if err != nil {
+		return fmt.Errorf("guest agent exec: %w", err)
+	}
+
+	statusCmd := fmt.Sprintf(`{"execute":"guest-exec-status","arguments":{"pid":%d}}`, pid)
+	for {
+		sraw, err := c.lv.QEMUDomainAgentCommand(dom, statusCmd, 60, 0)
+		if err != nil {
+			return fmt.Errorf("guest agent exec-status (pid %d): %w", pid, err)
+		}
+		st, err := parseGuestExecStatus(optStringValue(sraw))
+		if err != nil {
+			return fmt.Errorf("guest agent exec-status (pid %d): %w", pid, err)
+		}
+		if st.Exited {
+			if st.ExitCode != 0 {
+				return fmt.Errorf("guest command exited %d: %s", st.ExitCode, decodeAgentData(st.ErrData))
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("guest command (pid %d) did not complete: %w", pid, ctx.Err())
+		case <-time.After(guestExecPollInterval):
+		}
+	}
+}
+
+// guestExecStatus is the subset of a qemu guest-exec-status reply we act on.
+type guestExecStatus struct {
+	Exited   bool   `json:"exited"`
+	ExitCode int    `json:"exitcode"`
+	ErrData  string `json:"err-data"` // base64, present only when capture-output was set
+}
+
+// parseGuestExecPID extracts the pid from a guest-exec reply
+// ({"return":{"pid":N}}).
+func parseGuestExecPID(jsonReply string) (int, error) {
+	var resp struct {
+		Return struct {
+			PID int `json:"pid"`
+		} `json:"return"`
+	}
+	if err := json.Unmarshal([]byte(jsonReply), &resp); err != nil {
+		return 0, fmt.Errorf("parse guest-exec reply %q: %w", jsonReply, err)
+	}
+	if resp.Return.PID == 0 {
+		return 0, fmt.Errorf("guest-exec reply has no pid: %q", jsonReply)
+	}
+	return resp.Return.PID, nil
+}
+
+// parseGuestExecStatus extracts the status from a guest-exec-status reply
+// ({"return":{"exited":bool,"exitcode":N,"err-data":"..."}}).
+func parseGuestExecStatus(jsonReply string) (guestExecStatus, error) {
+	var resp struct {
+		Return guestExecStatus `json:"return"`
+	}
+	if err := json.Unmarshal([]byte(jsonReply), &resp); err != nil {
+		return guestExecStatus{}, fmt.Errorf("parse guest-exec-status reply %q: %w", jsonReply, err)
+	}
+	return resp.Return, nil
+}
+
+// decodeAgentData best-effort base64-decodes captured guest stderr for error
+// messages; returns the raw string if it is not valid base64.
+func decodeAgentData(b64 string) string {
+	if b64 == "" {
+		return ""
+	}
+	if dec, err := base64.StdEncoding.DecodeString(b64); err == nil {
+		return strings.TrimSpace(string(dec))
+	}
+	return b64
+}
+
+// optStringValue returns the value carried by a go-libvirt OptString (an
+// optional field encoded as a 0- or 1-element slice), or "" when unset.
+func optStringValue(o libvirt.OptString) string {
+	if len(o) == 0 {
+		return ""
+	}
+	return o[0]
 }
 
 func optString(s string) libvirt.OptString {

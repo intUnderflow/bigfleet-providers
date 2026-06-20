@@ -212,9 +212,10 @@ cluster is only known when the shard binds it. The lifecycle:
    Create maps to the same domain instead of defining a second one. The machine
    settles to **Idle** with a populated `host` (`<zone>/<domain>`) once the domain
    is running.
-2. **Configure → cloud-init + guest agent.** Regenerates the NoCloud datasource
-   with the opaque `bootstrap_blob` as user-data and delivers it via the qemu guest
-   agent (write the blob, run the image's hook). We wait for the hook to
+2. **Configure → guest agent.** Delivers the opaque `bootstrap_blob` via the qemu
+   guest agent: writes the blob to `/opt/bigfleet/bootstrap.blob` and runs the
+   image's hook (`/opt/bigfleet/bootstrap <cluster-id>`) with `guest-exec`,
+   polling `guest-exec-status` until it exits. We wait for the hook to
    **succeed**, so a failed bootstrap surfaces as `FAILED`. `cluster` and
    `shard_metadata` are recorded.
 3. **Drain → guest agent.** Cordons and drains the kubelet (honouring

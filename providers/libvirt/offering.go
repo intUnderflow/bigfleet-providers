@@ -25,22 +25,22 @@ type offering struct {
 }
 
 // capacityType maps the offering's declared capacity to a kit CapacityType.
-// libvirt VMs are local, always-reachable hardware, so the honest choices are
-// on_demand (a churning pool where Delete tears the VM down — the default, and
-// what enables the cloud conformance profile) or bare_metal (a fixed free pool
-// that never receives Delete). spot is rejected: a single libvirt host has no
-// preemption market, so declaring it would force a fictional interruption
-// probability.
+// libvirt VMs are local, always-reachable hardware, so the only honest choices
+// are on_demand (a churning pool where Delete tears the VM down — the default,
+// and what enables the cloud conformance profile) or bare_metal (a fixed free
+// pool that never receives Delete). spot and reserved are rejected: a single
+// libvirt host has no preemption market and no reservation/commitment billing,
+// so declaring either would mis-state the machine's cost and interruption shape.
 func (o offering) capacityType() (providerkit.CapacityType, error) {
 	switch strings.ToLower(o.Capacity) {
 	case "on_demand", "on-demand", "ondemand", "":
 		return providerkit.CapacityOnDemand, nil
 	case "bare_metal", "bare-metal", "metal":
 		return providerkit.CapacityBareMetal, nil
-	case "reserved":
-		return providerkit.CapacityReserved, nil
 	case "spot":
 		return providerkit.CapacityUnspecified, fmt.Errorf("capacity_type %q is not meaningful for libvirt (a local host has no preemption market); use on_demand or bare_metal", o.Capacity)
+	case "reserved":
+		return providerkit.CapacityUnspecified, fmt.Errorf("capacity_type %q is not meaningful for libvirt (no reservation/commitment billing); use on_demand or bare_metal", o.Capacity)
 	default:
 		return providerkit.CapacityUnspecified, fmt.Errorf("unknown capacity_type %q", o.Capacity)
 	}

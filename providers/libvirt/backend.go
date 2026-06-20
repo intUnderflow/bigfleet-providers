@@ -20,10 +20,10 @@ import (
 // datasource is consumed by cloud-init at first boot, so CreateDomain defines
 // the domain with the generic pre-binding --base-user-data, and the
 // cluster-specific bootstrap blob is delivered later by ConfigureInstance (the
-// real client regenerates the NoCloud datasource and applies it via the qemu
-// guest agent). This keeps the kit's invariant that an Idle machine already
-// carries a real, reachable host, and delivers the blob exactly once when the
-// binding is established.
+// real client writes the blob into the guest and runs the in-image bootstrap
+// hook via the qemu guest agent). This keeps the kit's invariant that an Idle
+// machine already carries a real, reachable host, and delivers the blob exactly
+// once when the binding is established.
 type libvirtBackend struct {
 	providerName string // HostRef.provider label, e.g. "libvirt-rack1"
 	client       libvirtClient
@@ -225,7 +225,8 @@ func (b *libvirtBackend) CreateInstance(ctx context.Context, req providerkit.Cre
 }
 
 // ConfigureInstance binds the running domain to a cluster and delivers the opaque
-// bootstrap blob (real impl: regenerate the NoCloud datasource + guest agent).
+// bootstrap blob (real impl: write the blob + run the in-image hook via the qemu
+// guest agent).
 func (b *libvirtBackend) ConfigureInstance(ctx context.Context, req providerkit.ConfigureInstanceRequest) error {
 	dom, err := b.resolveHost(ctx, req.Machine)
 	if err != nil {
