@@ -405,7 +405,10 @@ func (r *ociReal) updateTags(ctx context.Context, instanceID string, mutate func
 		InstanceId:            common.String(instanceID),
 		UpdateInstanceDetails: core.UpdateInstanceDetails{FreeformTags: tags},
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("update instance %s tags: %w", instanceID, err)
+	}
+	return nil
 }
 
 // isNotFound reports whether err is an OCI 404 (so an idempotent terminate of an

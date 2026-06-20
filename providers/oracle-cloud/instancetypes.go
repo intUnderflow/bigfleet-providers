@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 )
 
@@ -95,7 +96,11 @@ func allocatable(shape string, ocpus, memGiB float64) map[string]string {
 // "<n>Gi" and falling back to "<n>Mi" when it is not a whole GiB, so the value
 // round-trips without precision loss.
 func fmtGiB(memGiB float64) string {
-	mib := int64(memGiB * 1024)
+	// Round to the nearest MiB rather than truncating: memGiB often isn't exactly
+	// representable in float64, and int64(x*1024) would shave a MiB off values like
+	// a shape reporting 0.9375 GiB, under-reporting allocatable (and skewing the
+	// shard's density math).
+	mib := int64(math.Round(memGiB * 1024))
 	if mib%1024 == 0 {
 		return fmt.Sprintf("%dGi", mib/1024)
 	}
