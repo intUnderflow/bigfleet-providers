@@ -157,6 +157,10 @@ func (r *ociReal) LaunchInstance(ctx context.Context, spec launchSpec) (ociInsta
 		}
 	}
 	if len(spec.BaseUserData) > 0 {
+		// Only the generic, cluster-agnostic base bootstrap goes in instance
+		// metadata (consumed by cloud-init at first boot). The cluster-JOIN SECRETS
+		// are never placed here — they are delivered later, to the running instance,
+		// over the IAM-authenticated Run Command in ApplyBootstrap.
 		details.Metadata = map[string]string{
 			"user_data": base64.StdEncoding.EncodeToString(spec.BaseUserData),
 		}
@@ -233,6 +237,13 @@ func (r *ociReal) DescribeManaged(ctx context.Context) ([]ociInstance, error) {
 		}
 		for _, inst := range resp.Items {
 			if inst.FreeformTags[tagManaged] != "true" {
+				continue
+			}
+			// A terminated/terminating instance is releasing its slot — exclude it
+			// so it can't seed the slot Idle (pointing at a dead host) during the
+			// restart-window reconcile before the slot returns to Speculative.
+			if inst.LifecycleState == core.InstanceLifecycleStateTerminated ||
+				inst.LifecycleState == core.InstanceLifecycleStateTerminating {
 				continue
 			}
 			out = append(out, r.toInstance(inst))
@@ -338,8 +349,12 @@ func (r *ociReal) waitCommand(ctx context.Context, commandID, instanceID, name s
 		switch resp.LifecycleState {
 		case computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateSucceeded:
 			return nil
-		case computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateFailed:
-			return fmt.Errorf("command %s on %s failed", name, instanceID)
+		case computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateFailed,
+			computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateTimedOut,
+			computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateCanceled:
+			// Every terminal non-success state fails fast — don't keep polling to the
+			// deadline once the agent has reported the command won't succeed.
+			return fmt.Errorf("command %s on %s ended in %s", name, instanceID, resp.LifecycleState)
 		}
 		select {
 		case <-ctx.Done():
