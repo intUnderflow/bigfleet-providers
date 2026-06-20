@@ -155,37 +155,118 @@ jobs:
         # BIGFLEET_SRC is unset.
         run: make certify-${{ matrix.provider }}
 
-  # Full certification of the reference provider (aws) via the bfconformance
-  # runner: the extension + FAULT + DURABILITY + SCALE lanes — all 92 behaviors.
-  # The upstream baseline is covered by the `certify` job above, so this skips it.
-  # Scale runs at a lighter seed/soak for CI (a nightly job can crank it).
-  # Runs when the conformance program or the aws provider changed.
+  # Full certification of EVERY changed provider via the bfconformance runner:
+  # the extension + FAULT + DURABILITY + SCALE lanes across all 92 behaviours,
+  # credential-free, emitting a per-behaviour VERDICT + JUnit/JSON report. This is
+  # what proves a module is fully certified — the `certify` job above only runs
+  # the baseline + core-shaped extension. Inapplicable lanes/profiles skip-as-pass
+  # so the verdict stays meaningful (e.g. an on-demand-only provider's spot lane).
+  # The upstream baseline is covered by `certify`, so -skip-baseline here. The
+  # fault lane always exercises the reference faultprovider (not the target), so
+  # it re-runs per leg for a uniform report. Scale runs at a lighter seed/soak for
+  # CI (a nightly job can crank it). A provider that cannot stand up credential-
+  # free opts out with a providers/<name>/.ci-no-conformance marker.
   certify-full:
     needs: changes
-    if: needs.changes.outputs.run_conformance == 'true' || contains(fromJSON(needs.changes.outputs.providers), 'aws')
+    if: needs.changes.outputs.providers != '[]'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: ${{ fromJSON(needs.changes.outputs.providers) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: conformance/go.mod
           cache-dependency-path: conformance/go.sum
-      - name: Full certification — extension + fault + durable + scale lanes (aws)
+      - id: gate
+        run: |
+          if [ -f "providers/${{ matrix.provider }}/.ci-no-conformance" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "providers/${{ matrix.provider }} opts out of credential-free certification"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Full certification — extension + fault + durable + scale lanes
+        if: steps.gate.outputs.skip != 'true'
         env:
           BFCONF_SCALE_SEED: "4000"
           BFCONF_SOAK: "5s"
         run: |
-          GOWORK=off go -C conformance run ./cmd/bfconformance -provider aws \
+          GOWORK=off go -C conformance run ./cmd/bfconformance -provider ${{ matrix.provider }} \
             -profile core,cloud,spot,fault,durable,scale -skip-baseline \
-            -out "$GITHUB_WORKSPACE/conformance-report/aws"
+            -out "$GITHUB_WORKSPACE/conformance-report/${{ matrix.provider }}"
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.gate.outputs.skip != 'true'
         with:
-          name: conformance-report-aws
-          path: conformance-report/aws
+          name: conformance-report-${{ matrix.provider }}
+          path: conformance-report/${{ matrix.provider }}
+
+  # Build the container image and lint the Helm chart for each changed provider's
+  # deploy artifacts. Neither is exercised elsewhere in CI (release.yml builds
+  # only aws), so a broken provider Dockerfile/chart would otherwise reach review
+  # unvalidated. Providers without deploy/ artifacts (e.g. _template) are skipped.
+  deploy:
+    needs: changes
+    if: needs.changes.outputs.providers != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: ${{ fromJSON(needs.changes.outputs.providers) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: helm lint
+        run: |
+          chart="providers/${{ matrix.provider }}/deploy/helm"
+          if [ -d "$chart" ]; then helm lint "$chart"; else echo "no Helm chart for ${{ matrix.provider }}; skipping"; fi
+      - name: docker build (from repo root so the multi-module replace resolves)
+        run: |
+          df="providers/${{ matrix.provider }}/deploy/Dockerfile"
+          if [ -f "$df" ]; then
+            docker build -f "$df" -t "bf-${{ matrix.provider }}:ci" .
+          else
+            echo "no Dockerfile for ${{ matrix.provider }}; skipping"
+          fi
+
+  # Dependency + stdlib vulnerability scan per module (INFORMATIONAL — reports to
+  # the run summary, does NOT gate ci-ok). It is not a required check because it
+  # also surfaces Go-toolchain stdlib advisories that are only fixed by a
+  # toolchain bump, which would otherwise red-line main on an upstream disclosure
+  # unrelated to this repo's own code. Flip it to a gate after bumping the
+  # toolchain if you want enforcement.
+  govulncheck:
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: scan modules
+        env:
+          PROVIDERS: ${{ needs.changes.outputs.providers }}
+        run: |
+          mods=". conformance"
+          for p in $(echo "$PROVIDERS" | jq -r '.[]?'); do mods="$mods providers/$p"; done
+          echo "## govulncheck (informational)" >> "$GITHUB_STEP_SUMMARY"
+          for m in $mods; do
+            echo "::group::govulncheck $m"
+            if (cd "$m" && GOWORK=off govulncheck ./...); then
+              echo "- \`$m\`: no vulnerabilities" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- \`$m\`: ⚠️ vulnerabilities reported (see job logs)" >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::govulncheck reported findings in $m (informational; not gating)"
+            fi
+            echo "::endgroup::"
+          done
+          exit 0
 
   # The Astro site build-check (Cloudflare Pages deploys it; this just catches a
-  # broken build in review). Runs only when site/ changed.
+  # broken build in review). Runs when site/ OR any provider's docs/ changed.
   site:
     needs: changes
     if: needs.changes.outputs.run_site == 'true'
@@ -205,7 +286,7 @@ jobs:
   # Single aggregation gate for branch protection: green unless a job that
   # actually ran failed (skipped jobs are fine). Make THIS the required check.
   ci-ok:
-    needs: [changes, pins, providerkit, provider, conformance-module, certify, certify-full, site]
+    needs: [changes, pins, providerkit, provider, conformance-module, certify, certify-full, deploy, site]
     if: always()
     runs-on: ubuntu-latest
     steps:

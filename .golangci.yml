@@ -8,8 +8,31 @@ linters:
   # is signal, not noise.
   enable:
     - bodyclose
+    - gosec
     - misspell
     - unconvert
+  settings:
+    # Scope gosec to real security signal (SSH/TLS/crypto/injection). The broad
+    # file-perm / subprocess / int-overflow / seeded-random rules are noise for a
+    # conformance harness that legitimately execs `go build`, reads operator-
+    # supplied paths, and uses seeded math/rand for deterministic property tests —
+    # errcheck already covers unhandled errors. The point of gosec here is to
+    # catch things like ssh.InsecureIgnoreHostKey (G106) and bad TLS config.
+    gosec:
+      includes:
+        - G106 # ssh.InsecureIgnoreHostKey
+        - G107 # potential taint in http request URL
+        - G108 # profiling endpoint automatically exposed
+        - G201 # SQL query built via string format
+        - G202 # SQL query built via string concatenation
+        - G203 # unescaped data in an HTML template
+        - G402 # bad TLS config / InsecureSkipVerify
+        - G403 # weak RSA key (< 2048 bits)
+        - G501 # blocklisted import crypto/md5
+        - G502 # blocklisted import crypto/des
+        - G503 # blocklisted import crypto/rc4
+        - G504 # blocklisted import net/http/cgi
+        - G505 # blocklisted import crypto/sha1
   exclusions:
     generated: lax
     rules:

@@ -71,6 +71,9 @@ if changed="$(resolve_changed)"; then
         # Only providers that still exist at HEAD — a PR that deletes a provider
         # must not spawn a matrix leg for the gone directory.
         [ -n "$n" ] && [ -d "providers/$n" ] && changed_providers="${changed_providers}${n}"$'\n'
+        # Provider docs publish to the website (site/scripts/sync-providers.mjs),
+        # so a docs change must also rebuild the site to catch broken frontmatter.
+        case "$f" in providers/*/docs/*) run_site=true ;; esac
         ;;
     esac
   done <<< "$changed"
