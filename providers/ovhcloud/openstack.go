@@ -128,14 +128,18 @@ func newOVHReal(ctx context.Context, cfg ovhRealConfig, logger *slog.Logger) (*o
 		flavorIDs: map[string]string{},
 	}
 	// The network service is only needed to resolve a network NAME; a UUID is
-	// used directly. Build it lazily-but-eagerly so a misconfiguration surfaces
-	// at startup rather than on first Create.
+	// used directly. Build the client and resolve the name eagerly, so a bad
+	// --network (unknown name, or an unreachable network endpoint) fails at
+	// startup rather than on the first Create.
 	if cfg.Network != "" && !uuidRe.MatchString(cfg.Network) {
 		netClient, err := openstack.NewNetworkV2(provider, eo)
 		if err != nil {
 			return nil, fmt.Errorf("openstack: network endpoint in region %s: %w", cfg.Region, err)
 		}
 		r.network = netClient
+		if _, err := r.resolveNetwork(ctx); err != nil {
+			return nil, err
+		}
 	}
 	return r, nil
 }
@@ -302,6 +306,11 @@ func (r *ovhReal) DrainNode(ctx context.Context, srv serverInstance, gracePeriod
 	if grace <= 0 {
 		grace = 1
 	}
+	// --grace-period is the per-pod termination grace; --timeout is the TOTAL
+	// time kubectl waits for the whole drain (PDB evictions included), so it must
+	// be larger than the grace, not equal to it (an equal value fails routine
+	// drains under PDB delays). Give the drain grace+60s of headroom; the
+	// provider-level Drain timeout (main.go) carried on ctx is the outer bound.
 	// cordon tolerates a re-run (|| true); the DRAIN must NOT swallow its failure
 	// — an incomplete drain has to surface as FAILED rather than a false Idle.
 	script := fmt.Sprintf(
@@ -309,7 +318,7 @@ func (r *ovhReal) DrainNode(ctx context.Context, srv serverInstance, gracePeriod
 			"sudo kubectl cordon \"$node\" || true; "+
 			"sudo kubectl drain \"$node\" --ignore-daemonsets --delete-emptydir-data "+
 			"--grace-period=%d --timeout=%ds",
-		grace, grace)
+		grace, grace+60)
 	if err := r.runSSH(ctx, srv, script); err != nil {
 		return err
 	}
