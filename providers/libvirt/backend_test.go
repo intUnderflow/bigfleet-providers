@@ -333,6 +333,31 @@ func TestNewLibvirtBackend_RejectsNonPositiveCount(t *testing.T) {
 	}
 }
 
+func TestCallCtx(t *testing.T) {
+	// fn completes before ctx is cancelled -> its result is returned.
+	v, err := callCtx(context.Background(), func() (int, error) { return 7, nil })
+	if v != 7 || err != nil {
+		t.Fatalf("fast path: got (%d, %v), want (7, nil)", v, err)
+	}
+	// ctx already cancelled, fn blocks -> returns ctx.Err() promptly (does not
+	// wait for fn). The worker goroutine drains into the buffered channel.
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan struct{})
+	_, err = callCtx(cancelled, func() (int, error) {
+		<-done // never unblocks within the test's timeout
+		return 0, nil
+	})
+	if err == nil {
+		t.Error("cancelled ctx: expected an error, got nil")
+	}
+	close(done)
+	// callCtxErr mirrors callCtx for error-only functions.
+	if err := callCtxErr(context.Background(), func() error { return nil }); err != nil {
+		t.Errorf("callCtxErr happy path: %v", err)
+	}
+}
+
 func TestSplitHostRef(t *testing.T) {
 	z, d, ok := splitHostRef("rack1/bigfleet-000001")
 	if !ok || z != "rack1" || d != "bigfleet-000001" {

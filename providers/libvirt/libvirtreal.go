@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	libvirt "github.com/digitalocean/go-libvirt"
@@ -61,12 +60,15 @@ func (c *libvirtRealConfig) withDefaults() {
 	}
 }
 
-// hostConnection is one zone's live libvirt connection, guarded by a mutex
-// (libvirt connections are not freely concurrency-safe).
+// hostConnection is one zone's live libvirt connection. go-libvirt multiplexes
+// concurrent calls over a single connection safely (each request carries a
+// serial and responses are demuxed under its own lock), and the fields here are
+// set once at construction and never mutated — so no extra mutex is needed, and
+// adding one would serialise every op on the host behind a slow multi-minute
+// Configure/Drain poll loop (head-of-line blocking).
 type hostConnection struct {
 	zone string
 	uri  string
-	mu   sync.Mutex
 	lv   *libvirt.Libvirt
 }
 
@@ -128,14 +130,19 @@ func (r *libvirtReal) conn(zone string) (*hostConnection, error) {
 	return c, nil
 }
 
-func (r *libvirtReal) CreateDomain(ctx context.Context, spec domainSpec) (_ domainInstance, retErr error) {
+func (r *libvirtReal) CreateDomain(ctx context.Context, spec domainSpec) (domainInstance, error) {
 	c, err := r.conn(spec.Zone)
 	if err != nil {
 		return domainInstance{}, err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	// go-libvirt's generated RPCs block with no context support, so run the
+	// create off-goroutine and return promptly when the kit's transition ctx is
+	// cancelled (timeout). The abandoned call finishes in the background; the
+	// connection is concurrency-safe, so it cannot wedge later ops.
+	return callCtx(ctx, func() (domainInstance, error) { return r.createDomain(c, spec) })
+}
 
+func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domainInstance, retErr error) {
 	name := domainName(spec.IdempotencyToken)
 	if spec.IdempotencyToken == "" {
 		name = domainName(spec.MachineID)
@@ -243,18 +250,25 @@ func (r *libvirtReal) writeSeed(c *hostConnection, pool libvirt.StoragePool, nam
 	return path, nil
 }
 
-func (r *libvirtReal) DeleteDomain(_ context.Context, zone, name string) error {
+func (r *libvirtReal) DeleteDomain(ctx context.Context, zone, name string) error {
 	c, err := r.conn(zone)
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	return callCtxErr(ctx, func() error { return r.deleteDomain(c, name) })
+}
 
+func (r *libvirtReal) deleteDomain(c *hostConnection, name string) error {
 	dom, err := c.lv.DomainLookupByName(name)
 	if err != nil {
-		// Already gone — idempotent.
-		return nil
+		// Only a genuine "no such domain" is the idempotent already-gone case.
+		// Any other error (RPC failure, dropped connection, libvirtd restart) must
+		// be reported — swallowing it would settle the machine deleted while the VM
+		// is still defined and running, leaking it.
+		if libvirt.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("look up domain %s: %w", name, err)
 	}
 	// Destroy the running domain (ignore "not running"), then undefine removing
 	// managed-save + NVRAM state.
@@ -288,10 +302,8 @@ func (r *libvirtReal) deleteVolumes(c *hostConnection, name string) {
 func (r *libvirtReal) DescribeManaged(_ context.Context) ([]domainInstance, error) {
 	var out []domainInstance
 	for zone, c := range r.conns {
-		c.mu.Lock()
 		domains, _, err := c.lv.ConnectListAllDomains(1, libvirt.ConnectListDomainsPersistent)
 		if err != nil {
-			c.mu.Unlock()
 			return nil, fmt.Errorf("list domains in zone %q: %w", zone, err)
 		}
 		for _, dom := range domains {
@@ -301,7 +313,6 @@ func (r *libvirtReal) DescribeManaged(_ context.Context) ([]domainInstance, erro
 			}
 			out = append(out, view)
 		}
-		c.mu.Unlock()
 	}
 	return out, nil
 }
@@ -311,9 +322,6 @@ func (r *libvirtReal) ApplyBootstrap(ctx context.Context, dom domainInstance, cl
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	d, err := c.lv.DomainLookupByName(dom.DomainName)
 	if err != nil {
 		return fmt.Errorf("configure: look up domain %s: %w", dom.DomainName, err)
@@ -336,9 +344,6 @@ func (r *libvirtReal) DrainNode(ctx context.Context, dom domainInstance, gracePe
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	d, err := c.lv.DomainLookupByName(dom.DomainName)
 	if err != nil {
 		return fmt.Errorf("drain: look up domain %s: %w", dom.DomainName, err)
@@ -363,13 +368,11 @@ func (r *libvirtReal) DrainNode(ctx context.Context, dom domainInstance, gracePe
 func (r *libvirtReal) Close() error {
 	var firstErr error
 	for _, c := range r.conns {
-		c.mu.Lock()
 		if c.lv != nil {
 			if err := c.lv.Disconnect(); err != nil && firstErr == nil {
 				firstErr = err
 			}
 		}
-		c.mu.Unlock()
 	}
 	return firstErr
 }
@@ -377,7 +380,7 @@ func (r *libvirtReal) Close() error {
 // --- helpers --------------------------------------------------------------
 
 // domainView builds the substrate view of a domain from its libvirt identity +
-// bigfleet metadata. Caller holds c.mu.
+// bigfleet metadata.
 func (r *libvirtReal) domainView(c *hostConnection, dom libvirt.Domain) (domainInstance, error) {
 	machineID, clusterID := r.readMetadata(c, dom)
 	state, _, err := c.lv.DomainGetState(dom, 0)
@@ -393,7 +396,7 @@ func (r *libvirtReal) domainView(c *hostConnection, dom libvirt.Domain) (domainI
 }
 
 // readMetadata returns the (machineID, clusterID) from a domain's bigfleet
-// metadata element, or empty strings if absent. Caller holds c.mu.
+// metadata element, or empty strings if absent.
 func (r *libvirtReal) readMetadata(c *hostConnection, dom libvirt.Domain) (string, string) {
 	raw, err := c.lv.DomainGetMetadata(dom, int32(libvirt.DomainMetadataElement), optString(bigfleetMetadataNS), libvirt.DomainAffectConfig)
 	if err != nil || raw == "" {
@@ -409,7 +412,7 @@ func (r *libvirtReal) readMetadata(c *hostConnection, dom libvirt.Domain) (strin
 	return meta.MachineID, meta.ClusterID
 }
 
-// setMetadata writes the bigfleet metadata element on a domain. Caller holds c.mu.
+// setMetadata writes the bigfleet metadata element on a domain.
 func (r *libvirtReal) setMetadata(c *hostConnection, dom libvirt.Domain, machineID, clusterID string) error {
 	meta, err := newBigfleetMeta(machineID, clusterID).marshal()
 	if err != nil {
@@ -437,13 +440,23 @@ func (r *libvirtReal) guestWriteAndRun(ctx context.Context, c *hostConnection, d
 // completion. The transition timeout (carried on ctx) is the real bound.
 const guestExecPollInterval = 2 * time.Second
 
+// guestAgentPingInterval is how often waitGuestAgentReady retries guest-ping
+// while the guest finishes booting (cloud-init + qemu-guest-agent start).
+const guestAgentPingInterval = 3 * time.Second
+
 // guestExec runs a shell command in the guest via the qemu guest agent and waits
-// for it to ACTUALLY complete. guest-exec is asynchronous — it returns a pid —
-// so we poll guest-exec-status until the process exits and then check its exit
-// code. A non-zero exit (agent error, or ctx cancellation when the transition
-// times out) returns an error so the transition surfaces as FAILED. Caller holds
-// c.mu.
+// for it to ACTUALLY complete. It first waits for the guest agent to come online
+// (Create settles a machine Idle as soon as QEMU is running, which can be well
+// before cloud-init/qemu-guest-agent are up, so a prompt Configure/Drain must not
+// treat an agent-not-ready error as a hard failure). guest-exec is then
+// asynchronous — it returns a pid — so we poll guest-exec-status until the
+// process exits and check its exit code. A non-zero exit (agent error, or ctx
+// cancellation when the transition times out) returns an error so the transition
+// surfaces as FAILED.
 func (r *libvirtReal) guestExec(ctx context.Context, c *hostConnection, dom libvirt.Domain, script string) error {
+	if err := r.waitGuestAgentReady(ctx, c, dom); err != nil {
+		return err
+	}
 	cmd := fmt.Sprintf(`{"execute":"guest-exec","arguments":{"path":"/bin/sh","arg":["-c",%q],"capture-output":true}}`, script)
 	raw, err := c.lv.QEMUDomainAgentCommand(dom, cmd, 60, 0)
 	if err != nil {
@@ -524,6 +537,55 @@ func decodeAgentData(b64 string) string {
 		return strings.TrimSpace(string(dec))
 	}
 	return b64
+}
+
+// waitGuestAgentReady blocks until the qemu guest agent answers a guest-ping, or
+// ctx (the transition timeout) expires. This absorbs the boot / cloud-init window
+// after Create settles a machine Idle (which happens as soon as QEMU is running,
+// before the in-guest agent is up), so a prompt Configure/Drain does not fail
+// just because the agent has not started answering yet.
+func (r *libvirtReal) waitGuestAgentReady(ctx context.Context, c *hostConnection, dom libvirt.Domain) error {
+	const ping = `{"execute":"guest-ping"}`
+	for {
+		if _, err := c.lv.QEMUDomainAgentCommand(dom, ping, 5, 0); err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("qemu guest agent on %s not ready: %w", dom.Name, ctx.Err())
+		case <-time.After(guestAgentPingInterval):
+		}
+	}
+}
+
+// callCtx runs fn — a blocking sequence of go-libvirt RPCs, which have no native
+// context support — and returns as soon as ctx is cancelled (e.g. the kit's
+// transition timeout fires). On cancellation the worker goroutine keeps running
+// until its in-flight RPC returns; go-libvirt multiplexes it safely over the
+// shared connection, so an abandoned call cannot wedge later operations.
+func callCtx[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	type result struct {
+		v   T
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		v, err := fn()
+		ch <- result{v, err}
+	}()
+	select {
+	case <-ctx.Done():
+		var zero T
+		return zero, ctx.Err()
+	case res := <-ch:
+		return res.v, res.err
+	}
+}
+
+// callCtxErr is callCtx for a function that returns only an error.
+func callCtxErr(ctx context.Context, fn func() error) error {
+	_, err := callCtx(ctx, func() (struct{}, error) { return struct{}{}, fn() })
+	return err
 }
 
 // optStringValue returns the value carried by a go-libvirt OptString (an
