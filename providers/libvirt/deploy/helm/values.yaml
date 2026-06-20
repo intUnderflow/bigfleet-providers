@@ -1,0 +1,175 @@
+# Values for the bigfleet-libvirt chart.
+#
+# One release per libvirt deployment. A deployment is a set of libvirt hosts
+# (one BigFleet zone per host) the provider manages. Run several deployments by
+# installing the chart once each with a distinct release name and --connect list:
+#
+#   helm install libvirt-dc1 ./helm \
+#     --set provider=libvirt-dc1 \
+#     --set connect='rack1=qemu+ssh://bigfleet@host-a/system,rack2=qemu+ssh://bigfleet@host-b/system' \
+#     --set libvirt.image=ubuntu-24.04.qcow2 \
+#     --set credentials.ssh.secretName=bigfleet-libvirt-ssh
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-libvirt
+  tag: ""            # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Number of replicas. Keep at 1: the provider holds deployment-scoped state and
+# is the single CapacityProvider process for its set of hosts.
+replicaCount: 1
+
+# --- core provider config ---------------------------------------------------
+# HostRef provider label (--provider), e.g. libvirt-dc1.
+provider: ""
+# libvirt backend mode: auto | libvirt | fake (--libvirt-backend). auto = libvirt
+# when --connect is set, else fake.
+libvirtBackend: auto
+
+# The libvirt connection(s) (--connect). Either a single bare URI assigned to
+# defaultZone, or a comma-separated zone=uri list for multi-host. Examples:
+#   qemu:///system
+#   rack1=qemu+ssh://bigfleet@host-a/system,rack2=qemu+ssh://bigfleet@host-b/system
+connect: ""
+# Zone label for a single bare --connect URI, and the seed of the fake backend's
+# two synthetic zones (--default-zone).
+defaultZone: local
+# capacity_type for the default offerings (--capacity-type): on_demand (Delete
+# implemented; the cloud profile) or bare_metal (a fixed free pool; never Delete).
+capacityType: on_demand
+
+ports:
+  # gRPC CapacityProvider (--addr).
+  grpc: 9000
+  # /metrics, /healthz, /readyz (--metrics-addr).
+  metrics: 9090
+
+# --- libvirt domain parameters ----------------------------------------------
+libvirt:
+  image: ""                     # --image (golden base-image volume the overlay backs onto), REQUIRED for the real backend
+  storagePool: default          # --storage-pool (overlay + cloud-init volumes)
+  network: default              # --network (domain NIC)
+  seedCount: 32                 # --seed-count (default offerings size)
+
+# --- instance-type catalog --------------------------------------------------
+# When content is set, it is rendered into a ConfigMap, mounted, and passed via
+# --instance-types (a JSON object of name -> {vcpu, memory_mib}). Omit to use the
+# built-in kvm.* sizes.
+instanceTypes:
+  content: ""
+
+# --- pricing ----------------------------------------------------------------
+pricing:
+  # Explicit USD/hour per instance type as type=usd pairs (--prices). Empty =
+  # synthetic per-vCPU/GiB pricing.
+  prices: ""
+  perVCPUHour: 0.0030           # --price-per-vcpu-hour
+  perGiBHour: 0.0008            # --price-per-gib-hour
+
+# --- libvirt credentials ----------------------------------------------------
+# How the provider authenticates to libvirtd. Pick the model that matches your
+# --connect URIs:
+#   * qemu:///system    — local socket; no credentials Secret (run on a host with
+#                         the libvirt socket bind-mounted, with libvirt-group access).
+#   * qemu+ssh://...     — mount an SSH private key; the host authorises the public
+#                         key for a least-privilege libvirt user.
+#   * qemu+tls://...     — mount a libvirt client cert/key + CA.
+credentials:
+  # SSH private key for qemu+ssh:// connections. Mounted at /etc/bigfleet/libvirt-ssh.
+  ssh:
+    secretName: ""              # Secret holding the SSH private key (and optional known_hosts)
+    secretKey: id_ed25519
+  # libvirt client TLS for qemu+tls:// connections. Mounted at /etc/pki/libvirt
+  # and /etc/pki/CA where libvirt looks for them.
+  tls:
+    secretName: ""              # Secret holding clientcert.pem, clientkey.pem, cacert.pem
+  # Local socket access for qemu:///system: bind-mount the host libvirt socket.
+  hostSocket:
+    enabled: false
+    path: /var/run/libvirt/libvirt-sock
+
+# Optional generic pre-binding cloud-init baked into the domain at define time
+# (--base-user-data). Set content to enable.
+baseUserData:
+  content: ""
+
+# --- offerings --------------------------------------------------------------
+# When content is set, it is rendered into a ConfigMap, mounted, and passed via
+# --offerings. Use --set-file offerings.content=offerings.json on install.
+offerings:
+  content: ""
+
+# --- background loops -------------------------------------------------------
+reconcileInterval: 2m           # --reconcile-interval
+
+# --- durable state ----------------------------------------------------------
+# When enabled, --state points at a file on a PersistentVolume so fence marks,
+# the idempotency map, inventory, and bindings survive restarts.
+state:
+  enabled: false
+  path: /var/lib/bigfleet-libvirt/state.json
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+
+# --- TLS / mTLS (the gRPC listener BigFleet dials) --------------------------
+# Provide a Secret with tls.crt + tls.key (and optionally ca.crt for mTLS).
+# When ca.crt is present the provider requires + verifies client certs (mTLS).
+tls:
+  enabled: false
+  secretName: ""                 # Secret holding tls.crt, tls.key, [ca.crt]
+  mtls: false                   # mount ca.crt and pass --tls-ca
+
+# --- gRPC reflection (--reflection) -----------------------------------------
+reflection: true
+
+# Extra raw flags appended verbatim to the args.
+extraArgs: []
+
+# --- ServiceAccount ---------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# --- Service ----------------------------------------------------------------
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Scrape annotations added to the Service for the metrics port.
+metrics:
+  prometheusScrape: true
+
+# --- pod scheduling / resources ---------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# Hardened defaults to match the distroless/static:nonroot image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL

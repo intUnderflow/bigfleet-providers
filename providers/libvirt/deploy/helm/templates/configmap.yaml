@@ -1,0 +1,35 @@
+{{- if .Values.offerings.content }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bigfleet-libvirt.fullname" . }}-offerings
+  labels:
+    {{- include "bigfleet-libvirt.labels" . | nindent 4 }}
+data:
+  offerings.json: |
+    {{- .Values.offerings.content | nindent 4 }}
+{{- end }}
+{{- if .Values.instanceTypes.content }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bigfleet-libvirt.fullname" . }}-instance-types
+  labels:
+    {{- include "bigfleet-libvirt.labels" . | nindent 4 }}
+data:
+  instance-types.json: |
+    {{- .Values.instanceTypes.content | nindent 4 }}
+{{- end }}
+{{- if .Values.baseUserData.content }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bigfleet-libvirt.fullname" . }}-base-user-data
+  labels:
+    {{- include "bigfleet-libvirt.labels" . | nindent 4 }}
+data:
+  base-user-data: |
+    {{- .Values.baseUserData.content | nindent 4 }}
+{{- end }}
