@@ -38,9 +38,10 @@ const defaultSpotProbability = 0.05
 
 // observedPreemptionProbability is the elevated hourly interruption probability
 // recorded for a SPOT slot once a real GCE preemption of it has been observed.
-// It exceeds every forecast bucket so the cost engine treats a slot with proven
-// preemption history as materially riskier than one carrying only a forecast.
-const observedPreemptionProbability = 0.5
+// A completed preemption is a near-certain signal, so this is raised toward 1.0
+// (well above every forecast bucket): the cost engine then treats a slot with
+// proven preemption history as far riskier than one carrying only a forecast.
+const observedPreemptionProbability = 0.9
 
 // familyProbability is a pinned snapshot of hourly preemption-probability
 // estimates per GCE machine family for Spot VMs. Refine from observed

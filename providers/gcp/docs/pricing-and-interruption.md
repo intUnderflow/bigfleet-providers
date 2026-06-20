@@ -57,14 +57,15 @@ declared from two signals (per the author guide):
   (`e2`, `n2`) carry a low rate; tighter-supply ones (`c2`, `m1`) carry more;
   accelerator families (`a2`, `a3`, `g2`) carry the most. An unknown family falls
   back to a non-zero default (`0.05`) — **never zero for Spot**.
-- **Observed (once real):** the provider watches for preemptions on the reconcile
-  timer. Because it only ever *deletes* instances (never stops them), a Spot VM
-  seen in `TERMINATED` status was stopped by GCE — a preemption. On observing one,
-  that slot's interruption probability is raised to a fixed elevated value (`0.5`,
-  well above any forecast bucket) so a slot with proven preemption history is
-  treated as materially riskier on its next Speculative/Idle description. The
-  observed value always wins over the forecast, and each preemption is counted in
-  the `bigfleet_gcp_spot_preemptions_total` metric.
+- **Observed (once real):** the reconcile loop watches for preemptions. Because
+  the provider only ever *deletes* instances (never stops them), a Spot VM seen in
+  `TERMINATED` status was stopped by GCE — a preemption. On observing one, that
+  slot's interruption probability is raised **toward 1.0** (`0.9`, well above any
+  forecast bucket): a completed preemption is a near-certain signal, so a slot
+  with proven preemption history is treated as far riskier on its next
+  Speculative/Idle description. The observed value always wins over the forecast,
+  and each preemption is counted in the `bigfleet_gcp_spot_preemptions_total`
+  metric.
 
 Both are clamped to `[0, 1]`. The kit additionally **rejects at startup** any
 Spot seed whose `interruption_probability` is `0`, so a mis-declared Spot

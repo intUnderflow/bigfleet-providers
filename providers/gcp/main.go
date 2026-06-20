@@ -182,10 +182,10 @@ func run() error {
 		obs.start(logger)
 	}
 
-	// Background loops: GCE->inventory reconcile, and observe Spot preemptions so
-	// preempted slots publish an elevated (observed) interruption probability.
-	go runReconciler(ctx, srv, m, *reconcile, logger)
-	go runPreemptionObserver(ctx, backend, m, *reconcile, logger)
+	// Background loop: GCE->inventory reconcile, which also observes Spot
+	// preemptions so preempted slots publish an elevated (observed) interruption
+	// probability.
+	go runReconciler(ctx, srv, backend, m, *reconcile, logger)
 
 	// Mark ready: serving traffic + probes go green.
 	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
@@ -217,9 +217,10 @@ func run() error {
 }
 
 // runReconciler periodically re-reads GCE truth into kit inventory (new
-// offerings, orphans). The persisted store is the primary restart path; this
-// catches drift while running.
-func runReconciler(ctx context.Context, srv *providerkit.Server, m *metrics, interval time.Duration, logger *slog.Logger) {
+// offerings, orphans) and, in the same tick, observes Spot preemptions so a
+// preempted slot publishes an elevated (observed) interruption probability. The
+// persisted store is the primary restart path; this catches drift while running.
+func runReconciler(ctx context.Context, srv *providerkit.Server, backend *gcpBackend, m *metrics, interval time.Duration, logger *slog.Logger) {
 	if interval <= 0 {
 		return
 	}
@@ -239,31 +240,14 @@ func runReconciler(ctx context.Context, srv *providerkit.Server, m *metrics, int
 				logger.Warn("reconcile failed", "err", err)
 			}
 			m.reconcile.WithLabelValues(outcome).Inc()
-		}
-	}
-}
 
-// runPreemptionObserver periodically scans for GCE Spot preemptions and raises
-// the observed interruption probability of the affected slots. Shares the
-// reconcile interval; the persisted store is unaffected (this only feeds the
-// substrate interruption signal).
-func runPreemptionObserver(ctx context.Context, backend *gcpBackend, m *metrics, interval time.Duration, logger *slog.Logger) {
-	if interval <= 0 {
-		return
-	}
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			n, err := backend.observePreemptions(rctx)
-			cancel()
+			// Same tick: observe Spot preemptions and raise observed interruption.
+			pctx, pcancel := context.WithTimeout(ctx, 30*time.Second)
+			n, perr := backend.observePreemptions(pctx)
+			pcancel()
 			switch {
-			case err != nil:
-				logger.Warn("observe preemptions failed", "err", err)
+			case perr != nil:
+				logger.Warn("observe preemptions failed", "err", perr)
 			case n > 0:
 				m.preemptions.Add(float64(n))
 				logger.Info("observed spot preemptions", "count", n)
