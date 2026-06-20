@@ -1,0 +1,150 @@
+# Values for the bigfleet-azure chart.
+#
+# One release per Azure region. To run several regions, install the chart once
+# per region with a distinct release name, location, and managed identity, e.g.:
+#
+#   helm install azure-eastus ./helm \
+#     --set location=eastus \
+#     --set provider=azure-eastus \
+#     --set azure.subscriptionId=00000000-0000-0000-0000-000000000000 \
+#     --set azure.resourceGroup=bigfleet-eastus \
+#     --set azure.subnetId=/subscriptions/.../subnets/nodes \
+#     --set serviceAccount.clientId=11111111-1111-1111-1111-111111111111 \
+#     --set serviceAccount.tenantId=22222222-2222-2222-2222-222222222222 \
+#     --set-file offerings.content=offerings.eastus.json
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-azure
+  tag: ""            # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Number of replicas. Keep at 1 per region: the provider holds region-scoped
+# state and is the single CapacityProvider process for its region.
+replicaCount: 1
+
+# --- core provider config ---------------------------------------------------
+# Azure region/location (required for the real Azure backend; sets --location).
+location: ""
+# HostRef provider label (--provider), e.g. azure-eastus.
+provider: ""
+# Azure backend mode: auto | azure | fake (--azure-backend). auto = azure when
+# location set.
+azureBackend: auto
+
+ports:
+  # gRPC CapacityProvider (--addr).
+  grpc: 9000
+  # /metrics, /healthz, /readyz (--metrics-addr).
+  metrics: 9090
+
+# --- Azure VM launch parameters (azure backend) -----------------------------
+azure:
+  subscriptionId: ""            # --subscription-id (or AZURE_SUBSCRIPTION_ID env)
+  resourceGroup: ""             # --resource-group (target RG for VMs)
+  subnetId: ""                  # --subnet-id (VNet/subnet resource id NICs attach to)
+  image: "Canonical:ubuntu-24_04-lts:server:latest"  # --image (URN or image id)
+  adminUsername: bigfleet       # --admin-username
+  sshPublicKey: ""              # contents of an SSH public key; mounted + passed via --ssh-public-key
+  bootstrapHook: /opt/bigfleet/bootstrap   # --bootstrap-hook
+  zoneA: ""                     # --zone-a (default <location>-1)
+  zoneB: ""                     # --zone-b (default <location>-2)
+  seedCount: 32                 # --seed-count (default offerings size)
+
+# --- offerings --------------------------------------------------------------
+# When content is set, it is rendered into a ConfigMap, mounted, and passed via
+# --offerings. Use --set-file offerings.content=offerings.json on install.
+offerings:
+  content: ""
+
+# Optional generic pre-binding bootstrap baked into the VM customData at create
+# (--base-user-data). Same mechanism as offerings: set content to enable.
+baseUserData:
+  content: ""
+
+# --- background loops -------------------------------------------------------
+priceRefresh: 1h                # --price-refresh (Spot price refresh)
+reconcileInterval: 2m           # --reconcile-interval
+
+# --- durable state ----------------------------------------------------------
+# When enabled, --state points at a file on a PersistentVolume so fence marks,
+# the idempotency map, inventory, and bindings survive restarts.
+state:
+  enabled: false
+  path: /var/lib/bigfleet-azure/state.json
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+
+# --- TLS / mTLS -------------------------------------------------------------
+# Provide a Secret with tls.crt + tls.key (and optionally ca.crt for mTLS).
+# When ca.crt is present the provider requires + verifies client certs (mTLS).
+tls:
+  enabled: false
+  secretName: ""                 # Secret holding tls.crt, tls.key, [ca.crt]
+  mtls: false                   # mount ca.crt and pass --tls-ca
+
+# --- gRPC reflection (--reflection) -----------------------------------------
+reflection: true
+
+# Extra raw flags appended verbatim to the args.
+extraArgs: []
+
+# --- ServiceAccount / Workload Identity --------------------------------------
+# The provider authenticates with azidentity.DefaultAzureCredential, which on
+# AKS resolves the federated workload identity bound to this ServiceAccount.
+serviceAccount:
+  create: true
+  name: ""
+  # User-assigned managed identity client id (azure.workload.identity/client-id)
+  # — the identity created by deploy/terraform, with a role scoped to the RG.
+  clientId: ""
+  # Azure tenant id (azure.workload.identity/tenant-id).
+  tenantId: ""
+  annotations: {}
+
+# Adds the azure.workload.identity/use: "true" pod label that the Workload
+# Identity webhook requires to inject the federated-token projection.
+workloadIdentity:
+  enabled: true
+
+# --- Service ----------------------------------------------------------------
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Scrape annotations added to the Service for the metrics port.
+metrics:
+  prometheusScrape: true
+
+# --- pod scheduling / resources ---------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# Hardened defaults to match the distroless/static:nonroot image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
