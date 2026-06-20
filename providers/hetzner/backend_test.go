@@ -198,8 +198,17 @@ func TestCreateServer_IdempotentOnToken(t *testing.T) {
 	}
 }
 
-func TestOffering_RejectsSpot(t *testing.T) {
-	if _, err := (offering{ServerType: "cx22", Location: "nbg1", Capacity: "spot"}).capacityType(); err == nil {
-		t.Error("expected spot capacity_type to be rejected (Hetzner Cloud is on-demand only)")
+func TestOffering_CapacityType(t *testing.T) {
+	// Only on-demand is a real Hetzner Cloud substrate; everything else is
+	// rejected so the provider can never mis-declare capacity_type.
+	for _, ok := range []string{"on_demand", "on-demand", "ondemand", ""} {
+		if ct, err := (offering{Capacity: ok}).capacityType(); err != nil || ct != providerkit.CapacityOnDemand {
+			t.Errorf("capacity_type %q: got (%v, %v), want (OnDemand, nil)", ok, ct, err)
+		}
+	}
+	for _, bad := range []string{"spot", "reserved", "bare_metal", "bare-metal", "metal", "nonsense"} {
+		if _, err := (offering{ServerType: "cx22", Location: "nbg1", Capacity: bad}).capacityType(); err == nil {
+			t.Errorf("expected capacity_type %q to be rejected (Hetzner Cloud is on-demand only)", bad)
+		}
 	}
 }

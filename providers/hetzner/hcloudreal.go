@@ -131,6 +131,12 @@ func (r *hcloudReal) CreateServer(ctx context.Context, spec serverSpec) (serverI
 	if err != nil {
 		return serverInstance{}, fmt.Errorf("resolve location %s: %w", spec.Location, err)
 	}
+	if location == nil {
+		// GetByName returns (nil, nil) for an unknown location; reject it with a
+		// clear message rather than passing a nil Location (which would silently
+		// fall back to the project default, mis-placing the server's zone).
+		return serverInstance{}, fmt.Errorf("unknown location %q", spec.Location)
+	}
 
 	opts := hcloud.ServerCreateOpts{
 		// The operation id (idempotency token) makes the name stable across a
@@ -220,12 +226,12 @@ func (r *hcloudReal) DescribeManaged(ctx context.Context) ([]serverInstance, err
 }
 
 func (r *hcloudReal) ApplyBootstrap(ctx context.Context, srv serverInstance, clusterID string, bootstrap []byte) error {
-	// Record the binding as a label so it is recoverable from Hetzner alone.
-	if err := r.setLabel(ctx, srv.ServerID, labelCluster, clusterID); err != nil {
-		return fmt.Errorf("label cluster binding: %w", err)
-	}
 	if r.cfg.SSHSigner == nil {
 		return fmt.Errorf("configure: SSH delivery disabled (set --ssh-key); cannot deliver bootstrap to %s", srv.ServerID)
+	}
+	srv, err := r.ensureIPv4(ctx, srv)
+	if err != nil {
+		return fmt.Errorf("configure: %w", err)
 	}
 	// Deliver the opaque bootstrap blob to the node and run the base image's
 	// hook. The image must ship the hook at BootstrapHookPath; it receives the
@@ -237,7 +243,16 @@ func (r *hcloudReal) ApplyBootstrap(ctx context.Context, srv serverInstance, clu
 	script := fmt.Sprintf(
 		"set -euo pipefail; umask 077; mkdir -p \"$(dirname %s)\"; echo %s | base64 -d > %s; %s %s",
 		blobPath, shellQuote(blob), blobPath, hook, shellQuote(clusterID))
-	return r.runSSH(ctx, srv.PublicIPv4, script)
+	if err := r.runSSH(ctx, srv.PublicIPv4, script); err != nil {
+		return err
+	}
+	// Record the binding label only AFTER the bootstrap actually succeeded, so a
+	// failed Configure (SSH disabled / unreachable / hook non-zero) never leaves a
+	// server mislabelled as bound to a cluster it never joined.
+	if err := r.setLabel(ctx, srv.ServerID, labelCluster, clusterID); err != nil {
+		return fmt.Errorf("label cluster binding: %w", err)
+	}
+	return nil
 }
 
 func (r *hcloudReal) DrainNode(ctx context.Context, srv serverInstance, gracePeriodSeconds int64) error {
@@ -245,6 +260,10 @@ func (r *hcloudReal) DrainNode(ctx context.Context, srv serverInstance, gracePer
 		// No SSH path: at least remove the binding label so the machine returns
 		// to an unbound state in inventory.
 		return r.clearLabel(ctx, srv.ServerID, labelCluster)
+	}
+	srv, err := r.ensureIPv4(ctx, srv)
+	if err != nil {
+		return fmt.Errorf("drain: %w", err)
 	}
 	grace := gracePeriodSeconds
 	if grace <= 0 {
@@ -262,6 +281,33 @@ func (r *hcloudReal) DrainNode(ctx context.Context, srv serverInstance, gracePer
 		return err
 	}
 	return r.clearLabel(ctx, srv.ServerID, labelCluster)
+}
+
+// ensureIPv4 returns srv with a populated PublicIPv4, re-fetching the server by
+// id when the cached view lacks one — e.g. the minimal fallback view the
+// backend's resolveHost builds when a transient DescribeManaged missed the
+// server. SSH-based Configure/Drain need the address, so this avoids a
+// misleading "no public IPv4" error when the server is in fact reachable.
+func (r *hcloudReal) ensureIPv4(ctx context.Context, srv serverInstance) (serverInstance, error) {
+	if srv.PublicIPv4 != "" {
+		return srv, nil
+	}
+	id, err := strconv.ParseInt(srv.ServerID, 10, 64)
+	if err != nil {
+		return srv, fmt.Errorf("bad server id %q: %w", srv.ServerID, err)
+	}
+	fresh, _, err := r.client.Server.GetByID(ctx, id)
+	if err != nil {
+		return srv, fmt.Errorf("look up server %s: %w", srv.ServerID, err)
+	}
+	if fresh == nil {
+		return srv, fmt.Errorf("server %s not found", srv.ServerID)
+	}
+	full := r.toServerInstance(fresh)
+	if full.PublicIPv4 == "" {
+		return srv, fmt.Errorf("server %s has no public IPv4 for SSH delivery", srv.ServerID)
+	}
+	return full, nil
 }
 
 func (r *hcloudReal) PriceUSD(ctx context.Context, serverType, location string) (float64, error) {

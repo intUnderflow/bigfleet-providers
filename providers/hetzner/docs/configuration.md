@@ -91,7 +91,7 @@ Pass a JSON file with `--offerings`. The file is a JSON array of objects:
 |---|---|---|---|
 | `server_type` | string | yes | Hetzner server type, e.g. `cx22`, `cpx41`, `ccx33`. |
 | `location` | string | yes | Hetzner location, e.g. `nbg1`. Locationless offerings are rejected at startup (the provider is multi-location). |
-| `capacity_type` | string | no | `on_demand` (default). Hetzner Cloud is on-demand only, so `spot` is rejected; `reserved`/`bare_metal` exist for completeness. |
+| `capacity_type` | string | no | `on_demand` (default) is the only accepted value. Hetzner Cloud is on-demand only, so `spot`, `reserved`, and `bare_metal` are all rejected at startup (bare metal is the separate Robot substrate, not this provider). |
 | `count` | int | yes | Number of Speculative slots this offering provides. |
 | `resources` | map[string]string | no | The per-replica request shape the offering serves (the `Machine.resources`). Distinct from `allocatable`, which is derived from the server type. |
 | `labels` | map[string]string | no | Extra labels carried on the slot. Arm64 (`cax*`) families also get an automatic `kubernetes.io/arch=arm64` label. |

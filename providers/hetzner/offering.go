@@ -32,10 +32,14 @@ func (o offering) capacityType() (providerkit.CapacityType, error) {
 		// Hetzner Cloud has no spot tier today. Reject it loudly rather than
 		// silently mis-declaring interruption_probability.
 		return providerkit.CapacityUnspecified, fmt.Errorf("capacity_type %q is not offered by Hetzner Cloud (on-demand only)", o.Capacity)
-	case "reserved":
-		return providerkit.CapacityReserved, nil
-	case "bare_metal", "bare-metal", "metal":
-		return providerkit.CapacityBareMetal, nil
+	case "reserved", "bare_metal", "bare-metal", "metal":
+		// This binary serves the Hetzner CLOUD substrate, which only ever creates
+		// regular on-demand servers. Accepting "reserved"/"bare_metal" would
+		// mis-declare capacity_type (and, for bare_metal, force price_per_hour=0)
+		// while still launching normal on-demand servers — skewing the shard's
+		// cost ranking and idle-release policy. Bare metal is the separate Robot
+		// substrate, not this provider.
+		return providerkit.CapacityUnspecified, fmt.Errorf("capacity_type %q is not a Hetzner Cloud substrate (on-demand only; bare-metal is the separate Robot provider)", o.Capacity)
 	default:
 		return providerkit.CapacityUnspecified, fmt.Errorf("unknown capacity_type %q", o.Capacity)
 	}
