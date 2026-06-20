@@ -68,8 +68,14 @@ func parseConnections(connect, defaultZone string) ([]hostConn, error) {
 	if connect == "" {
 		return nil, nil
 	}
-	// Single bare URI (no "zone=" and no comma): assign it to the default zone.
-	if !strings.Contains(connect, "=") && !strings.Contains(connect, ",") {
+	// A single entry (no comma) that is a bare URI is assigned to the default
+	// zone. We distinguish a bare URI from a "zone=uri" assignment by the first
+	// '=': in a zone=uri entry the text before it is a plain zone label (no ':'
+	// or '/'); in a bare URI any '=' lives inside the URI (the scheme's "://" or
+	// a "?key=val" query), so its prefix contains ':' or '/'. This lets a
+	// single-host bare URI carry query params like
+	// "?keyfile=...&known_hosts=..." without being mis-split into zone=uri.
+	if !strings.Contains(connect, ",") && isBareURI(connect) {
 		return []hostConn{{Zone: defaultZone, URI: connect}}, nil
 	}
 	var out []hostConn
@@ -98,6 +104,20 @@ func parseConnections(connect, defaultZone string) ([]hostConn, error) {
 		return nil, fmt.Errorf("--connect %q parsed to no host connections", connect)
 	}
 	return out, nil
+}
+
+// isBareURI reports whether a single --connect entry is a bare libvirt URI (to
+// be assigned to the default zone) rather than a "zone=uri" assignment. A
+// zone=uri entry's prefix before the first '=' is a plain zone label; a bare
+// URI's first '=' is inside the URI (after "://" or in a "?key=val" query), so
+// its prefix contains ':' or '/'. An entry with no '=' at all (e.g.
+// "qemu:///system") is also bare.
+func isBareURI(s string) bool {
+	eq := strings.Index(s, "=")
+	if eq < 0 {
+		return true
+	}
+	return strings.ContainsAny(s[:eq], ":/")
 }
 
 // zones returns the sorted zone names across a set of host connections.

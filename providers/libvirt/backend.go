@@ -54,6 +54,11 @@ func newLibvirtBackend(providerName, image string, client libvirtClient, offerin
 		if off.Zone == "" {
 			return nil, fmt.Errorf("libvirt backend: offering %s with empty zone (libvirt host)", off.InstanceType)
 		}
+		// A non-positive count yields no slots; reject it so the provider never
+		// silently starts with an effectively empty quota.
+		if off.Count <= 0 {
+			return nil, fmt.Errorf("libvirt backend: offering %s/%s has non-positive count %d", off.InstanceType, off.Zone, off.Count)
+		}
 	}
 	return &libvirtBackend{
 		providerName: providerName,

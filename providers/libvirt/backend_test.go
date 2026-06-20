@@ -286,6 +286,51 @@ func TestParseConnections(t *testing.T) {
 	if _, err := parseConnections("a=x,a=y", "local"); err == nil {
 		t.Error("duplicate zone should be rejected")
 	}
+	// Single bare URI WITH query params (keyfile/known_hosts) -> default zone, URI
+	// kept intact (must NOT be mis-split into zone=uri on the '=' inside a param).
+	bare := "qemu+libssh://bigfleet@host-a/system?keyfile=/k&known_hosts=/kh"
+	conns, err = parseConnections(bare, "local")
+	if err != nil || len(conns) != 1 || conns[0].Zone != "local" || conns[0].URI != bare {
+		t.Fatalf("bare uri with query params: got %v, %v", conns, err)
+	}
+	// Single zone=uri WITH query params -> zone + full URI (split on the FIRST '=').
+	conns, err = parseConnections("rack1=qemu+libssh://host-a/system?keyfile=/k&known_hosts=/kh", "local")
+	if err != nil || len(conns) != 1 || conns[0].Zone != "rack1" ||
+		conns[0].URI != "qemu+libssh://host-a/system?keyfile=/k&known_hosts=/kh" {
+		t.Fatalf("zone=uri with query params: got %v, %v", conns, err)
+	}
+	// Multi-host list, each with query params.
+	conns, err = parseConnections("a=qemu+libssh://h1/system?keyfile=/k,b=qemu+libssh://h2/system?keyfile=/k", "local")
+	if err != nil || len(conns) != 2 || conns[0].URI != "qemu+libssh://h1/system?keyfile=/k" {
+		t.Fatalf("multi-host with query params: got %v, %v", conns, err)
+	}
+}
+
+func TestDefaultOfferings_SmallSeedCountNoEmptyBuckets(t *testing.T) {
+	// A seed-count below 4 must not emit count==0 offerings (which the backend
+	// rejects), and the surviving offerings must total the seed count.
+	for _, seed := range []int{1, 2, 3, 7} {
+		offs := defaultOfferings(seed, "rack1", "rack2", "on_demand", []string{"kvm.small", "kvm.large"})
+		total := 0
+		for _, off := range offs {
+			if off.Count <= 0 {
+				t.Errorf("seed %d: offering %s/%s has non-positive count %d", seed, off.InstanceType, off.Zone, off.Count)
+			}
+			total += off.Count
+		}
+		if total != seed {
+			t.Errorf("seed %d: offerings total %d slots, want %d", seed, total, seed)
+		}
+	}
+}
+
+func TestNewLibvirtBackend_RejectsNonPositiveCount(t *testing.T) {
+	catalog := newInstanceCatalog(nil)
+	pr := newPricing(catalog, 0, 0, nil)
+	offs := []offering{{InstanceType: "kvm.small", Zone: "rack1", Capacity: "on_demand", Count: 0}}
+	if _, err := newLibvirtBackend("libvirt-test", "img", newLibvirtFake(), offs, catalog, pr, nil, quietLogger()); err == nil {
+		t.Error("expected a count==0 offering to be rejected at startup")
+	}
 }
 
 func TestSplitHostRef(t *testing.T) {

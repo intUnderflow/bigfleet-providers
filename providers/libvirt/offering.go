@@ -89,10 +89,20 @@ func defaultOfferings(seedCount int, hostA, hostB, capacity string, types []stri
 		counts[i]++
 	}
 	res := map[string]string{"cpu": "1", "memory": "2Gi"}
-	return []offering{
+	candidates := []offering{
 		{InstanceType: small, Zone: hostA, Capacity: capacity, Count: counts[0], Resources: res},
 		{InstanceType: large, Zone: hostA, Capacity: capacity, Count: counts[1], Resources: res},
 		{InstanceType: small, Zone: hostB, Capacity: capacity, Count: counts[2], Resources: res},
 		{InstanceType: large, Zone: hostB, Capacity: capacity, Count: counts[3], Resources: res},
 	}
+	// Drop empty buckets so a small --seed-count (< 4) never emits a count==0
+	// offering (which the backend rejects). With seedCount >= 1 at least one
+	// bucket is always populated.
+	out := make([]offering, 0, len(candidates))
+	for _, off := range candidates {
+		if off.Count > 0 {
+			out = append(out, off)
+		}
+	}
+	return out
 }

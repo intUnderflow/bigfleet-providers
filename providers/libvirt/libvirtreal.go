@@ -128,7 +128,7 @@ func (r *libvirtReal) conn(zone string) (*hostConnection, error) {
 	return c, nil
 }
 
-func (r *libvirtReal) CreateDomain(ctx context.Context, spec domainSpec) (domainInstance, error) {
+func (r *libvirtReal) CreateDomain(ctx context.Context, spec domainSpec) (_ domainInstance, retErr error) {
 	c, err := r.conn(spec.Zone)
 	if err != nil {
 		return domainInstance{}, err
@@ -159,6 +159,22 @@ func (r *libvirtReal) CreateDomain(ctx context.Context, spec domainSpec) (domain
 	if err != nil {
 		return domainInstance{}, fmt.Errorf("base image path: %w", err)
 	}
+
+	// From here on we create overlay/seed volumes and define the domain. If a
+	// later step fails before the domain is started, roll back what we made so a
+	// repeated Create does not leak storage or leave partial artifacts. Disarmed
+	// (committed) once DomainCreate succeeds — the running domain then owns them.
+	committed := false
+	var definedDom *libvirt.Domain
+	defer func() {
+		if retErr == nil || committed {
+			return
+		}
+		if definedDom != nil {
+			_ = c.lv.DomainUndefineFlags(*definedDom, libvirt.DomainUndefineManagedSave|libvirt.DomainUndefineNvram)
+		}
+		r.deleteVolumes(c, name)
+	}()
 
 	// Copy-on-write overlay disk backed by the golden base image.
 	overlayName := name + "-overlay.qcow2"
@@ -195,9 +211,13 @@ func (r *libvirtReal) CreateDomain(ctx context.Context, spec domainSpec) (domain
 	if err != nil {
 		return domainInstance{}, fmt.Errorf("define domain %s: %w", name, err)
 	}
+	definedDom = &dom
 	if err := c.lv.DomainCreate(dom); err != nil {
 		return domainInstance{}, fmt.Errorf("start domain %s: %w", name, err)
 	}
+	// The domain is defined and running; it now owns the overlay/seed volumes, so
+	// stop the rollback. A later domainView error must not tear down a live domain.
+	committed = true
 	return r.domainView(c, dom)
 }
 
