@@ -61,9 +61,9 @@ func (f *hcloudFake) CreateServer(_ context.Context, spec serverSpec) (serverIns
 func (f *hcloudFake) DeleteServer(_ context.Context, serverID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, ok := f.servers[serverID]; !ok {
-		return fmt.Errorf("hcloudfake: delete unknown server %q", serverID)
-	}
+	// Idempotent, matching the real client (GetByID nil → nil): deleting an
+	// unknown / already-gone server succeeds, so a Delete after an out-of-band
+	// deletion never spuriously fails the machine.
 	delete(f.servers, serverID)
 	return nil
 }

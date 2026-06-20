@@ -34,7 +34,11 @@ func buildGRPCServer(creds credentials.TransportCredentials, m *metrics, reflect
 			MinTime:             30 * time.Second,
 			PermitWithoutStream: true,
 		}),
-		grpc.ChainUnaryInterceptor(recoveryInterceptor(m, logger), loggingInterceptor(m, logger)),
+		// Logging is the OUTER interceptor and recovery the inner one, so a panic
+		// in the handler is recovered into codes.Internal and then still recorded
+		// by the logging interceptor (rpcCalls{code=Internal} + rpcDuration), not
+		// swallowed before it can be observed.
+		grpc.ChainUnaryInterceptor(loggingInterceptor(m, logger), recoveryInterceptor(m, logger)),
 	}
 	if creds != nil {
 		opts = append(opts, grpc.Creds(creds))
