@@ -226,7 +226,7 @@ func (b *ociBackend) CreateInstance(ctx context.Context, req providerkit.CreateI
 // ConfigureInstance binds the running instance to a cluster and delivers the
 // opaque bootstrap blob (real impl: Oracle Cloud Agent Run Command).
 func (b *ociBackend) ConfigureInstance(ctx context.Context, req providerkit.ConfigureInstanceRequest) error {
-	inst, err := b.resolveHost(ctx, req.Machine)
+	inst, err := b.resolveHost(req.Machine)
 	if err != nil {
 		return fmt.Errorf("configure: %w", err)
 	}
@@ -236,7 +236,7 @@ func (b *ociBackend) ConfigureInstance(ctx context.Context, req providerkit.Conf
 // DrainInstance cordons + drains the kubelet and removes the cluster binding,
 // leaving the instance running but unbound (Idle).
 func (b *ociBackend) DrainInstance(ctx context.Context, req providerkit.DrainInstanceRequest) error {
-	inst, err := b.resolveHost(ctx, req.Machine)
+	inst, err := b.resolveHost(req.Machine)
 	if err != nil {
 		return fmt.Errorf("drain: %w", err)
 	}
@@ -256,23 +256,15 @@ func (b *ociBackend) DeleteInstance(ctx context.Context, req providerkit.DeleteI
 	return nil
 }
 
-// resolveHost recovers the substrate instance view (including the private IP used
-// by Run Command targeting) for a machine the kit holds, by its instance OCID.
-func (b *ociBackend) resolveHost(ctx context.Context, m providerkit.Machine) (ociInstance, error) {
+// resolveHost builds the substrate instance view needed to actuate Configure /
+// Drain on a machine the kit holds. Both the real client (Run Command targets the
+// instance by its OCID) and the fake address the instance purely by OCID, so this
+// is built directly from the machine's HostRef — no ListInstances call, keeping
+// Configure/Drain O(1) rather than O(fleet size) and not amplifying OCI API load.
+func (b *ociBackend) resolveHost(m providerkit.Machine) (ociInstance, error) {
 	if m.Host.Ref == "" {
 		return ociInstance{}, fmt.Errorf("machine %s has no host", m.ID)
 	}
-	managed, err := b.client.DescribeManaged(ctx)
-	if err != nil {
-		return ociInstance{}, fmt.Errorf("describe managed instances: %w", err)
-	}
-	for _, inst := range managed {
-		if inst.InstanceID == m.Host.Ref {
-			return inst, nil
-		}
-	}
-	// Fall back to a minimal view; the real client can still address the instance
-	// by OCID even if a transient describe missed it.
 	return ociInstance{InstanceID: m.Host.Ref, Shape: m.InstanceType, AvailabilityDomain: m.Zone}, nil
 }
 
