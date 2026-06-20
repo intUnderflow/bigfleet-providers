@@ -70,12 +70,16 @@ var onDemandWestEurope = map[string]float64{
 }
 
 func newPricing(region string, client azureClient, logger *slog.Logger) *pricing {
+	if logger == nil {
+		// Normalise once so refresh and the region warning below never nil-panic.
+		logger = slog.New(slog.DiscardHandler)
+	}
 	table, ok := onDemandByRegion[region]
 	if !ok {
 		// No pinned table for this region; fall back to the baseline. Stay quiet
 		// for the empty region (the fake/dev backend doesn't price-rank).
 		table = onDemandByRegion[onDemandBaselineRegion]
-		if region != "" && logger != nil {
+		if region != "" {
 			logger.Warn("pricing: no pinned on-demand table for region; using baseline approximations — regenerate from the Retail Prices API",
 				"region", region, "baseline", onDemandBaselineRegion)
 		}

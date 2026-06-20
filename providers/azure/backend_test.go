@@ -188,6 +188,39 @@ func TestDescribe_ReconcilesRunningVM(t *testing.T) {
 	}
 }
 
+// A tagged VM that is no longer running (deleting/evicted) must release its slot:
+// Describe returns the slot as Speculative with no host, not Idle pointing at a
+// vanishing resource.
+func TestDescribe_DeletingVMReleasesSlot(t *testing.T) {
+	b, fake := newTestBackend(t, 4)
+	ctx := context.Background()
+
+	slot := b.speculativeSlots()[0]
+	vm, err := fake.CreateVM(ctx, vmSpec{MachineID: slot.ID, VMSize: slot.InstanceType, Zone: slot.Zone})
+	if err != nil {
+		t.Fatalf("seed vm: %v", err)
+	}
+	// Simulate the VM entering its Deleting state (toVMInstance sets Running=false).
+	fake.vms[vm.ResourceID].Running = false
+
+	got, err := b.Describe(ctx)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	for i := range got {
+		if got[i].ID == slot.ID {
+			if got[i].State == providerkit.StateIdle {
+				t.Errorf("deleting VM's slot = Idle, want Speculative (slot should be released)")
+			}
+			if got[i].Host.Ref != "" {
+				t.Errorf("deleting VM's slot has host ref %q, want none", got[i].Host.Ref)
+			}
+			return
+		}
+	}
+	t.Fatalf("Describe did not return slot %s", slot.ID)
+}
+
 // Create must be idempotent at the substrate level: a retried CreateVM with the
 // same operation id returns the same VM, never a duplicate.
 func TestCreateVM_IdempotentOnToken(t *testing.T) {

@@ -129,8 +129,13 @@ func (b *azureBackend) Describe(ctx context.Context) ([]providerkit.Instance, er
 	var orphans []vmInstance
 	for _, vm := range managed {
 		switch {
+		case vm.MachineID != "" && vm.Running:
+			bySlot[vm.MachineID] = vm // tagged + alive: owns its slot
 		case vm.MachineID != "":
-			bySlot[vm.MachineID] = vm // owns its slot, running or not
+			// Tagged but deleting/evicted: releasing its slot. Drop it so the slot
+			// returns to Speculative rather than seeding an Idle machine whose host
+			// ref points at a vanishing resource (which would fail later
+			// Configure/Drain/Delete).
 		case vm.Running:
 			orphans = append(orphans, vm) // managed + running, but untagged
 		}
