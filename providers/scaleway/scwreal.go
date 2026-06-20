@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	block "github.com/scaleway/scaleway-sdk-go/api/block/v1alpha1"
 	"github.com/scaleway/scaleway-sdk-go/api/instance/v1"
 	"github.com/scaleway/scaleway-sdk-go/scw"
 
@@ -98,6 +99,7 @@ type scwReal struct {
 	cfg    scwRealConfig
 	zone   scw.Zone
 	api    *instance.API
+	block  *block.API
 	vault  *bootstrapVault
 	logger *slog.Logger
 }
@@ -151,6 +153,7 @@ func newSCWReal(cfg scwRealConfig, logger *slog.Logger) (scwClient, error) {
 		cfg:    cfg,
 		zone:   zone,
 		api:    instance.NewAPI(client),
+		block:  block.NewAPI(client),
 		vault:  cfg.Vault,
 		logger: logger,
 	}, nil
@@ -253,22 +256,79 @@ func (r *scwReal) DeleteServer(ctx context.Context, serverID string) error {
 	if res == nil || res.Server == nil {
 		return nil
 	}
-	// Power off before deletion so attached resources release cleanly. The
-	// terminate action also deletes the server's block/local volumes.
-	if res.Server.State == instance.ServerStateRunning {
+	// Capture the attached volumes BEFORE deleting the server: a plain DeleteServer
+	// detaches but does NOT delete them, so the implicitly-created boot volume would
+	// otherwise be orphaned and keep billing as the fleet churns.
+	volumes := res.Server.Volumes
+
+	// Power off and wait until the server is actually stopped (poweroff is async;
+	// the server must be stopped before DeleteServer). Poll explicitly — a bare
+	// WaitForServer can treat the still-'running' state as terminal and return
+	// before the poweroff takes effect.
+	if res.Server.State != instance.ServerStateStopped {
 		if _, err := r.api.ServerAction(&instance.ServerActionRequest{
 			Zone: r.zone, ServerID: serverID, Action: instance.ServerActionPoweroff,
 		}, scw.WithContext(ctx)); err != nil && !is404(err) {
 			return fmt.Errorf("delete: power off %s: %w", serverID, err)
 		}
-		if _, err := r.api.WaitForServer(&instance.WaitForServerRequest{Zone: r.zone, ServerID: serverID}, scw.WithContext(ctx)); err != nil {
+		if err := r.waitStopped(ctx, serverID); err != nil {
 			r.logger.Warn("delete: wait for poweroff failed; proceeding to delete", "server", serverID, "err", err)
 		}
 	}
 	if err := r.api.DeleteServer(&instance.DeleteServerRequest{Zone: r.zone, ServerID: serverID}, scw.WithContext(ctx)); err != nil && !is404(err) {
 		return fmt.Errorf("delete server %s: %w", serverID, err)
 	}
+	// Delete the now-detached volumes so storage does not leak. Modern images boot
+	// on a Block Storage (sbs_volume) volume managed by the block API; legacy
+	// l_ssd/b_ssd volumes are managed by the instance API. Best-effort: a volume
+	// that is already gone (404) is fine; any other failure is logged, not fatal,
+	// so a transient volume-delete error never wedges the machine in Deleting.
+	r.deleteVolumes(ctx, serverID, volumes)
 	return nil
+}
+
+// deleteVolumes removes the server's detached volumes via the correct API for
+// each volume type. Best-effort and idempotent.
+func (r *scwReal) deleteVolumes(ctx context.Context, serverID string, volumes map[string]*instance.VolumeServer) {
+	for _, vol := range volumes {
+		if vol == nil || vol.ID == "" {
+			continue
+		}
+		var err error
+		if vol.VolumeType == instance.VolumeServerVolumeTypeSbsVolume {
+			err = r.block.DeleteVolume(&block.DeleteVolumeRequest{Zone: r.zone, VolumeID: vol.ID}, scw.WithContext(ctx))
+		} else {
+			err = r.api.DeleteVolume(&instance.DeleteVolumeRequest{Zone: r.zone, VolumeID: vol.ID}, scw.WithContext(ctx))
+		}
+		if err != nil && !is404(err) {
+			r.logger.Warn("delete: could not delete volume; it may need manual cleanup",
+				"server", serverID, "volume", vol.ID, "type", vol.VolumeType, "err", err)
+		}
+	}
+}
+
+// waitStopped polls until the server reaches the stopped state (poweroff is
+// async), bounded by ctx.
+func (r *scwReal) waitStopped(ctx context.Context, id string) error {
+	ticker := time.NewTicker(r.cfg.PollInterval)
+	defer ticker.Stop()
+	for {
+		res, err := r.api.GetServer(&instance.GetServerRequest{Zone: r.zone, ServerID: id}, scw.WithContext(ctx))
+		if err != nil {
+			if is404(err) {
+				return nil
+			}
+			return err
+		}
+		if res != nil && res.Server != nil && res.Server.State == instance.ServerStateStopped {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (r *scwReal) DescribeManaged(ctx context.Context) ([]serverInstance, error) {
@@ -334,15 +394,40 @@ func (r *scwReal) DrainNode(ctx context.Context, srv serverInstance, gracePeriod
 	return r.clearClusterTag(ctx, srv.ServerID)
 }
 
+// listAllServerTypes pages through the zone's server-type catalogue and returns
+// the merged map. ListServersTypes is paginated, so a single call would miss
+// types beyond the first page for a large catalogue.
+func (r *scwReal) listAllServerTypes(ctx context.Context) (map[string]*instance.ServerType, error) {
+	out := make(map[string]*instance.ServerType)
+	page := int32(1)
+	per := uint32(100)
+	for {
+		res, err := r.api.ListServersTypes(&instance.ListServersTypesRequest{
+			Zone: r.zone, Page: &page, PerPage: &per,
+		}, scw.WithContext(ctx))
+		if err != nil {
+			return nil, err
+		}
+		if res == nil || len(res.Servers) == 0 {
+			break
+		}
+		for name, st := range res.Servers {
+			out[name] = st
+		}
+		if uint32(len(out)) >= res.TotalCount || len(res.Servers) < int(per) {
+			break
+		}
+		page++
+	}
+	return out, nil
+}
+
 func (r *scwReal) PriceUSD(ctx context.Context, commercialType, _ string) (float64, error) {
-	res, err := r.api.ListServersTypes(&instance.ListServersTypesRequest{Zone: r.zone}, scw.WithContext(ctx))
+	types, err := r.listAllServerTypes(ctx)
 	if err != nil {
 		return 0, err
 	}
-	if res == nil {
-		return 0, fmt.Errorf("empty server-types response")
-	}
-	st, ok := res.Servers[commercialType]
+	st, ok := types[commercialType]
 	if !ok || st == nil {
 		return 0, fmt.Errorf("unknown commercial type %q in zone %s", commercialType, r.zone)
 	}
@@ -351,19 +436,16 @@ func (r *scwReal) PriceUSD(ctx context.Context, commercialType, _ string) (float
 }
 
 func (r *scwReal) DescribeCommercialTypeCapacities(ctx context.Context, commercialTypes []string) (map[string]commercialCapacity, error) {
-	res, err := r.api.ListServersTypes(&instance.ListServersTypesRequest{Zone: r.zone}, scw.WithContext(ctx))
+	types, err := r.listAllServerTypes(ctx)
 	if err != nil {
 		return nil, err
-	}
-	if res == nil {
-		return map[string]commercialCapacity{}, nil
 	}
 	want := make(map[string]struct{}, len(commercialTypes))
 	for _, t := range commercialTypes {
 		want[t] = struct{}{}
 	}
 	out := make(map[string]commercialCapacity, len(commercialTypes))
-	for name, st := range res.Servers {
+	for name, st := range types {
 		if st == nil {
 			continue
 		}

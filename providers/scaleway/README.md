@@ -119,8 +119,11 @@ launch from cluster-join:
   essentially identical to the DigitalOcean provider's bootstrap channel.
 - **Drain** sends a `drain` command (with a grace period) over the same channel,
   then clears the cluster binding back to Idle.
-- **Delete** (Instances only) powers off + tears the server down; the slot
-  returns to Speculative. Elastic Metal returns `codes.Unimplemented`.
+- **Delete** (Instances only) powers off, waits until the server is stopped,
+  deletes it, then deletes its now-detached volumes (the boot volume — `sbs_volume`
+  via the Block Storage API, legacy `l_ssd`/`b_ssd` via the Instances API) so
+  storage doesn't leak. The slot returns to Speculative. Elastic Metal returns
+  `codes.Unimplemented`.
 
 This keeps the kit's invariant that an Idle machine already carries a real,
 reachable host.
