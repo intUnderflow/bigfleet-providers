@@ -1,0 +1,147 @@
+# Values for the bigfleet-hetzner chart.
+#
+# One release per Hetzner location. To run several locations, install the chart
+# once per location with a distinct release name, location, and token, e.g.:
+#
+#   helm install hetzner-nbg1 ./helm \
+#     --set location=nbg1 \
+#     --set provider=hetzner-nbg1 \
+#     --set token.secretName=bigfleet-hetzner-token \
+#     --set-file offerings.content=offerings.nbg1.json
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-hetzner
+  tag: ""            # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Number of replicas. Keep at 1 per location: the provider holds location-scoped
+# state and is the single CapacityProvider process for its location.
+replicaCount: 1
+
+# --- core provider config ---------------------------------------------------
+# Hetzner location (sets --location-a; the first default-offering location).
+location: nbg1
+# Second location for the default offerings (--location-b).
+locationB: fsn1
+# HostRef provider label (--provider), e.g. hetzner-nbg1.
+provider: ""
+# Hetzner backend mode: auto | hetzner | fake (--hetzner-backend). auto = hetzner
+# when a token is set.
+hetznerBackend: auto
+
+ports:
+  # gRPC CapacityProvider (--addr).
+  grpc: 9000
+  # /metrics, /healthz, /readyz (--metrics-addr).
+  metrics: 9090
+
+# --- Hetzner Cloud server parameters ----------------------------------------
+hetzner:
+  image: ""                     # --image (base image for Server.Create), REQUIRED for the real backend
+  eurToUSD: 1.08                # --eur-usd (EUR->USD price conversion)
+  bootstrapHook: /opt/bigfleet/bootstrap   # --bootstrap-hook
+  seedCount: 32                 # --seed-count (default offerings size)
+
+# --- API token --------------------------------------------------------------
+# The provider authenticates with a project-scoped Read & Write token, mounted as
+# the HCLOUD_TOKEN env var from a Secret (key: token). Create it with:
+#   kubectl create secret generic bigfleet-hetzner-token --from-literal=token=$HCLOUD_TOKEN
+token:
+  secretName: ""                # Secret holding the token (key: token)
+  secretKey: token
+
+# --- SSH key (Configure/Drain delivery) -------------------------------------
+# Configure/Drain reach the server over SSH (Hetzner has no in-guest command
+# API). Provide the private key in a Secret; the base image must authorise the
+# matching public key. When unset, Configure cannot deliver the bootstrap blob.
+ssh:
+  secretName: ""                # Secret holding the SSH private key
+  secretKey: id_ed25519
+  user: root                    # --ssh-user
+
+# --- offerings --------------------------------------------------------------
+# When content is set, it is rendered into a ConfigMap, mounted, and passed via
+# --offerings. Use --set-file offerings.content=offerings.json on install.
+offerings:
+  content: ""
+
+# Optional generic pre-binding cloud-init baked into Server.Create user-data
+# (--base-user-data). Same mechanism as offerings: set content to enable.
+baseUserData:
+  content: ""
+
+# --- background loops -------------------------------------------------------
+priceRefresh: 30m               # --price-refresh
+reconcileInterval: 2m           # --reconcile-interval
+
+# --- durable state ----------------------------------------------------------
+# When enabled, --state points at a file on a PersistentVolume so fence marks,
+# the idempotency map, inventory, and bindings survive restarts.
+state:
+  enabled: false
+  path: /var/lib/bigfleet-hetzner/state.json
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+
+# --- TLS / mTLS -------------------------------------------------------------
+# Provide a Secret with tls.crt + tls.key (and optionally ca.crt for mTLS).
+# When ca.crt is present the provider requires + verifies client certs (mTLS).
+tls:
+  enabled: false
+  secretName: ""                 # Secret holding tls.crt, tls.key, [ca.crt]
+  mtls: false                   # mount ca.crt and pass --tls-ca
+
+# --- gRPC reflection (--reflection) -----------------------------------------
+reflection: true
+
+# Extra raw flags appended verbatim to the args.
+extraArgs: []
+
+# --- ServiceAccount ---------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# --- Service ----------------------------------------------------------------
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Scrape annotations added to the Service for the metrics port.
+metrics:
+  prometheusScrape: true
+
+# --- pod scheduling / resources ---------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# Hardened defaults to match the distroless/static:nonroot image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
