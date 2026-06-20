@@ -36,6 +36,19 @@ resolve_changed() {
       git diff --name-only "$mb" HEAD
       ;;
     push)
+      # A push to a NON-main branch is the backstop for a missed pull_request
+      # run, so scope it like the PR would: diff the whole branch against main,
+      # not just the pushed commit range (otherwise a docs-only push would skip
+      # certify and ci-ok would pass weaker than the PR run). A push to main keeps
+      # the before-SHA range (the commits this main push introduced).
+      if [ "${REF_NAME:-}" != "main" ]; then
+        git fetch --quiet origin main 2>/dev/null || true
+        local mb
+        mb="$(git merge-base origin/main HEAD 2>/dev/null || true)"
+        [ -z "$mb" ] && return 1
+        git diff --name-only "$mb" HEAD
+        return 0
+      fi
       local before="${BEFORE_SHA:-}"
       if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ] \
          || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then

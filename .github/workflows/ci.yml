@@ -1,8 +1,15 @@
 name: CI
 
 on:
+  # Every branch push triggers CI, not just main + pull_request. GitHub
+  # occasionally fails to dispatch the `pull_request` run on a push (e.g. the PR
+  # merge-ref is briefly unresolved), which would leave a commit untested; the
+  # `push` event is a backstop that guarantees CI runs on every commit. The
+  # concurrency group collapses a branch's push and pull_request runs into one,
+  # and hack/ci-changes.sh scopes a feature-branch push against main (not the
+  # incremental commit range) so the backstop run is not under-scoped.
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
 
 permissions:
@@ -13,8 +20,12 @@ env:
   GOWORK: "off"
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # head_ref is the source branch for a pull_request, ref_name the branch for a
+  # push — so a branch's push and PR runs share one group and dedupe, and a new
+  # commit cancels superseded runs. main is never cancelled (every merged commit
+  # is tested).
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 jobs:
   # Smart change detection: figure out the minimum work this push/PR needs.
@@ -37,6 +48,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BEFORE_SHA: ${{ github.event.before }}
           BASE_REF: ${{ github.base_ref }}
+          REF_NAME: ${{ github.ref_name }}
 
   # The bigfleet proto pin must match across every module (root is the source of
   # truth) so all modules build against one wire contract. Cheap; always runs.
