@@ -43,9 +43,19 @@ gce:
   subnetwork: ""                     # --subnetwork (default: the network's auto subnet)
   diskSizeGb: 20                     # --disk-size-gb
   instanceServiceAccount: ""         # --instance-service-account (the identity NODES run as)
+  bootstrapHook: /opt/bigfleet/bootstrap   # --bootstrap-hook
+  useExternalIP: false               # --use-external-ip (default: internal IP, same VPC)
   zoneA: ""                          # --zone-a (default <region>-a)
   zoneB: ""                          # --zone-b (default <region>-b)
   seedCount: 32                      # --seed-count (default offerings size)
+
+# --- SSH key for in-band Configure/Drain delivery --------------------------
+# A Secret holding the provider's SSH private key (key id_ed25519). Its public
+# key is authorised on each instance via ssh-keys metadata. Required for the real
+# backend to deliver the cluster bootstrap.
+ssh:
+  secretName: ""                     # Secret with key id_ed25519
+  user: bigfleet                     # --ssh-user
 
 # --- offerings --------------------------------------------------------------
 # When content is set, it is rendered into a ConfigMap, mounted, and passed via

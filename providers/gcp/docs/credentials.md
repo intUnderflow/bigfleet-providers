@@ -111,7 +111,33 @@ minimal SA, or the project default). The provider needs
 (the Terraform grants it). If you omit `--instance-service-account`, instances
 use the project default compute service account.
 
-## 5. Rotate
+## 5. The SSH key for in-band bootstrap
+
+Configure and Drain reach the running host **over SSH** (the secure, transient
+delivery channel — the join blob is never persisted in instance metadata). The
+provider needs an SSH **private key** (`--ssh-key`); its public key is authorised
+on each instance via `ssh-keys` metadata at Create (with `enable-oslogin=false`
+so metadata keys are honoured), and the instance's SSH **host** key is pinned at
+Create and verified on every connection. Store the private key as its own Secret:
+
+```sh
+ssh-keygen -t ed25519 -N '' -f ./id_ed25519
+kubectl -n bigfleet create secret generic bigfleet-gcp-ssh --from-file=id_ed25519=./id_ed25519
+```
+
+```yaml
+ssh:
+  secretName: bigfleet-gcp-ssh   # mounted at /etc/bigfleet/ssh/id_ed25519
+  user: bigfleet
+```
+
+Use a **dedicated** key for the provider, not an operator's personal key. For
+pre-pinned host keys (no trust-on-first-use window) use a cloud-init-enabled
+image (e.g. Ubuntu); otherwise the provider trust-on-first-uses and pins the
+observed host key. The provider reaches the host over its **internal** IP by
+default (same VPC); set `--use-external-ip` only if it must use an external IP.
+
+## 6. Rotate
 
 - **Workload Identity** has no key to rotate — that's its main benefit. Rotating
   the *role binding* is a Terraform change; the running process picks up new

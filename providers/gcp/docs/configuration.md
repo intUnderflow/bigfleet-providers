@@ -39,7 +39,11 @@ and interruption are sourced see
 | `--disk-size-gb` | `20` | Boot disk size in GiB. |
 | `--instance-service-account` | _(empty)_ | Service account the **launched instances** run as (default: project default). |
 | `--base-startup-script` | _(empty)_ | Path to the generic, pre-binding startup script baked in at Insert. See [the image contract](#the-image-hook-contract). |
-| `--reconcile-interval` | `2m` | Background GCE→inventory reconcile interval (`0` = off). |
+| `--ssh-key` | _(empty)_ | SSH private key for in-band Configure/Drain delivery. Without it, Configure cannot deliver the bootstrap blob. |
+| `--ssh-user` | `bigfleet` | SSH user for Configure/Drain (authorised on the instance via `ssh-keys` metadata). |
+| `--bootstrap-hook` | `/opt/bigfleet/bootstrap` | Image path that consumes the delivered bootstrap blob and joins the cluster. See [the image contract](#the-image-hook-contract). |
+| `--use-external-ip` | `false` | Reach instances over an ephemeral external IP for SSH (default: internal IP, provider in the same VPC). |
+| `--reconcile-interval` | `2m` | Background GCE→inventory reconcile interval (`0` = off; also observes Spot preemptions). |
 | `--metrics-addr` | `:9090` | Address for `/metrics`, `/healthz`, `/readyz`. Empty = disabled. |
 | `--reflection` | `true` | Register gRPC server reflection (for `grpcurl`/debugging). |
 | `--tls-cert` | _(empty)_ | Server certificate (PEM). With `--tls-key`, enables TLS. |
@@ -55,6 +59,7 @@ A minimal production invocation:
   --region us-central1 \
   --image projects/debian-cloud/global/images/family/debian-12 \
   --instance-service-account bigfleet-node@my-gcp-project.iam.gserviceaccount.com \
+  --ssh-key /etc/bigfleet/ssh/id_ed25519 \
   --offerings /etc/bigfleet/offerings.json \
   --state /var/lib/bigfleet-gcp/state.json \
   --tls-cert server.pem --tls-key server-key.pem --tls-ca client-ca.pem
@@ -168,53 +173,56 @@ equal forces density = 1 and silently breaks the shard's packing math.
 
 ## Create then bootstrap
 
-The provider deliberately splits **create** from **cluster join**, because a GCE
-instance consumes its `startup-script` only at boot but a slot's target cluster
-is only known when the shard binds it. The lifecycle:
+The provider deliberately splits **create** from **cluster join**, because a
+slot's target cluster is only known when the shard binds it. The
+cluster-specific bootstrap is delivered **in-band over SSH** to the
+already-running host — no reboot, and the join secret is never persisted in
+instance metadata (matching the certified AWS/Hetzner providers). The lifecycle:
 
 1. **Create → `Instances.Insert`.** Creates the instance from `--image` with
    `--base-startup-script` as the boot script (a generic, cluster-agnostic node
    bootstrap), in the chosen zone, with the `bigfleet-managed` and
-   `bigfleet-capacity` labels and the machine id recorded in
-   `bigfleet-machine-id` instance **metadata** (the id is too long for a 63-char
-   label value). Spot offerings set
-   `scheduling.provisioningModel = SPOT`. The operation id makes the instance
-   **name** stable, so a retried Create maps to the same instance instead of
-   creating a second one. **Create blocks until the instance is actually
-   `RUNNING`** before returning Idle, so the immediately-following Configure never
-   races a still-booting host.
-2. **Configure → `SetMetadata` + `Reset`.** In one `SetMetadata` call, overwrites
-   the instance's `startup-script` metadata with the opaque `bootstrap_blob` and
-   records the cluster id in `bigfleet-cluster` metadata (preserving other items),
-   then resets the instance so the script runs on the next boot. Configure
-   returning success means the metadata was applied and the reset was issued — it
-   does **not** prove the kubelet has joined, which completes asynchronously on
-   boot (CONFIGURED reflects the control-plane mutations, per the kit's Configure
-   transition timeout). If the reset fails, Configure errors (the machine goes
-   FAILED) and the stale `bigfleet-cluster` metadata is cleared by a later Drain,
-   Delete, or reconcile. The blob is opaque — never parsed.
-3. **Drain → `SetMetadata`.** Strips the delivered `startup-script` metadata (so
-   the node will not rejoin on a future boot) and clears the `bigfleet-cluster`
-   metadata — leaving the instance running but unbound (Idle). BigFleet has
-   already cordoned and drained the pods at the k8s layer (honouring
-   `grace_period_seconds`); this is the machine-side cleanup. `cluster` and
-   `shard_metadata` are cleared.
+   `bigfleet-capacity` labels and the machine id recorded in `bigfleet-machine-id`
+   instance **metadata** (the id is too long for a 63-char label value). It also
+   authorises the provider's `--ssh-key` via `ssh-keys` metadata and injects a
+   pinned SSH host key (cloud-init `user-data`) for later host verification. Spot
+   offerings set `scheduling.provisioningModel = SPOT`. The operation id makes the
+   instance **name** stable, so a retried Create maps to the same instance.
+   **Create blocks until the instance is actually `RUNNING`** before returning
+   Idle, so the immediately-following Configure never races a still-booting host.
+2. **Configure → SSH (no reboot).** Connects to the running host over SSH (as
+   `--ssh-user`, verifying the pinned host key), writes the opaque `bootstrap_blob`
+   to `<bootstrap-hook>.blob` with `umask 077`, and runs `<bootstrap-hook>
+   <cluster-id>`, waiting for it to **succeed** (a failed hook surfaces as
+   `FAILED`). Only after success is the cluster id recorded in `bigfleet-cluster`
+   metadata — so a failed Configure never records a binding it never made. The blob
+   is opaque (never parsed) and is **not** persisted in metadata.
+3. **Drain → SSH (no reboot).** Cordons and drains the kubelet over SSH (`kubectl
+   cordon`/`drain`, honouring `grace_period_seconds`), then clears the
+   `bigfleet-cluster` metadata — leaving the instance running but unbound (Idle).
+   `cluster` and `shard_metadata` are cleared.
 4. **Delete → `Instances.Delete`.** Deletes the instance; the slot returns to
    Speculative (host cleared).
 
 ### The image hook contract
 
-Your boot image must satisfy one thing: **a `startup-script` it runs on boot
-that consumes the delivered bootstrap and joins the cluster.** Two equivalent
-shapes:
+Your boot image must satisfy two things:
 
-- **Direct startup-script (default).** Configure writes the `bootstrap_blob`
-  *verbatim* as the `startup-script` metadata value and resets; the image's
-  startup-script runner executes it. The blob is the kubelet join script.
-- **Indirect (baked image).** Bake an image whose own startup logic fetches a
-  metadata key from the metadata server on every boot; have your generic
-  `--base-startup-script` read it. Configure then only writes the metadata and
-  resets.
+- **Authorise `--ssh-key`.** The provider connects as `--ssh-user` (default
+  `bigfleet`) using the private key you pass; its public key is authorised on the
+  instance via `ssh-keys` metadata (the guest agent provisions it; the provider
+  also sets `enable-oslogin=false` so metadata SSH keys are honoured). For
+  pre-pinned host keys (no trust-on-first-use window) use a **cloud-init-enabled
+  image** (e.g. Ubuntu) so the injected `user-data` host key takes effect; on
+  images without cloud-init the provider trust-on-first-uses and pins the observed
+  host key.
+- **Ship the bootstrap hook** at `--bootstrap-hook` (default
+  `/opt/bigfleet/bootstrap`). On Configure the provider writes the decoded blob to
+  `<hook>.blob` and runs `<hook> <cluster-id>`; the hook joins the node to the
+  cluster and must exit non-zero on failure (so a broken join becomes `FAILED`,
+  not a falsely-Idle node). The blob is opaque — the hook consumes it verbatim.
 
-Either way the blob is opaque and the provider never parses it. On Drain the
-`startup-script` is removed so a future boot does not rejoin.
+If you run without `--ssh-key`, Configure cannot deliver the blob and the machine
+ends up `FAILED`; Drain degrades to clearing the binding metadata only. For a real
+deployment, always set `--ssh-key`. The provider also needs network reachability
+to the instance (same VPC for the default internal IP, or `--use-external-ip`).

@@ -85,6 +85,11 @@ gce:
   diskSizeGb: 20
   instanceServiceAccount: bigfleet-node@my-gcp-project.iam.gserviceaccount.com
 
+# SSH key for in-band Configure/Drain delivery (Secret with key id_ed25519).
+ssh:
+  secretName: bigfleet-gcp-ssh
+  user: bigfleet
+
 # Workload Identity: bind this Kubernetes SA to the Google SA from deploy/sa.
 serviceAccount:
   create: true
@@ -144,6 +149,10 @@ reference (defaults, semantics, the bootstrap model) is in
 | `--disk-size-gb` | `20` | Boot disk size in GiB |
 | `--instance-service-account` | _(empty)_ | Service account the launched instances run as (default: project default) |
 | `--base-startup-script` | _(empty)_ | File with the generic pre-binding startup script baked in at Insert |
+| `--ssh-key` | _(empty)_ | SSH private key for in-band Configure/Drain delivery (required to deliver the bootstrap) |
+| `--ssh-user` | `bigfleet` | SSH user (authorised via `ssh-keys` metadata) |
+| `--bootstrap-hook` | `/opt/bigfleet/bootstrap` | Image path that applies the delivered bootstrap blob |
+| `--use-external-ip` | `false` | Reach instances over an external IP for SSH (default: internal) |
 
 **Offerings**
 

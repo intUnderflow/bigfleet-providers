@@ -68,6 +68,12 @@ spec:
             {{- if .Values.gce.instanceServiceAccount }}
             - --instance-service-account={{ .Values.gce.instanceServiceAccount }}
             {{- end }}
+            - --bootstrap-hook={{ .Values.gce.bootstrapHook }}
+            - --use-external-ip={{ .Values.gce.useExternalIP }}
+            {{- if .Values.ssh.secretName }}
+            - --ssh-key=/etc/bigfleet/ssh/id_ed25519
+            - --ssh-user={{ .Values.ssh.user }}
+            {{- end }}
             {{- if .Values.gce.zoneA }}
             - --zone-a={{ .Values.gce.zoneA }}
             {{- end }}
@@ -140,6 +146,11 @@ spec:
               mountPath: /var/secrets/google
               readOnly: true
             {{- end }}
+            {{- if .Values.ssh.secretName }}
+            - name: ssh-key
+              mountPath: /etc/bigfleet/ssh
+              readOnly: true
+            {{- end }}
             {{- if .Values.tls.enabled }}
             - name: tls
               mountPath: /etc/bigfleet/tls
@@ -164,6 +175,12 @@ spec:
         - name: gcp-key
           secret:
             secretName: {{ .Values.credentials.secretName }}
+        {{- end }}
+        {{- if .Values.ssh.secretName }}
+        - name: ssh-key
+          secret:
+            secretName: {{ .Values.ssh.secretName }}
+            defaultMode: 0400
         {{- end }}
         {{- if .Values.tls.enabled }}
         - name: tls

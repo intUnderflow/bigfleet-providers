@@ -71,29 +71,35 @@ Prefer Workload Identity over a key file. A key file is a long-lived credential
 that can create and delete every instance in the project — store it as a Secret,
 never in args/image/values, and rotate it. Credentials are **never logged**.
 
-## The startup-script bootstrap trust model
+## The SSH bootstrap trust model
 
-GCE delivers the cluster-join bootstrap by **instance metadata**: Configure
-writes the opaque `bootstrap_blob` to the instance's `startup-script` metadata
-and resets the instance so it runs on the next boot. Security implications:
+The cluster-join bootstrap is delivered **in-band over SSH** to the
+already-running host — never persisted in instance metadata — mirroring the
+certified AWS (SSM) and Hetzner (SSH) providers. Security implications:
 
-- The blob is the kubelet join material. It is delivered over the GCE control
-  plane (an authenticated `instances.setMetadata` call), not over a node-to-node
-  channel, so there is no on-path delivery window to a freshly created host.
-- The binding (`bigfleet-cluster`) is recorded in instance **metadata**,
-  written in the same `SetMetadata` call as the blob (before the reset). It is a
-  recovery record, not a join receipt: Configure returning success means the
-  metadata was applied and the reset was issued, **not** that the kubelet has
-  joined (the join completes asynchronously on boot). If the reset fails Configure
-  errors and the machine goes FAILED; the stale binding metadata is then cleared
-  by a later Drain, Delete, or reconcile.
-- On Drain the `startup-script` and `bigfleet-cluster` metadata are **removed**,
-  so a future boot does not rejoin the cluster.
-- The blob is opaque — the provider never parses, logs, or rewrites it (the same
-  contract as `shard_metadata`). Treat the instance metadata as sensitive; scope
-  who can read instance metadata in the project, and prefer the indirect model (a
-  baked image that fetches a metadata key) if you want to keep the join material
-  out of the plain `startup-script` value.
+- **The join secret is transient.** Configure SSHes to the host, writes the
+  opaque `bootstrap_blob` to `<bootstrap-hook>.blob` with `umask 077`, and runs
+  the hook. The blob is **never** written to instance metadata, so a healthy bound
+  node does **not** carry the kubelet-join secret in durable, metadata-server-
+  readable plaintext. (An earlier design wrote it to `startup-script` metadata;
+  that persisted the secret for the node's lifetime and was replaced.)
+- **The host is authenticated.** At Insert the provider injects a pinned SSH host
+  key (cloud-init) and records its fingerprint in `bigfleet-host-key-fp` metadata;
+  every Configure/Drain connection verifies the presented host key against that
+  pin and aborts on mismatch (possible MITM). An instance with no pin (an orphan,
+  or an image without cloud-init) is trust-on-first-used and the observed key
+  pinned — the residual risk is confined to that first connection, logged at WARN.
+- **The client is authenticated.** The provider connects as `--ssh-user` with
+  `--ssh-key`; only that key is authorised (via `ssh-keys` metadata, with
+  `enable-oslogin=false`). Use a dedicated key for the provider, stored as its own
+  Secret, not an operator's personal key.
+- **The binding record** (`bigfleet-cluster` metadata) is written **only after**
+  the on-host hook succeeds — a recovery record, not a join receipt, and not a
+  secret. Drain cordons/drains the kubelet over SSH and then clears it. No reboot
+  is involved at any point.
+- For defence in depth, keep the SSH path on a private/management network
+  (`--use-external-ip` is off by default; the provider reaches the host over its
+  internal IP from the same VPC).
 
 ## Exposure
 

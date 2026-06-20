@@ -19,7 +19,9 @@ type gceClient interface {
 	// Insert launches exactly one instance (compute.Instances.Insert) and
 	// returns its substrate identity. It records the BigFleet machine id in
 	// instance metadata (and a bigfleet-managed label) so DescribeManaged can
-	// recover inventory after a restart.
+	// recover inventory after a restart, authorises the provider's SSH client key
+	// via GCE `ssh-keys` metadata, and injects a pinned SSH host key (cloud-init)
+	// so the later in-band Configure/Drain can verify the host.
 	Insert(ctx context.Context, spec instanceSpec) (gceInstance, error)
 
 	// DeleteInstance deletes the instance identified by (zone, name)
@@ -32,21 +34,17 @@ type gceClient interface {
 	// label), so a provider with no persisted store can still rebuild inventory.
 	DescribeManaged(ctx context.Context) ([]gceInstance, error)
 
-	// ApplyBootstrap delivers the opaque bootstrap blob and records the cluster
-	// binding by writing the blob to the instance's `startup-script` metadata and
-	// the cluster id to its `bigfleet-cluster` metadata, then resetting the
-	// instance so the script runs on the next boot (real impl:
-	// Instances.SetMetadata + Instances.Reset). Returning nil means the
-	// control-plane mutations succeeded and the reset was issued — not that the
-	// kubelet has finished joining, which completes asynchronously on boot. The
-	// blob is the kubelet join data — never parse it.
+	// ApplyBootstrap binds a running instance to a cluster and delivers the opaque
+	// bootstrap blob **in-band over SSH** to the already-running host — verifying
+	// the host key, writing the blob to a umask-077 file, and running the image's
+	// bootstrap hook (no reboot, and the secret is never persisted in metadata).
+	// The cluster id is recorded in `bigfleet-cluster` metadata only after the
+	// hook succeeds. The blob is the kubelet join data — never parse it.
 	ApplyBootstrap(ctx context.Context, inst gceInstance, clusterID string, bootstrap []byte) error
 
-	// DrainNode removes the cluster binding: it strips the delivered
-	// `startup-script` metadata (so the node will not rejoin on a future boot),
-	// honours the grace period, and clears the `bigfleet-cluster` metadata —
-	// leaving the instance running but unbound (Idle). Real impl:
-	// Instances.SetMetadata.
+	// DrainNode cordons and drains the kubelet off a running instance **over SSH**
+	// (honouring the grace period), then clears the `bigfleet-cluster` metadata —
+	// leaving the instance running but unbound (Idle). No reboot.
 	DrainNode(ctx context.Context, inst gceInstance, gracePeriodSeconds int64) error
 
 	// DescribeMachineTypeCapacities resolves the hardware capacity (vCPU +
@@ -76,7 +74,7 @@ type instanceSpec struct {
 	IdempotencyToken string
 	// BaseStartupScript is the generic pre-binding startup script baked in at
 	// launch (a cluster-agnostic node bootstrap). The cluster-specific bootstrap
-	// arrives later via ApplyBootstrap, which overwrites `startup-script`.
+	// arrives later via ApplyBootstrap, delivered in-band over SSH.
 	BaseStartupScript []byte
 }
 
@@ -90,6 +88,8 @@ type gceInstance struct {
 	Spot        bool
 	Capacity    string // bigfleet-capacity label (canonical capacity string)
 	ClusterID   string // from bigfleet-cluster instance metadata, empty when unbound
+	IP          string // address Configure/Drain reach the host at over SSH
+	HostKeyFP   string // pinned SSH host-key fingerprint (bigfleet-host-key-fp metadata)
 	SelfLink    string // fully-qualified instance self-link (informational)
 	// Running reports whether the instance is in a live state (PROVISIONING /
 	// STAGING / RUNNING / REPAIRING), as opposed to STOPPING / TERMINATED.

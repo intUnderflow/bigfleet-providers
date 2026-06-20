@@ -53,6 +53,9 @@ exactly how `make certify-gcp` runs credential-free.
 | `--disk-size-gb` | boot disk size in GiB (default `20`) |
 | `--instance-service-account` | identity the launched instances run as |
 | `--base-startup-script` | generic pre-binding startup script baked in at Insert |
+| `--ssh-key` / `--ssh-user` | SSH key + user for in-band Configure/Drain delivery |
+| `--bootstrap-hook` | image path that applies the delivered bootstrap blob |
+| `--use-external-ip` | reach instances over an external IP for SSH (default: internal) |
 | `--offerings` / `--seed-count` | offerings JSON file (or a default mix sized by seed-count) |
 | `--zone-a` / `--zone-b` | zones for the default offerings (`<region>-a`/`<region>-b`) |
 | `--state` | durable state file; empty = in-memory only |
@@ -68,26 +71,30 @@ token flag. There are **two identities**: the **provider** service account (the
 process; least-privilege `roles/compute.instanceAdmin.v1`), obtained via
 **Workload Identity** on GKE (no key files) or a key-file Secret off-GKE; and the
 **instance** service account (`--instance-service-account`) the launched nodes
-run as. See [`docs/credentials.md`](docs/credentials.md) and the Terraform in
-[`deploy/sa/`](deploy/sa).
+run as. Configure/Drain additionally reach the host **over SSH** (`--ssh-key`,
+authorised via `ssh-keys` metadata with host-key pinning), so the provider also
+holds a dedicated SSH private key. See [`docs/credentials.md`](docs/credentials.md)
+and the Terraform in [`deploy/sa/`](deploy/sa).
 
 ## Configure-bootstrap reconciliation (design choice)
 
-A GCE instance consumes its `startup-script` metadata **only at boot**, but a
-slot's target cluster is only known when the shard binds it. So the provider
-splits launch from cluster-join:
+A slot's target cluster is only known when the shard binds it, so the provider
+splits launch from cluster-join and delivers the bootstrap **in-band over SSH**
+to the running host (no reboot, secret never persisted — matching the certified
+AWS/Hetzner providers):
 
 - **Create** (`Instances.Insert`) launches the instance from `--image` with the
-  generic, cluster-agnostic `--base-startup-script`, and blocks until the instance
-  is `RUNNING` before settling the machine to Idle. Spot offerings set
-  `scheduling.provisioningModel = SPOT`.
-- **Configure** delivers the opaque per-cluster `bootstrap_blob` by writing it to
-  the instance's `startup-script` metadata and the cluster id to `bigfleet-cluster`
-  metadata (one `SetMetadata`), then **resetting** the instance (`Reset`) so the
-  script runs on the next boot. Success means the metadata was applied and the
-  reset issued — not that the kubelet has joined (that completes asynchronously).
-- **Drain** strips the `startup-script` and `bigfleet-cluster` metadata (so a
-  future boot won't rejoin) back to Idle, honouring the grace period.
+  generic, cluster-agnostic `--base-startup-script`, authorises the provider's
+  `--ssh-key` (via `ssh-keys` metadata) and injects a pinned SSH host key, then
+  blocks until the instance is `RUNNING` before settling the machine to Idle. Spot
+  offerings set `scheduling.provisioningModel = SPOT`.
+- **Configure** SSHes to the running host (verifying the pinned host key), writes
+  the opaque per-cluster `bootstrap_blob` to `<bootstrap-hook>.blob` (`umask 077`)
+  and runs `<bootstrap-hook> <cluster-id>`, waiting for success. The blob is never
+  persisted in metadata; the `bigfleet-cluster` binding is recorded only after the
+  hook succeeds. No reboot.
+- **Drain** cordons/drains the kubelet over SSH (honouring the grace period), then
+  clears the `bigfleet-cluster` binding back to Idle. No reboot.
 - **Delete** (`Instances.Delete`) tears the instance down; the slot returns to
   Speculative.
 

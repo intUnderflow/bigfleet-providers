@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -57,6 +58,10 @@ func run() error {
 		diskSizeGB  = flag.Int64("disk-size-gb", 20, "boot disk size in GiB (gcp backend)")
 		svcAccount  = flag.String("instance-service-account", "", "service account email the launched instances run as (gcp backend; default: the project default)")
 		baseStartup = flag.String("base-startup-script", "", "path to the generic pre-binding startup script baked in at Insert")
+		sshKey      = flag.String("ssh-key", "", "path to the SSH private key used for in-band Configure/Drain delivery (gcp backend)")
+		sshUser     = flag.String("ssh-user", "bigfleet", "SSH user for Configure/Drain delivery (gcp backend); authorised via ssh-keys metadata")
+		bootstrapHk = flag.String("bootstrap-hook", "/opt/bigfleet/bootstrap", "image path that applies the delivered bootstrap blob")
+		useExtIP    = flag.Bool("use-external-ip", false, "reach instances over an ephemeral external IP for SSH (gcp backend; default: internal IP, same-VPC)")
 		reconcile   = flag.Duration("reconcile-interval", 2*time.Minute, "background GCE->inventory reconcile interval (0 = off)")
 
 		metricsAddr = flag.String("metrics-addr", ":9090", "address for /metrics, /healthz, /readyz (empty = disabled)")
@@ -82,6 +87,16 @@ func run() error {
 		logger.Warn("using the IN-MEMORY fake GCE backend (dev / certification only) — no real instances will be created")
 		client = newGCEFake()
 	case "gcp":
+		var signer ssh.Signer
+		if *sshKey != "" {
+			s, err := loadSSHSigner(*sshKey)
+			if err != nil {
+				return err
+			}
+			signer = s
+		} else {
+			logger.Warn("no --ssh-key set: Configure cannot deliver the bootstrap blob in-band (Drain will only clear the binding)")
+		}
 		real, err := newGCEReal(ctx, gceRealConfig{
 			Project:                *project,
 			Region:                 *region,
@@ -90,6 +105,10 @@ func run() error {
 			Subnetwork:             *subnet,
 			DiskSizeGB:             *diskSizeGB,
 			InstanceServiceAccount: *svcAccount,
+			SSHSigner:              signer,
+			SSHUser:                *sshUser,
+			BootstrapHookPath:      *bootstrapHk,
+			UseExternalIP:          *useExtIP,
 		}, logger)
 		if err != nil {
 			return err
@@ -266,6 +285,18 @@ func resolveBackendMode(flagVal, region string) string {
 	default:
 		return strings.ToLower(flagVal)
 	}
+}
+
+func loadSSHSigner(path string) (ssh.Signer, error) {
+	key, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read --ssh-key %s: %w", path, err)
+	}
+	signer, err := ssh.ParsePrivateKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("parse --ssh-key %s: %w", path, err)
+	}
+	return signer, nil
 }
 
 func buildStore(path string) (providerkit.Store, error) {
