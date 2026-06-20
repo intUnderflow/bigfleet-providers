@@ -90,10 +90,15 @@ token:
 
 # The on-host agent bootstrap channel (HTTPS). The provider serves it; the
 # Droplet's agent fetches its cluster-join blob from `endpoint`, pinning the CA.
+# Two distinct Secrets: tlsSecretName holds the channel's server cert/key (a
+# standard kubernetes.io/tls Secret: tls.crt, tls.key), and secretName holds the
+# HMAC key (key: secret) that mints per-machine agent tokens.
 bootstrap:
-  addr: ":9443"
+  enabled: true
   endpoint: https://do-provider.bigfleet.svc:9443
-  secretName: bigfleet-digitalocean-bootstrap   # keys: tls.crt, tls.key, ca.crt, hmac
+  tlsSecretName: bigfleet-digitalocean-bootstrap-tls   # keys: tls.crt, tls.key (+ ca.crt only if ca: true)
+  secretName: bigfleet-digitalocean-bootstrap          # key: secret (BIGFLEET_BOOTSTRAP_SECRET)
+  # ca: true   # set only if tlsSecretName also carries a ca.crt for the agent to pin
 
 # Durable state on a PersistentVolume: fence marks, the idempotency map, and
 # bindings survive restarts. Without it the provider is in-memory only.

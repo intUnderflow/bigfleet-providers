@@ -93,8 +93,26 @@ func TestBootstrapVault_DeliverAndAck(t *testing.T) {
 	if cmd.Type != "configure" || cmd.ClusterID != "c1" {
 		t.Fatalf("fetched command = %+v, want configure/c1", cmd)
 	}
+	if cmd.ID == "" {
+		t.Fatal("fetched command has no id to echo in the ack")
+	}
 
-	ackBody, _ := json.Marshal(bootstrapAck{OK: true})
+	// A stale ack (wrong command id) must NOT release the waiter.
+	staleBody, _ := json.Marshal(bootstrapAck{CommandID: "does-not-match", OK: true})
+	sr, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/ack?machine_id="+machineID, bytes.NewReader(staleBody))
+	sr.Header.Set("Authorization", "Bearer "+token)
+	sresp, err := http.DefaultClient.Do(sr)
+	if err != nil {
+		t.Fatalf("stale ack: %v", err)
+	}
+	_ = sresp.Body.Close()
+	select {
+	case err := <-done:
+		t.Fatalf("Enqueue returned on a stale ack (err=%v); it must wait for the matching command id", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	ackBody, _ := json.Marshal(bootstrapAck{CommandID: cmd.ID, OK: true})
 	ar, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/ack?machine_id="+machineID, bytes.NewReader(ackBody))
 	ar.Header.Set("Authorization", "Bearer "+token)
 	aresp, err := http.DefaultClient.Do(ar)
@@ -126,9 +144,22 @@ func TestBootstrapVault_FailureAck(t *testing.T) {
 		done <- v.Enqueue(ctx, machineID, bootstrapCommand{Type: "configure"})
 	}()
 
-	// Give Enqueue a moment to register the pending command, then ack failure.
+	// Give Enqueue a moment to register the pending command, then fetch it to
+	// learn its id (as the agent would) and ack failure echoing that id.
 	time.Sleep(20 * time.Millisecond)
-	ackBody, _ := json.Marshal(bootstrapAck{OK: false, Error: "join failed"})
+	gr := httptest.NewRequest(http.MethodGet, "/v1/command?machine_id="+machineID, nil)
+	gr.Header.Set("Authorization", "Bearer "+token)
+	gw := httptest.NewRecorder()
+	v.ServeHTTP(gw, gr)
+	if gw.Code != http.StatusOK {
+		t.Fatalf("fetch command status = %d, want 200", gw.Code)
+	}
+	var cmd bootstrapCommand
+	if err := json.NewDecoder(gw.Body).Decode(&cmd); err != nil {
+		t.Fatalf("decode command: %v", err)
+	}
+
+	ackBody, _ := json.Marshal(bootstrapAck{CommandID: cmd.ID, OK: false, Error: "join failed"})
 	r := httptest.NewRequest(http.MethodPost, "/v1/ack?machine_id="+machineID, bytes.NewReader(ackBody))
 	r.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()

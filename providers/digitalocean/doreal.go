@@ -11,6 +11,7 @@ import (
 	"net/textproto"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/digitalocean/godo"
@@ -67,6 +68,9 @@ type doRealConfig struct {
 	CreateWaitTimeout time.Duration
 	// PollInterval is how often CreateDroplet polls the Droplet status.
 	PollInterval time.Duration
+	// SizesCacheTTL bounds how long a fetched Sizes.List catalogue is reused, so
+	// a price-refresh over many sizes is one catalogue scan, not one per size.
+	SizesCacheTTL time.Duration
 }
 
 func (c *doRealConfig) withDefaults() {
@@ -75,6 +79,9 @@ func (c *doRealConfig) withDefaults() {
 	}
 	if c.PollInterval <= 0 {
 		c.PollInterval = 5 * time.Second
+	}
+	if c.SizesCacheTTL <= 0 {
+		c.SizesCacheTTL = time.Minute
 	}
 }
 
@@ -87,6 +94,12 @@ type doReal struct {
 	cfg    doRealConfig
 	client *godo.Client
 	logger *slog.Logger
+
+	// sizesMu guards a short-lived cache of the Sizes.List catalogue, so a
+	// price/size refresh over N offered sizes is a single catalogue scan.
+	sizesMu    sync.Mutex
+	sizesCache []godo.Size
+	sizesAt    time.Time
 }
 
 func newDOReal(cfg doRealConfig, logger *slog.Logger) (*doReal, error) {
@@ -114,6 +127,12 @@ func newDOReal(cfg doRealConfig, logger *slog.Logger) (*doReal, error) {
 }
 
 func (r *doReal) CreateDroplet(ctx context.Context, spec dropletSpec) (dropletInstance, error) {
+	// This process owns exactly one region; refuse to create a Droplet anywhere
+	// else (a mis-scoped offering would otherwise place hosts outside the region
+	// this process manages and reconciles).
+	if spec.Region != "" && spec.Region != r.cfg.Region {
+		return dropletInstance{}, fmt.Errorf("create droplet: offering region %q does not match this provider's region %q", spec.Region, r.cfg.Region)
+	}
 	// Bake the generic, pre-binding agent bootstrap into user_data: the operator's
 	// base user-data (installs/starts the agent) plus the agent config carrying
 	// this Droplet's per-machine token and the provider's pinned endpoint/CA. The
@@ -125,7 +144,7 @@ func (r *doReal) CreateDroplet(ctx context.Context, spec dropletSpec) (dropletIn
 
 	createReq := &godo.DropletCreateRequest{
 		Name:     dropletName(spec),
-		Region:   spec.Region,
+		Region:   r.cfg.Region,
 		Size:     spec.Size,
 		Image:    dropletImage(spec.Image),
 		UserData: userData,
@@ -202,14 +221,24 @@ func (r *doReal) DescribeManaged(ctx context.Context) ([]dropletInstance, error)
 			return nil, fmt.Errorf("list managed droplets: %w", err)
 		}
 		for i := range droplets {
-			out = append(out, r.toDropletInstance(&droplets[i]))
+			drv := r.toDropletInstance(&droplets[i])
+			// DigitalOcean tags are account-wide, so the bigfleet-managed tag also
+			// matches this account's Droplets in OTHER regions (managed by sibling
+			// provider processes). This process owns exactly one region — drop the
+			// rest so they never leak into its inventory or host resolution.
+			if drv.Region != r.cfg.Region {
+				continue
+			}
+			out = append(out, drv)
 		}
 		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
 			break
 		}
 		page, err := resp.Links.CurrentPage()
 		if err != nil {
-			break
+			// Never return a partial inventory silently: an incomplete list would
+			// look like missing Droplets and could re-seed capacity incorrectly.
+			return nil, fmt.Errorf("list managed droplets: bad pagination link: %w", err)
 		}
 		opt.Page = page + 1
 	}
@@ -248,25 +277,14 @@ func (r *doReal) DrainNode(ctx context.Context, drv dropletInstance, gracePeriod
 }
 
 func (r *doReal) PriceUSD(ctx context.Context, sizeSlug string) (float64, error) {
-	opt := &godo.ListOptions{Page: 1, PerPage: 200}
-	for {
-		sizes, resp, err := r.client.Sizes.List(ctx, opt)
-		if err != nil {
-			return 0, err
+	sizes, err := r.listAllSizes(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, s := range sizes {
+		if s.Slug == sizeSlug {
+			return s.PriceHourly, nil
 		}
-		for _, s := range sizes {
-			if s.Slug == sizeSlug {
-				return s.PriceHourly, nil
-			}
-		}
-		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
-			break
-		}
-		page, err := resp.Links.CurrentPage()
-		if err != nil {
-			break
-		}
-		opt.Page = page + 1
 	}
 	return 0, fmt.Errorf("no pricing for size %q", sizeSlug)
 }
@@ -276,28 +294,50 @@ func (r *doReal) DescribeSizeCapacities(ctx context.Context, sizeSlugs []string)
 	for _, s := range sizeSlugs {
 		want[s] = struct{}{}
 	}
+	sizes, err := r.listAllSizes(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make(map[string]sizeCapacity, len(sizeSlugs))
+	for _, s := range sizes {
+		if _, ok := want[s.Slug]; ok {
+			out[s.Slug] = sizeCapacity{VCPU: s.Vcpus, MemMiB: int64(s.Memory)}
+		}
+	}
+	return out, nil
+}
+
+// listAllSizes returns the full DigitalOcean Sizes catalogue, served from a
+// short-lived cache so a refresh over many offered sizes is a single paginated
+// scan rather than one per size (PriceUSD/DescribeSizeCapacities both read it). A
+// pagination error fails the whole fetch — callers must never act on a partial
+// catalogue (a missing size would wrongly fall back to the pinned table).
+func (r *doReal) listAllSizes(ctx context.Context) ([]godo.Size, error) {
+	r.sizesMu.Lock()
+	defer r.sizesMu.Unlock()
+	if r.sizesCache != nil && time.Since(r.sizesAt) < r.cfg.SizesCacheTTL {
+		return r.sizesCache, nil
+	}
+	var all []godo.Size
 	opt := &godo.ListOptions{Page: 1, PerPage: 200}
 	for {
 		sizes, resp, err := r.client.Sizes.List(ctx, opt)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("list sizes: %w", err)
 		}
-		for _, s := range sizes {
-			if _, ok := want[s.Slug]; ok {
-				out[s.Slug] = sizeCapacity{VCPU: s.Vcpus, MemMiB: int64(s.Memory)}
-			}
-		}
+		all = append(all, sizes...)
 		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
 			break
 		}
 		page, err := resp.Links.CurrentPage()
 		if err != nil {
-			break
+			return nil, fmt.Errorf("list sizes: bad pagination link: %w", err)
 		}
 		opt.Page = page + 1
 	}
-	return out, nil
+	r.sizesCache = all
+	r.sizesAt = time.Now()
+	return all, nil
 }
 
 // --- helpers --------------------------------------------------------------

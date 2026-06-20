@@ -65,9 +65,13 @@ bootstrap:
   # Externally-reachable URL of the channel, injected into Droplet user_data
   # (--bootstrap-endpoint), e.g. https://do-provider.example.com:9443
   endpoint: ""
-  # Secret holding the channel server cert (tls.crt), key (tls.key), and
-  # optionally the CA (ca.crt) the agent pins to verify the provider.
+  # Secret holding the channel server cert (tls.crt) and key (tls.key).
   tlsSecretName: ""
+  # Set true only if tlsSecretName also carries a ca.crt the agent should pin
+  # (passes --bootstrap-ca). Leave false to let the agent pin the server cert
+  # itself — a standard kubernetes.io/tls Secret has no ca.crt, and pointing
+  # --bootstrap-ca at a missing file would crash the pod at startup.
+  ca: false
   # Secret holding the HMAC secret (key: secret) for per-machine agent tokens,
   # mounted as BIGFLEET_BOOTSTRAP_SECRET. Pin one so tokens survive restarts.
   secretName: ""

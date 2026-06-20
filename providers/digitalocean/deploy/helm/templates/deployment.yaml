@@ -69,7 +69,9 @@ spec:
             - --bootstrap-endpoint={{ .Values.bootstrap.endpoint }}
             - --bootstrap-tls-cert=/etc/bigfleet/bootstrap-tls/tls.crt
             - --bootstrap-tls-key=/etc/bigfleet/bootstrap-tls/tls.key
+            {{- if .Values.bootstrap.ca }}
             - --bootstrap-ca=/etc/bigfleet/bootstrap-tls/ca.crt
+            {{- end }}
             {{- end }}
             {{- if .Values.offerings.content }}
             - --offerings=/etc/bigfleet/offerings/offerings.json

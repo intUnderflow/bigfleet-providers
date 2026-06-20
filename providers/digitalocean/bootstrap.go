@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -50,6 +51,7 @@ func agentToken(secret []byte, machineID string) string {
 
 // bootstrapCommand is the JSON the agent fetches from GET /v1/command.
 type bootstrapCommand struct {
+	ID           string `json:"id"`                      // per-command nonce; the agent MUST echo it as ack.command_id
 	Type         string `json:"type"`                    // "configure" | "drain"
 	ClusterID    string `json:"cluster_id,omitempty"`    // configure: the cluster to join
 	Blob         string `json:"blob,omitempty"`          // configure: base64 of the opaque bootstrap blob
@@ -57,10 +59,12 @@ type bootstrapCommand struct {
 }
 
 // bootstrapAck is the JSON the agent posts to /v1/ack once it has applied a
-// command.
+// command. CommandID echoes the fetched command's id so the provider can match
+// the ack to the exact command it served (and ignore a stale one).
 type bootstrapAck struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	CommandID string `json:"command_id"`
+	OK        bool   `json:"ok"`
+	Error     string `json:"error,omitempty"`
 }
 
 // pendingCommand couples a queued command with the channel its Enqueue caller is
@@ -77,6 +81,7 @@ type bootstrapVault struct {
 	logger *slog.Logger
 
 	mu      sync.Mutex
+	seq     uint64                     // monotonic, mints per-command ids
 	pending map[string]*pendingCommand // machineID -> queued command + waiter
 }
 
@@ -102,6 +107,10 @@ func (v *bootstrapVault) Token(machineID string) string {
 func (v *bootstrapVault) Enqueue(ctx context.Context, machineID string, cmd bootstrapCommand) error {
 	pc := &pendingCommand{cmd: cmd, done: make(chan error, 1)}
 	v.mu.Lock()
+	v.seq++
+	// Stamp a unique id so handleAck can match an ack to exactly this command and
+	// ignore a stale one (e.g. a superseded command the agent acks late).
+	pc.cmd.ID = strconv.FormatUint(v.seq, 10)
 	if old := v.pending[machineID]; old != nil {
 		// Unblock a superseded waiter so it does not hang forever.
 		select {
@@ -192,7 +201,9 @@ func (v *bootstrapVault) handleAck(w http.ResponseWriter, r *http.Request) {
 	v.mu.Lock()
 	pc := v.pending[machineID]
 	v.mu.Unlock()
-	if pc == nil {
+	if pc == nil || pc.cmd.ID != ack.CommandID {
+		// No pending command, or the ack is for a superseded/stale command — never
+		// release the current waiter with another command's result.
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
