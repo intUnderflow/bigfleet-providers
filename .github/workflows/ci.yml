@@ -124,17 +124,49 @@ jobs:
           working-directory: conformance
           args: --build-tags=certify ./...
 
-  # Full certification of every changed provider via the bfconformance runner, in
-  # ONE job: the upstream baseline + the extension suite + the FAULT / DURABILITY
-  # / SCALE lanes = all 92 behaviours, credential-free, emitting a per-behaviour
-  # VERDICT + JUnit/JSON report. Inapplicable lanes/profiles skip-as-pass so the
-  # verdict stays meaningful (e.g. an on-demand-only provider's spot lane). The
-  # fault lane always exercises the reference faultprovider (not the target).
-  # Scale runs at a lighter seed/soak for CI (a nightly job can crank it). A
-  # provider that cannot stand up credential-free opts out with a
-  # providers/<name>/.ci-no-conformance marker (skipped, never failed). The local
-  # equivalent is: make report-<name> PROFILE=core,cloud,spot,fault,durable,scale
+  # Full certification (upstream baseline + extension suite) per changed
+  # provider, credential-free. A provider that needs cloud creds opts out with a
+  # providers/<name>/.ci-no-conformance marker (skipped, never failed).
   certify:
+    needs: changes
+    if: needs.changes.outputs.providers != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: ${{ fromJSON(needs.changes.outputs.providers) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: providers/${{ matrix.provider }}/go.mod
+          cache-dependency-path: providers/${{ matrix.provider }}/go.sum
+      - id: gate
+        run: |
+          if [ -f "providers/${{ matrix.provider }}/.ci-no-conformance" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "providers/${{ matrix.provider }} opts out of credential-free certification"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Certify (upstream baseline + extension suite)
+        if: steps.gate.outputs.skip != 'true'
+        # run-certify.sh clones bigfleet at the pinned version itself when
+        # BIGFLEET_SRC is unset.
+        run: make certify-${{ matrix.provider }}
+
+  # Full certification of EVERY changed provider via the bfconformance runner:
+  # the extension + FAULT + DURABILITY + SCALE lanes across all 92 behaviours,
+  # credential-free, emitting a per-behaviour VERDICT + JUnit/JSON report. This is
+  # what proves a module is fully certified — the `certify` job above only runs
+  # the baseline + core-shaped extension. Inapplicable lanes/profiles skip-as-pass
+  # so the verdict stays meaningful (e.g. an on-demand-only provider's spot lane).
+  # The upstream baseline is covered by `certify`, so -skip-baseline here. The
+  # fault lane always exercises the reference faultprovider (not the target), so
+  # it re-runs per leg for a uniform report. Scale runs at a lighter seed/soak for
+  # CI (a nightly job can crank it). A provider that cannot stand up credential-
+  # free opts out with a providers/<name>/.ci-no-conformance marker.
+  certify-full:
     needs: changes
     if: needs.changes.outputs.providers != '[]'
     runs-on: ubuntu-latest
@@ -156,14 +188,14 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Certify — baseline + extension + fault + durable + scale lanes
+      - name: Full certification — extension + fault + durable + scale lanes
         if: steps.gate.outputs.skip != 'true'
         env:
           BFCONF_SCALE_SEED: "4000"
           BFCONF_SOAK: "5s"
         run: |
           GOWORK=off go -C conformance run ./cmd/bfconformance -provider ${{ matrix.provider }} \
-            -profile core,cloud,spot,fault,durable,scale \
+            -profile core,cloud,spot,fault,durable,scale -skip-baseline \
             -out "$GITHUB_WORKSPACE/conformance-report/${{ matrix.provider }}"
       - uses: actions/upload-artifact@v4
         if: always() && steps.gate.outputs.skip != 'true'
@@ -244,7 +276,7 @@ jobs:
   # Single aggregation gate for branch protection: green unless a job that
   # actually ran failed (skipped jobs are fine). Make THIS the required check.
   ci-ok:
-    needs: [changes, pins, providerkit, provider, conformance-module, certify, deploy, govulncheck, site]
+    needs: [changes, pins, providerkit, provider, conformance-module, certify, certify-full, deploy, govulncheck, site]
     if: always()
     runs-on: ubuntu-latest
     steps:
