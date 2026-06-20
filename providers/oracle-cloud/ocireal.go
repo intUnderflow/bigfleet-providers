@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -430,11 +432,18 @@ func displayName(spec launchSpec) string {
 	return name
 }
 
+// retryToken maps the operation id to an OCI OpcRetryToken (max 64 chars). A
+// short id is used verbatim (human-recognisable in the API audit trail); a longer
+// one is hashed to its 64-char SHA-256 hex digest rather than truncated, so two
+// distinct operation ids sharing a 64-char prefix can never collide onto the same
+// retry token (which would make a genuine re-Create idempotently return the wrong
+// instance).
 func retryToken(token string) string {
-	if len(token) > 64 {
-		return token[:64]
+	if len(token) <= 64 {
+		return token
 	}
-	return token
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:]) // exactly 64 hex chars
 }
 
 // sanitize maps a machine/operation id to a display-name-safe slug.

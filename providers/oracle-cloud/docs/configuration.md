@@ -109,3 +109,11 @@ Your base image must ship that executable and run the Oracle Cloud Agent with th
 blob (opaque kubelet-join data — never parsed by the provider). `Drain` runs a
 `kubectl cordon`/`drain` via the same Run Command channel, bounded by the grace
 period.
+
+> **Node-name assumption.** The drain script resolves the Kubernetes node to
+> cordon/drain from the host's own `hostname -f` (falling back to `hostname`).
+> This is correct when the kubelet registers the node under that name (the OKE /
+> default convention). If you run the kubelet with a `--hostname-override` or a
+> custom DNS scheme so the registered node name differs, ensure the base image's
+> `hostname` resolves to the registered node name (e.g. set it in the
+> `--base-user-data` cloud-init), or the drain will target the wrong node.

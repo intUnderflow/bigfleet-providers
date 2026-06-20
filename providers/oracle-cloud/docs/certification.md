@@ -7,10 +7,10 @@ sidebar:
 ---
 
 This provider is **certified**: it passes every behavior in the BigFleet
-conformance program — the same bar every provider must clear — so you can trust it
-to launch, configure, drain, and delete machines correctly under load, failure,
-and restart. You don't need to run anything here to use it in production; this
-page exists if you want to reproduce that verdict yourself.
+conformance program — the same bar every provider must clear — which exercises
+launch, configure, drain, and delete under load, failure, and restart. You don't
+need to run anything here to use it; this page exists if you want to reproduce
+that verdict yourself.
 
 "Certified" means exactly what it means in the
 [conformance program](https://github.com/intUnderflow/bigfleet-providers/tree/main/conformance/docs/conformance.md):

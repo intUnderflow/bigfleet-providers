@@ -17,20 +17,20 @@ You run **one process per region**, next to BigFleet. Each process owns a single
 region + compartment's capacity, and BigFleet dials it to request, configure,
 drain, and delete machines as demand moves.
 
-## Why you'd trust it in production
+## How it behaves
 
-- **Production-ready.** It ships as a hardened container image and a Helm chart,
-  runs non-root on a distroless, read-only root filesystem, and exposes
+- **Hardened and operable.** It ships as a container image and a Helm chart, runs
+  non-root on a distroless, read-only root filesystem, and exposes
   liveness/readiness probes, Prometheus metrics, and structured logs. See
   [Observability](/providers/oracle-cloud/observability/).
 - **Certified.** It passes the full BigFleet provider conformance program —
   [92 certified behaviors](/conformance/) — credential-free on every change, plus
   an extension suite that asserts stronger invariants. See
   [Certification](/providers/oracle-cloud/certification/).
-- **Correct by construction.** A `Create` blocks until the instance is actually
+- **Conservative by default.** A `Create` blocks until the instance is actually
   RUNNING, preemptible machines always carry a real interruption risk (never a
   falsely-cheap zero), and a failed bootstrap or drain surfaces as a hard failure
-  rather than a silently-broken node. Capacity it doesn't own, it never touches.
+  rather than a silently-broken node. Capacity it doesn't own, it doesn't touch.
 
 ## What you need
 
