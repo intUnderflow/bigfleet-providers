@@ -1,0 +1,16 @@
+apiVersion: v2
+name: bigfleet-digitalocean
+description: BigFleet CapacityProvider for DigitalOcean Droplets — one release per region.
+type: application
+# Chart version; bump on chart changes.
+version: 0.1.0
+# Tracks the provider binary; the image tag is set in values.yaml.
+appVersion: "0.1.0"
+keywords:
+  - bigfleet
+  - capacity-provider
+  - digitalocean
+  - droplets
+home: https://github.com/intUnderflow/bigfleet-providers/tree/main/providers/digitalocean
+sources:
+  - https://github.com/intUnderflow/bigfleet-providers
