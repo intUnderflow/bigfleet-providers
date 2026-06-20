@@ -77,18 +77,32 @@ server **over SSH**. The trust model:
   cluster-join bootstrap blob is delivered to `<bootstrap-hook>.blob` and the hook
   is run as `<bootstrap-hook> <cluster-id>` — the blob is opaque and the provider
   never parses it.
-:::caution[Host-key verification is disabled]
-The provider connects with `ssh.InsecureIgnoreHostKey()` — it does **not** verify
-the server's host key. A freshly provisioned server has no pre-shared host key to
-pin, and it is addressed by its provider-assigned public IP, so there is nothing
-to trust-on-first-use against at Create time. **The consequence:** a network
-on-path (MITM) attacker between the provider and a new server could impersonate
-the host and intercept the Configure payload — which can carry cluster-join
-material. Mitigate by running the SSH path over a **private/management network**
-the control plane trusts (strongly recommended), and/or by pinning host keys with
-a known-hosts callback if your image bakes a known host key or your environment
-can distribute one. Treat the bootstrap blob's contents accordingly.
-:::
+### Host-key verification
+
+The provider **verifies the server's SSH host key** before delivering the
+bootstrap payload, so an on-path (MITM) attacker cannot impersonate a freshly
+provisioned server and capture the cluster-join material in the Configure blob.
+The model:
+
+- **Injected, pinned key (default, for servers the provider creates).** At
+  `Server.Create` the provider mints a fresh ed25519 **host** keypair, injects the
+  private key into the server via cloud-init (`ssh_keys:` — merged with your
+  `--base-user-data` as a MIME multipart archive), and pins the public key's
+  SHA-256 fingerprint in the `bigfleet-host-key-fp` server label. Every later
+  Configure/Drain connection checks the presented host key against that pin and
+  **aborts on mismatch**. Because the key is known before the first connection,
+  there is no trust-on-first-use window for servers the provider provisioned.
+- **Trust-on-first-use (fallback, only for servers with no pin).** A server the
+  provider did not create (an orphan it adopted) or one provisioned before
+  host-key pinning has no pinned fingerprint. The first connection records the
+  observed host key into the label and pins it; all later connections are verified
+  against it. The residual risk is confined to that single first connection, and
+  it is logged at `WARN`.
+
+For defence in depth, run the SSH path over a **private/management network** the
+control plane trusts. If your base image bakes its own host key, the injected key
+takes precedence (the provider sets it via cloud-init); avoid setting a
+conflicting `ssh_keys` block in your `--base-user-data`.
 
 ## Exposure
 

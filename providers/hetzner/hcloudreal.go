@@ -138,6 +138,19 @@ func (r *hcloudReal) CreateServer(ctx context.Context, spec serverSpec) (serverI
 		return serverInstance{}, fmt.Errorf("unknown location %q", spec.Location)
 	}
 
+	// Mint an SSH host key for the server and inject it via cloud-init, so the
+	// host boots presenting a key we already know. Its fingerprint is pinned in a
+	// label and verified on every later Configure/Drain SSH connection — closing
+	// the MITM window on the (secret-bearing) bootstrap delivery.
+	hostKey, err := generateHostKey()
+	if err != nil {
+		return serverInstance{}, err
+	}
+	userData, err := buildUserData(spec.BaseUserData, hostKey.cloudConfig())
+	if err != nil {
+		return serverInstance{}, fmt.Errorf("assemble user-data: %w", err)
+	}
+
 	opts := hcloud.ServerCreateOpts{
 		// The operation id (idempotency token) makes the name stable across a
 		// retried Create, so a transport retry maps to the same server name.
@@ -145,10 +158,11 @@ func (r *hcloudReal) CreateServer(ctx context.Context, spec serverSpec) (serverI
 		ServerType: serverType,
 		Image:      image,
 		Location:   location,
-		UserData:   string(spec.BaseUserData),
+		UserData:   userData,
 		Labels: map[string]string{
 			labelManaged:   "true",
 			labelMachineID: encodeMachineID(spec.MachineID),
+			labelHostKeyFP: hostKey.fingerprint,
 		},
 	}
 	res, _, err := r.client.Server.Create(ctx, opts)
@@ -243,7 +257,7 @@ func (r *hcloudReal) ApplyBootstrap(ctx context.Context, srv serverInstance, clu
 	script := fmt.Sprintf(
 		"set -euo pipefail; umask 077; mkdir -p \"$(dirname %s)\"; echo %s | base64 -d > %s; %s %s",
 		blobPath, shellQuote(blob), blobPath, hook, shellQuote(clusterID))
-	if err := r.runSSH(ctx, srv.PublicIPv4, script); err != nil {
+	if err := r.runSSH(ctx, srv, script); err != nil {
 		return err
 	}
 	// Record the binding label only AFTER the bootstrap actually succeeded, so a
@@ -277,7 +291,7 @@ func (r *hcloudReal) DrainNode(ctx context.Context, srv serverInstance, gracePer
 			"kubectl drain \"$node\" --ignore-daemonsets --delete-emptydir-data "+
 			"--grace-period=%d --timeout=%ds",
 		grace, grace)
-	if err := r.runSSH(ctx, srv.PublicIPv4, script); err != nil {
+	if err := r.runSSH(ctx, srv, script); err != nil {
 		return err
 	}
 	return r.clearLabel(ctx, srv.ServerID, labelCluster)
@@ -355,6 +369,7 @@ func (r *hcloudReal) toServerInstance(srv *hcloud.Server) serverInstance {
 		ServerID:  strconv.FormatInt(srv.ID, 10),
 		MachineID: decodeMachineID(srv.Labels[labelMachineID]),
 		ClusterID: srv.Labels[labelCluster],
+		HostKeyFP: srv.Labels[labelHostKeyFP],
 		Running: srv.Status == hcloud.ServerStatusRunning ||
 			srv.Status == hcloud.ServerStatusInitializing ||
 			srv.Status == hcloud.ServerStatusStarting,
@@ -412,18 +427,22 @@ func (r *hcloudReal) updateLabels(ctx context.Context, serverID string, mutate f
 	return err
 }
 
-// runSSH dials the host, runs script over a single session, and returns an error
-// unless it exits 0. Host-key verification is intentionally relaxed (the host is
-// freshly provisioned and addressed by its provider-assigned IP); harden with a
-// known-hosts callback if your environment pins host keys.
-func (r *hcloudReal) runSSH(ctx context.Context, host, script string) error {
+// runSSH dials the server, runs script over a single session, and returns an
+// error unless it exits 0. The server's SSH host key is verified against the
+// fingerprint pinned at Create (srv.HostKeyFP); a mismatch aborts the connection
+// as a possible MITM. For a server with no pin (an orphan, or one created before
+// host-key pinning) it trust-on-first-uses and persists the observed key, so all
+// later connections are verified.
+func (r *hcloudReal) runSSH(ctx context.Context, srv serverInstance, script string) error {
+	host := srv.PublicIPv4
 	if host == "" {
-		return fmt.Errorf("ssh: no public IPv4 for host")
+		return fmt.Errorf("ssh: no public IPv4 for server %s", srv.ServerID)
 	}
+	var tofuFP string
 	cfg := &ssh.ClientConfig{
 		User:            r.cfg.SSHUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(r.cfg.SSHSigner)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // fresh host, IP-addressed
+		HostKeyCallback: hostKeyCallback(srv.HostKeyFP, func(fp string) { tofuFP = fp }),
 		Timeout:         15 * time.Second,
 	}
 	dialer := &net.Dialer{}
@@ -435,6 +454,16 @@ func (r *hcloudReal) runSSH(ctx context.Context, host, script string) error {
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, net.JoinHostPort(host, "22"), cfg)
 	if err != nil {
 		return fmt.Errorf("ssh handshake %s: %w", host, err)
+	}
+	// Handshake passed verification. If this was a trust-on-first-use (no prior
+	// pin), persist the observed fingerprint so every later connection is checked.
+	if srv.HostKeyFP == "" && tofuFP != "" {
+		if r.logger != nil {
+			r.logger.Warn("pinning SSH host key on first use (no pre-injected key)", "server", srv.ServerID)
+		}
+		if err := r.setLabel(ctx, srv.ServerID, labelHostKeyFP, tofuFP); err != nil && r.logger != nil {
+			r.logger.Warn("failed to persist TOFU host-key pin", "server", srv.ServerID, "err", err)
+		}
 	}
 	client := ssh.NewClient(sshConn, chans, reqs)
 	defer func() { _ = client.Close() }()

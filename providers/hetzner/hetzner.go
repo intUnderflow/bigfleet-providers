@@ -78,6 +78,7 @@ type serverInstance struct {
 	Location   string
 	PublicIPv4 string // for SSH-based Configure/Drain
 	ClusterID  string // bigfleet-cluster label, empty when unbound
+	HostKeyFP  string // pinned SSH host-key fingerprint (bigfleet-host-key-fp label)
 	// Running reports whether the server is in a live state (initializing /
 	// running / starting), as opposed to off / deleting.
 	Running bool
