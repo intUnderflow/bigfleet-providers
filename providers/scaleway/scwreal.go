@@ -8,9 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/intUnderflow/bigfleet-providers/providerkit"
 	"github.com/scaleway/scaleway-sdk-go/api/instance/v1"
 	"github.com/scaleway/scaleway-sdk-go/scw"
+
+	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
 
 // BigFleet server-tag keys. The bigfleet:managed tag marks our servers so
@@ -367,10 +368,23 @@ func (r *scwReal) toServerInstance(srv *instance.Server) serverInstance {
 		ClusterID:      tagValue(srv.Tags, tagCluster),
 		Running:        srv.State == instance.ServerStateRunning || srv.State == instance.ServerStateStarting,
 	}
-	if srv.PublicIP != nil {
-		out.PublicIPv4 = srv.PublicIP.Address.String()
-	}
+	out.PublicIPv4 = firstPublicIPv4(srv.PublicIPs)
 	return out
+}
+
+// firstPublicIPv4 returns the first IPv4 (inet) address from a server's public
+// IPs, or "". Uses PublicIPs (the deprecated singular PublicIP field is avoided).
+func firstPublicIPv4(ips []*instance.ServerIP) string {
+	for _, ip := range ips {
+		if ip == nil || ip.Address == nil {
+			continue
+		}
+		if ip.Family == instance.ServerIPIPFamilyInet6 {
+			continue
+		}
+		return ip.Address.String()
+	}
+	return ""
 }
 
 func (r *scwReal) serverByName(ctx context.Context, name string) *instance.Server {
