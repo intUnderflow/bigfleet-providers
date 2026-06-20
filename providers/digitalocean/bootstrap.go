@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 )
 
 // The bootstrap control channel is how the provider delivers the
@@ -248,7 +247,3 @@ func drainGrace(seconds int64) int64 {
 	}
 	return seconds
 }
-
-// pollBackoff is the agent's recommended poll interval; documented for the agent
-// implementer and used by tests.
-const pollBackoff = 5 * time.Second
