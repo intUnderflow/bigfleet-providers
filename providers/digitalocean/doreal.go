@@ -390,22 +390,34 @@ func (r *doReal) toDropletInstance(drv *godo.Droplet) dropletInstance {
 // derived name and whose machine-id tag matches machineID. Matching on the tag
 // (not just the name) means an unrelated same-named Droplet is never adopted.
 func (r *doReal) existingManagedDroplet(ctx context.Context, name, machineID string) (*godo.Droplet, error) {
-	droplets, _, err := r.client.Droplets.ListByName(ctx, name, &godo.ListOptions{PerPage: 200})
-	if err != nil {
-		return nil, err
-	}
 	wantTag := tagMachinePrefix + encodeID(machineID)
-	for i := range droplets {
-		d := &droplets[i]
-		if !hasTag(d.Tags, tagManaged) || !hasTag(d.Tags, wantTag) {
-			continue
+	opt := &godo.ListOptions{Page: 1, PerPage: 200}
+	for {
+		droplets, resp, err := r.client.Droplets.ListByName(ctx, name, opt)
+		if err != nil {
+			return nil, err
 		}
-		if d.Region != nil && d.Region.Slug != r.cfg.Region {
-			continue
+		for i := range droplets {
+			d := &droplets[i]
+			if !hasTag(d.Tags, tagManaged) || !hasTag(d.Tags, wantTag) {
+				continue
+			}
+			if d.Region != nil && d.Region.Slug != r.cfg.Region {
+				continue
+			}
+			return d, nil
 		}
-		return d, nil
+		// DigitalOcean allows duplicate names, so the match may be on a later page;
+		// keep scanning rather than risk missing it and double-provisioning.
+		if resp == nil || resp.Links == nil || resp.Links.IsLastPage() {
+			return nil, nil
+		}
+		page, err := resp.Links.CurrentPage()
+		if err != nil {
+			return nil, fmt.Errorf("list droplets by name: bad pagination link: %w", err)
+		}
+		opt.Page = page + 1
 	}
-	return nil, nil
 }
 
 func hasTag(tags []string, want string) bool {
