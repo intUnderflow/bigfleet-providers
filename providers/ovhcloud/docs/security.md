@@ -68,6 +68,23 @@ provider.
 - **Never logged.** The OS_* password, the SSH key, and the bootstrap blob never
   appear in logs or metrics.
 
+## Network exposure
+
+The provider reaches instances over SSH for bootstrap delivery and drain, so the
+instances must be reachable from the provider's pod. The default `--network`
+is OVH's **`Ext-Net`** (the public network), which gives every instance a **public
+IPv4** — convenient, but it means a misconfigured deploy exposes your nodes to the
+internet. For a hardened deployment:
+
+- attach a **private (vRack/internal) network** with `--network=<private-net>` that
+  the provider's cluster can route to, so instances have no public IPv4;
+- if instances must keep a public IPv4, lock inbound traffic to SSH (port 22) from
+  the provider's source range with an OpenStack security group, and rely on the
+  host-key pinning + key auth above for the bootstrap channel.
+
+The provider does not open any ports on the instance itself; reachability is
+entirely a function of the network and security groups you attach.
+
 ## Container hardening
 
 The image is `distroless/static:nonroot` — no shell, no package manager. The Helm

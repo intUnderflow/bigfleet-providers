@@ -33,7 +33,7 @@ sourced see [Pricing](/providers/ovhcloud/pricing-and-interruption/).
 | `--state` | _(empty)_ | Durable state file. Empty = in-memory only (state is lost on restart). |
 | `--image` | _(empty)_ | Base image **id (UUID)** for server create. **Required** for the `ovh` backend. |
 | `--key-name` | _(empty)_ | OpenStack keypair name injected at create, so the provider can SSH in. |
-| `--network` | `Ext-Net` | OpenStack network name or UUID to attach (empty = project default). |
+| `--network` | `Ext-Net` | OpenStack network name or UUID to attach. `Ext-Net` is OVH's public network, so instances get a **public IPv4** by default (used for SSH bootstrap delivery). For hardened deploys, attach a **private network** the provider can reach instead, and front it appropriately — see [Security → network exposure](/providers/ovhcloud/security/#network-exposure). Empty = project default. |
 | `--ssh-key` | _(empty)_ | SSH private key path for Configure/Drain delivery. Without it, Configure cannot deliver the bootstrap blob. |
 | `--ssh-user` | `ubuntu` | SSH user for Configure/Drain delivery (the base image's default cloud user). |
 | `--bootstrap-hook` | `/opt/bigfleet/bootstrap` | Image path that consumes the delivered bootstrap blob and joins the cluster. See [the image contract](#the-image-hook-contract). |
