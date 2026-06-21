@@ -56,9 +56,6 @@ spec:
             - --reflection={{ .Values.reflection }}
             - --price-refresh={{ .Values.priceRefresh }}
             - --reconcile-interval={{ .Values.reconcileInterval }}
-            {{- if .Values.evictionToken }}
-            - --eviction-token={{ .Values.evictionToken }}
-            {{- end }}
             {{- if .Values.azure.subscriptionId }}
             - --subscription-id={{ .Values.azure.subscriptionId }}
             {{- end }}
@@ -102,6 +99,20 @@ spec:
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if or .Values.evictionToken.secretName .Values.evictionToken.value }}
+          env:
+            # The eviction ingest bearer token, sourced from a Secret (preferred)
+            # rather than passed as a cleartext --eviction-token CLI flag.
+            - name: BIGFLEET_EVICTION_TOKEN
+              {{- if .Values.evictionToken.secretName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.evictionToken.secretName }}
+                  key: {{ .Values.evictionToken.secretKey }}
+              {{- else }}
+              value: {{ .Values.evictionToken.value | quote }}
+              {{- end }}
+          {{- end }}
           ports:
             - name: grpc
               containerPort: {{ .Values.ports.grpc }}

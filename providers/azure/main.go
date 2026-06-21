@@ -60,7 +60,7 @@ func run() error {
 		baseUserData = flag.String("base-user-data", "", "path to the generic pre-binding cloud-init baked into customData at create")
 		priceRefresh = flag.Duration("price-refresh", time.Hour, "spot price refresh interval (0 = off)")
 		reconcile    = flag.Duration("reconcile-interval", 2*time.Minute, "background Azure->inventory reconcile interval (0 = off)")
-		evictionTok  = flag.String("eviction-token", "", "shared bearer token the node-side Scheduled Events agent presents to POST /internal/eviction (empty = unauthenticated, in-cluster only)")
+		evictionTok  = flag.String("eviction-token", "", "shared bearer token the node-side Scheduled Events agent presents to POST /internal/eviction (or set BIGFLEET_EVICTION_TOKEN, preferred — Secret-mounted; empty = unauthenticated, in-cluster only)")
 
 		metricsAddr = flag.String("metrics-addr", ":9090", "address for /metrics, /healthz, /readyz (empty = disabled)")
 		reflectFlag = flag.Bool("reflection", true, "register gRPC server reflection (for grpcurl/debugging)")
@@ -204,10 +204,16 @@ func run() error {
 	if *metricsAddr != "" {
 		obs = newObservabilityServer(*metricsAddr, m)
 		if mode == "azure" {
-			reporter := newEvictionReporter(backend, srv, m, *evictionTok, logger)
+			// Prefer the env var (Helm mounts it from a Secret) over the flag, so the
+			// shared secret need not appear in cleartext in the pod's argv/spec.
+			evToken := *evictionTok
+			if evToken == "" {
+				evToken = os.Getenv("BIGFLEET_EVICTION_TOKEN")
+			}
+			reporter := newEvictionReporter(backend, srv, m, evToken, logger)
 			obs.handle("/internal/eviction", reporter.handle)
-			if *evictionTok == "" {
-				logger.Warn("eviction ingest endpoint /internal/eviction is unauthenticated; set --eviction-token and restrict the metrics port with a NetworkPolicy")
+			if evToken == "" {
+				logger.Warn("eviction ingest endpoint /internal/eviction is unauthenticated; set --eviction-token / BIGFLEET_EVICTION_TOKEN and restrict the metrics port with a NetworkPolicy")
 			}
 		}
 		obs.start(logger)

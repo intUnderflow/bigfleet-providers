@@ -95,6 +95,14 @@ func newPricing(region string, client azureClient, logger *slog.Logger) *pricing
 
 // price returns USD/hour for a machine of the given shape. Reads only cached
 // state (never blocks on the network), so it is safe on the List/seed path.
+//
+// Contract: every offered VM size must appear in the pinned on-demand table
+// (onDemandByRegion). An unpinned size prices at 0 for ON_DEMAND/RESERVED, and a
+// spot size whose live price has not yet been fetched falls back to a fraction of
+// that on-demand price — so an unpinned spot size also prices at 0 until the
+// first refresh populates it from the API. A 0 reads as "free" and would be
+// over-preferred by cost ranking; pin the size to avoid that. Startup pre-warms
+// spot prices before serving, so the cold window does not exist for pinned sizes.
 func (p *pricing) price(vmSize string, capacity providerkit.CapacityType) float64 {
 	switch capacity {
 	case providerkit.CapacityBareMetal:

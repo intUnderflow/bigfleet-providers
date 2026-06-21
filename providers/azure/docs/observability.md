@@ -201,9 +201,12 @@ registered only on the real `azure` backend. Body:
 { "machine_id": "azure-eastus/Spot/Standard_F8s_v2/eastus-1/000", "event_type": "Preempt" }
 ```
 
-It authenticates with the `--eviction-token` bearer when set (strongly
-recommended — pair it with a NetworkPolicy restricting the metrics port to the
-node CIDR). On a `Preempt` it raises the machine's observed probability to
+It authenticates with a bearer token when set — supply it via the
+`BIGFLEET_EVICTION_TOKEN` env var (the Helm chart sources it from a Secret via
+`evictionToken.secretName`) in preference to the `--eviction-token` flag, which
+would sit in cleartext in the pod spec. Strongly recommended — pair it with a
+NetworkPolicy restricting the metrics port to the node CIDR. On a `Preempt` it
+raises the machine's observed probability to
 `0.99`, increments `bigfleet_azure_spot_evictions_total`, logs
 `observed spot eviction notice`, and kicks a reconcile so the value propagates.
 
@@ -215,7 +218,7 @@ via `--base-user-data`. It polls
 
 ```sh
 export BIGFLEET_EVICTION_URL=http://bigfleet-azure-eastus.bigfleet.svc:9090/internal/eviction
-export BIGFLEET_EVICTION_TOKEN=<matches --eviction-token>
+export BIGFLEET_EVICTION_TOKEN=<matches the provider's eviction token>
 /opt/bigfleet/scheduled-events-agent.sh
 ```
 

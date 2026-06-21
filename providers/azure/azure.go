@@ -21,8 +21,9 @@ type azureClient interface {
 	// DescribeManaged can recover inventory after a restart.
 	CreateVM(ctx context.Context, spec vmSpec) (vmInstance, error)
 
-	// DeleteVM deletes the VM (and its NIC/OS disk) with the given Azure
-	// resource id. The slot returns to Speculative.
+	// DeleteVM deletes the VM with the given Azure resource id; its NIC and OS
+	// disk cascade away via DeleteOption=Delete (set at Create), which also covers
+	// out-of-band Spot evictions. The slot returns to Speculative.
 	DeleteVM(ctx context.Context, resourceID string) error
 
 	// DescribeManaged returns every BigFleet-managed VM in the resource group

@@ -42,7 +42,7 @@ interruption are sourced see
 | `--base-user-data` | _(empty)_ | Path to the generic, pre-binding cloud-init baked into the VM's customData at create. |
 | `--price-refresh` | `1h` | Spot price refresh interval (never on the List hot path; `0` = off). |
 | `--reconcile-interval` | `2m` | Background Azure→inventory reconcile interval (`0` = off). |
-| `--eviction-token` | _(empty)_ | Shared bearer token the in-node Scheduled Events agent presents to `POST /internal/eviction`. Empty = unauthenticated (in-cluster only). See [Pricing & interruption](/providers/azure/pricing-and-interruption/). |
+| `--eviction-token` | _(empty)_ | Shared bearer token the in-node Scheduled Events agent presents to `POST /internal/eviction`. Prefer the `BIGFLEET_EVICTION_TOKEN` env var (Secret-mounted; the Helm chart wires it from `evictionToken.secretName`) over this flag, which appears in cleartext in the pod spec. Empty = unauthenticated (in-cluster only). See [Pricing & interruption](/providers/azure/pricing-and-interruption/). |
 | `--metrics-addr` | `:9090` | Address for `/metrics`, `/healthz`, `/readyz`. Empty = disabled. |
 | `--reflection` | `true` | Register gRPC server reflection (for `grpcurl`/debugging). |
 | `--tls-cert` | _(empty)_ | Server certificate (PEM). With `--tls-key`, enables TLS. |
@@ -193,9 +193,12 @@ cluster is only known when the shard binds it. The lifecycle:
    the VM name, so a retried Create maps to the same VM instead of provisioning a
    second one. Spot offerings are created with `priority=Spot`,
    `evictionPolicy=Delete`, and `maxPrice=-1` (pay up to the pay-as-you-go price
-   to minimise eviction). The create poller runs to completion before the machine
-   settles Idle, so the immediately following Configure never races a still-
-   provisioning host.
+   to minimise eviction). The OS managed disk and the NIC are created with
+   `DeleteOption=Delete`, so they cascade away with the VM — including on an
+   out-of-band Spot eviction, where Azure deletes the VM with no provider involved
+   (Azure's default is to *detach* the disk, which would orphan it). The create
+   poller runs to completion before the machine settles Idle, so the immediately
+   following Configure never races a still-provisioning host.
 2. **Configure → CustomScript extension.** Delivers the opaque `bootstrap_blob`
    to the node via a `CustomScript` VM extension that writes and runs the blob
    through the image hook, then tags the VM `bigfleet-cluster=<id>`. The extension
@@ -204,8 +207,9 @@ cluster is only known when the shard binds it. The lifecycle:
 3. **Drain → CustomScript extension.** Runs the image hook's drain path
    (cordon/drain the kubelet within the grace period), then clears the
    `bigfleet-cluster` tag. The VM is left running but unbound (Idle).
-4. **Delete → `VirtualMachines.BeginDelete`.** Deletes the VM and its NIC; the
-   slot returns to Speculative.
+4. **Delete → `VirtualMachines.BeginDelete`.** Deletes the VM; its OS disk and
+   NIC cascade away via `DeleteOption=Delete` (Delete also best-effort removes the
+   NIC explicitly). The slot returns to Speculative.
 
 ### The image hook contract
 

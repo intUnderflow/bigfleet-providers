@@ -170,6 +170,11 @@ func (a *azureReal) vmParams(spec vmSpec, name, nicID string) armcompute.Virtual
 			ImageReference: imageReference(a.cfg.Image),
 			OSDisk: &armcompute.OSDisk{
 				CreateOption: to.Ptr(armcompute.DiskCreateOptionTypesFromImage),
+				// Cascade-delete the managed OS disk with the VM. Azure's default is
+				// Detach, which would orphan a Premium_LRS disk on every VM deletion
+				// AND on every Spot eviction (EvictionPolicy=Delete deletes the VM
+				// out-of-band, with no provider cleanup to chase the disk).
+				DeleteOption: to.Ptr(armcompute.DiskDeleteOptionTypesDelete),
 				ManagedDisk: &armcompute.ManagedDiskParameters{
 					StorageAccountType: to.Ptr(armcompute.StorageAccountTypesPremiumLRS),
 				},
@@ -181,6 +186,10 @@ func (a *azureReal) vmParams(spec vmSpec, name, nicID string) armcompute.Virtual
 				ID: to.Ptr(nicID),
 				Properties: &armcompute.NetworkInterfaceReferenceProperties{
 					Primary: to.Ptr(true),
+					// Cascade-delete the NIC too, so a Spot eviction (which deletes the
+					// VM with no provider involvement) can't leak it. Explicit DeleteVM
+					// also deletes the NIC, so this is belt-and-suspenders there.
+					DeleteOption: to.Ptr(armcompute.DeleteOptionsDelete),
 				},
 			}},
 		},
@@ -290,6 +299,12 @@ func (a *azureReal) ApplyBootstrap(ctx context.Context, vm vmInstance, clusterID
 	// Decode the blob to a tmpfs path, run the hook, then remove it — preserving
 	// the hook's exit code so a failed bootstrap still surfaces as FAILED. The
 	// blob is the cluster-join secret, so it must not linger on the host.
+	//
+	// Shell-safety invariant: base64 StdEncoding emits only [A-Za-z0-9+/=] with no
+	// newlines, so the encoded blob (a) cannot contain a line equal to the heredoc
+	// delimiter EOF and (b) needs no escaping; the quoted <<'EOF' also disables all
+	// expansion. Both together prevent the untrusted blob from breaking out of the
+	// heredoc into the command stream.
 	script := fmt.Sprintf("base64 -d > /run/bigfleet-bootstrap <<'EOF'\n%s\nEOF\n%s /run/bigfleet-bootstrap; rc=$?; rm -f /run/bigfleet-bootstrap; exit $rc",
 		base64.StdEncoding.EncodeToString(bootstrap), a.cfg.BootstrapHookPath)
 	if err := a.runExtension(ctx, resourceName(vm.ResourceID), "bigfleet-configure", script); err != nil {

@@ -68,10 +68,16 @@ reconcileInterval: 2m           # --reconcile-interval
 
 # Shared bearer token the in-node Scheduled Events agent presents to the
 # eviction ingest endpoint (POST /internal/eviction on the metrics port).
-# Strongly recommended in production; pair with a NetworkPolicy on the metrics
-# port. Empty leaves the endpoint unauthenticated. Source it from a secret
-# manager via --set rather than committing it.
-evictionToken: ""
+# Delivered to the pod as the BIGFLEET_EVICTION_TOKEN env var (never as a
+# cleartext CLI flag). Strongly recommended in production; pair with a
+# NetworkPolicy on the metrics port. Leave all fields empty to run the endpoint
+# unauthenticated (in-cluster only).
+evictionToken:
+  # Preferred: reference a pre-existing Secret holding the token.
+  secretName: ""
+  secretKey: token
+  # Dev/test fallback only — inlines the token into the pod spec.
+  value: ""
 
 # --- durable state ----------------------------------------------------------
 # When enabled, --state points at a file on a PersistentVolume so fence marks,

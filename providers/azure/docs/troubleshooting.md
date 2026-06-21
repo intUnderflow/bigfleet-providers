@@ -104,7 +104,10 @@ Idle.
 
 Spot VMs are created with `priority=Spot`, `evictionPolicy=Delete`, `maxPrice=-1`.
 When the pool is dry, Azure rejects the create; when capacity is reclaimed, the VM
-is deleted out from under you.
+is deleted out from under you. The OS disk and NIC carry `DeleteOption=Delete`, so
+they are removed with the VM even on this provider-less eviction path — no orphan
+disks/NICs accrue cost. (If you see lingering `*-nic` or disks after evictions,
+that invariant has regressed.)
 
 - **Symptom:** Create FAILs quickly with `SkuNotAvailable` /
   `OverconstrainedAllocationRequest`; or a previously-Idle Spot machine returns to
