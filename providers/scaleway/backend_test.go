@@ -321,6 +321,64 @@ func TestDescribe_ReapsDuplicateMachineID(t *testing.T) {
 	}
 }
 
+// A host recovered stopped (a Create that powered off, or an out-of-band stop)
+// must be powered back on by Configure before the bootstrap is delivered —
+// otherwise the on-host agent can never poll and the machine wedges at FAILED
+// while storage bills. The fake's ApplyBootstrap rejects a stopped server, so
+// this reaches Configured only because ConfigureInstance calls EnsureRunning
+// first.
+func TestConfigure_PowersOnStoppedHost(t *testing.T) {
+	b, fake := newInstancesBackend(t, 4)
+	s := newTestServer(t, b)
+	ctx := context.Background()
+
+	resp, _ := s.List(ctx, &pb.ListFilter{States: []pb.MachineState{pb.MachineState_MACHINE_STATE_SPECULATIVE}, MaxResults: 1})
+	id := resp.GetMachines()[0].GetId()
+	if _, err := s.Create(ctx, &pb.CreateRequest{MachineId: id}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m := waitState(t, s, id, pb.MachineState_MACHINE_STATE_IDLE)
+
+	// Stop the underlying server out from under the kit: a recovered-stopped Idle
+	// host. Without the power-on in Configure the fake would reject the bootstrap.
+	fake.stop(m.GetHost().GetRef())
+
+	if _, err := s.Configure(ctx, &pb.ConfigureRequest{MachineId: id, ClusterId: "c1", BootstrapBlob: []byte("join")}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	waitState(t, s, id, pb.MachineState_MACHINE_STATE_CONFIGURED)
+}
+
+// A managed boot volume orphaned by an out-of-band server deletion (the server
+// vanishes but its volume is left behind, still billing) is swept by
+// ReapOrphanVolumes on the next Describe.
+func TestDescribe_ReapsOrphanVolumes(t *testing.T) {
+	b, fake := newInstancesBackend(t, 4)
+	ctx := context.Background()
+
+	slot := b.speculativeSlots()[0]
+	srv, err := fake.CreateServer(ctx, serverSpec{MachineID: slot.ID, CommercialType: slot.InstanceType, Zone: slot.Zone})
+	if err != nil {
+		t.Fatalf("seed server: %v", err)
+	}
+	if len(fake.volumes) != 1 {
+		t.Fatalf("expected 1 managed volume after create, got %d", len(fake.volumes))
+	}
+
+	// The server is deleted out-of-band, leaving the managed boot volume orphaned.
+	fake.orphanServer(srv.ServerID)
+	if len(fake.volumes) != 1 {
+		t.Fatalf("orphaned volume should remain until reaped, got %d", len(fake.volumes))
+	}
+
+	if _, err := b.Describe(ctx); err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	if len(fake.volumes) != 0 {
+		t.Errorf("orphan volume not reaped by Describe: %d remain", len(fake.volumes))
+	}
+}
+
 // capacityType accepts on_demand and bare_metal (the two Scaleway substrates) and
 // rejects spot/reserved/nonsense so the provider can never mis-declare it.
 func TestOffering_CapacityType(t *testing.T) {

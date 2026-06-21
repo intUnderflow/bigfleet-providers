@@ -15,7 +15,9 @@ type scwFake struct {
 	mu      sync.Mutex
 	servers map[string]*serverInstance // keyed by server id
 	byToken map[string]string          // idempotency token -> server id
+	volumes map[string]string          // volume id -> owning server id ("" = orphan)
 	seq     int
+	volSeq  int
 	// priceUSD is the deterministic hourly price the simulator reports, so
 	// certification and tests are reproducible.
 	priceUSD float64
@@ -25,6 +27,7 @@ func newSCWFake() *scwFake {
 	return &scwFake{
 		servers:  make(map[string]*serverInstance),
 		byToken:  make(map[string]string),
+		volumes:  make(map[string]string),
 		priceUSD: 0.0098,
 	}
 }
@@ -53,6 +56,11 @@ func (f *scwFake) CreateServer(_ context.Context, spec serverSpec) (serverInstan
 		Running:        true,
 	}
 	f.servers[id] = srv
+	// Model the implicitly-created, managed-tagged boot volume attached to the
+	// server, so ReapOrphanVolumes has something to sweep once it is orphaned.
+	f.volSeq++
+	volID := fmt.Sprintf("11111111-0000-4000-8000-%012d", f.volSeq)
+	f.volumes[volID] = id
 	if spec.IdempotencyToken != "" {
 		f.byToken[spec.IdempotencyToken] = id
 	}
@@ -65,7 +73,43 @@ func (f *scwFake) DeleteServer(_ context.Context, serverID string) error {
 	// Idempotent, matching the real client (a 404 on an already-gone server is
 	// success), so a Delete after an out-of-band deletion never spuriously fails.
 	delete(f.servers, serverID)
+	// A normal Delete also removes the server's attached volumes inline (the real
+	// client deletes the detached boot volume), so there is no leak on this path.
+	for vid, owner := range f.volumes {
+		if owner == serverID {
+			delete(f.volumes, vid)
+		}
+	}
 	return nil
+}
+
+// orphanServer models an out-of-band server deletion that leaves the boot volume
+// behind (the server vanishes but its managed volume does not), so a test can
+// exercise ReapOrphanVolumes.
+func (f *scwFake) orphanServer(serverID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.servers, serverID)
+	for vid, owner := range f.volumes {
+		if owner == serverID {
+			f.volumes[vid] = "" // detached, now orphaned
+		}
+	}
+}
+
+// ReapOrphanVolumes deletes managed volumes whose owning server is gone,
+// modelling the real client's two-plane orphan sweep.
+func (f *scwFake) ReapOrphanVolumes(_ context.Context) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	reaped := 0
+	for vid, owner := range f.volumes {
+		if _, alive := f.servers[owner]; owner == "" || !alive {
+			delete(f.volumes, vid)
+			reaped++
+		}
+	}
+	return reaped, nil
 }
 
 func (f *scwFake) DescribeManaged(_ context.Context) ([]serverInstance, error) {
@@ -78,12 +122,38 @@ func (f *scwFake) DescribeManaged(_ context.Context) ([]serverInstance, error) {
 	return out, nil
 }
 
+// stop marks a server stopped, modelling a recovered-stopped Idle host (used by
+// tests to exercise the power-on-before-Configure path).
+func (f *scwFake) stop(serverID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if s, ok := f.servers[serverID]; ok {
+		s.Running = false
+	}
+}
+
+func (f *scwFake) EnsureRunning(_ context.Context, serverID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.servers[serverID]
+	if !ok {
+		return fmt.Errorf("scwfake: ensure-running unknown server %q", serverID)
+	}
+	s.Running = true
+	return nil
+}
+
 func (f *scwFake) ApplyBootstrap(_ context.Context, srv serverInstance, clusterID string, _ []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s, ok := f.servers[srv.ServerID]
 	if !ok {
 		return fmt.Errorf("scwfake: configure unknown server %q", srv.ServerID)
+	}
+	// A stopped server's agent can't poll — Configure must have powered it on
+	// first (EnsureRunning). Enforce it so the regression test is meaningful.
+	if !s.Running {
+		return fmt.Errorf("scwfake: configure on stopped server %q (EnsureRunning not called)", srv.ServerID)
 	}
 	s.ClusterID = clusterID
 	return nil

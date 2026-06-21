@@ -63,7 +63,8 @@ credentials:
 # Configure delivers the cluster-join bootstrap to the running host. Scaleway
 # user-data is consumed only at first boot, so the base image installs a small
 # on-host agent that, on Configure, dials the provider's HTTPS bootstrap channel,
-# long-polls for its OWN machine-specific command, applies the blob, and acks.
+# short-polls for its OWN machine-specific command (204 when none pending),
+# applies the blob, and acks.
 # The channel is mutually authenticated: the agent pins the provider's CA, and
 # the provider authorises each agent with a per-machine HMAC bearer token derived
 # from the shared --bootstrap-secret + the machine id. Required for the real

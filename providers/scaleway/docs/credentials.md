@@ -140,18 +140,24 @@ bootstrap secret and the channel TLS cert at startup. To rotate without downtime
 
 ## What the key is used for
 
-Every Scaleway API call the provider makes, and why (each maps to a lifecycle
-step):
+The Scaleway API calls the key authorises, and the lifecycle step each serves:
 
-| Call | When |
+| Scaleway API call | When |
 |---|---|
-| `CreateServer` | Create (Speculative → Idle) |
-| `DeleteServer` | Delete (Idle → Speculative) — Instances only |
-| `DescribeManaged` (label-filtered) | Describe / reconcile inventory |
-| `ApplyBootstrap` (Configure) | Deliver the blob to the agent over the bootstrap channel, wait for the ack, then tag the binding |
-| `DrainNode` (Drain) | Drain via the agent + clear the binding |
-| `PriceUSD` (Pricing) | `price_per_hour` (catalogue refresh) |
-| `DescribeCommercialTypeCapacities` (Catalogue) | `allocatable` (vCPU/memory/GPU) |
+| `CreateServer` + `SetServerUserData` + `ServerAction` (poweron) | Create (Speculative → Idle) |
+| `ServerAction` (poweron) | Configure / Drain power-on a recovered-stopped host before delivery |
+| `GetServer` + `ServerAction` (poweroff) + `DeleteServer` | Delete (Idle → Speculative) — Instances only |
+| `UpdateVolume` (tag) / `DeleteVolume` / `ListVolumes` | Tag boot volumes at create; delete on Delete; reap orphans on reconcile — Instances only |
+| `ListServers` (tag-filtered) | Describe / reconcile inventory |
+| `UpdateServer` (tags) | Record / clear the cluster binding after a Configure / Drain succeeds |
+| `ListServersTypes` | `price_per_hour` and `allocatable` (vCPU/memory/GPU), catalogue refresh |
+
+Bootstrap delivery itself does **not** use the Scaleway API: `ApplyBootstrap`
+(Configure) and `DrainNode` (Drain) deliver the blob / drain command to the
+on-host agent over the provider's own mutually-authenticated TLS channel, then
+record the binding with the `UpdateServer` tag call above. That channel is
+authorised by the bootstrap secret, not the Scaleway key — see
+[Security](/providers/scaleway/security/).
 
 The key is **never logged** — neither the access/secret key, the bootstrap secret
 (nor any derived per-machine token), nor the opaque bootstrap blob appears in the

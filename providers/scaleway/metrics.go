@@ -106,6 +106,18 @@ func (c *metricsSCWClient) DescribeManaged(ctx context.Context) ([]serverInstanc
 	c.m.observeAPI("DescribeManaged", start, err)
 	return out, err
 }
+func (c *metricsSCWClient) EnsureRunning(ctx context.Context, id string) error {
+	start := time.Now()
+	err := c.inner.EnsureRunning(ctx, id)
+	c.m.observeAPI("EnsureRunning", start, err)
+	return err
+}
+func (c *metricsSCWClient) ReapOrphanVolumes(ctx context.Context) (int, error) {
+	start := time.Now()
+	n, err := c.inner.ReapOrphanVolumes(ctx)
+	c.m.observeAPI("ReapOrphanVolumes", start, err)
+	return n, err
+}
 func (c *metricsSCWClient) ApplyBootstrap(ctx context.Context, srv serverInstance, cluster string, blob []byte) error {
 	start := time.Now()
 	err := c.inner.ApplyBootstrap(ctx, srv, cluster, blob)

@@ -198,6 +198,15 @@ func (b *scalewayBackend) Describe(ctx context.Context) ([]providerkit.Instance,
 	// extras (cloud/deletable substrate only) so a duplicate stops billing.
 	if b.capacity == providerkit.CapacityOnDemand {
 		managed = b.reapDuplicateServers(ctx, managed)
+		// Sweep boot volumes orphaned by an out-of-band server deletion or by a
+		// Delete whose volume cleanup was deferred (DeleteServer is non-fatal on a
+		// stuck volume). Best-effort on the reconcile cadence — a failure is logged
+		// and retried next Describe, never failing the inventory read.
+		if n, err := b.client.ReapOrphanVolumes(ctx); err != nil {
+			b.logger.Warn("reap orphan volumes failed; will retry next reconcile", "err", err)
+		} else if n > 0 {
+			b.logger.Info("reaped orphan volumes", "count", n)
+		}
 	}
 	bySlot := make(map[string]serverInstance, len(managed))
 	var orphans []serverInstance
@@ -369,19 +378,28 @@ func (b *scalewayBackend) CreateInstance(ctx context.Context, req providerkit.Cr
 
 // ConfigureInstance binds the running server to a cluster and delivers the opaque
 // bootstrap blob (real impl: published for the on-host agent to fetch over mTLS).
+// It first powers the host on if it was recovered stopped — otherwise the agent
+// can never poll and Configure would wedge at FAILED.
 func (b *scalewayBackend) ConfigureInstance(ctx context.Context, req providerkit.ConfigureInstanceRequest) error {
 	srv, err := b.resolveHost(ctx, req.Machine)
 	if err != nil {
+		return fmt.Errorf("configure: %w", err)
+	}
+	if err := b.client.EnsureRunning(ctx, srv.ServerID); err != nil {
 		return fmt.Errorf("configure: %w", err)
 	}
 	return b.client.ApplyBootstrap(ctx, srv, req.ClusterID, req.BootstrapBlob)
 }
 
 // DrainInstance cordons + drains the kubelet and removes the cluster binding,
-// leaving the server running but unbound (Idle).
+// leaving the server running but unbound (Idle). It powers the host on first if it
+// was recovered stopped, so the drain command can reach the agent.
 func (b *scalewayBackend) DrainInstance(ctx context.Context, req providerkit.DrainInstanceRequest) error {
 	srv, err := b.resolveHost(ctx, req.Machine)
 	if err != nil {
+		return fmt.Errorf("drain: %w", err)
+	}
+	if err := b.client.EnsureRunning(ctx, srv.ServerID); err != nil {
 		return fmt.Errorf("drain: %w", err)
 	}
 	return b.client.DrainNode(ctx, srv, req.GracePeriodSeconds)

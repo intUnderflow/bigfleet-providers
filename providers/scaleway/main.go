@@ -208,7 +208,7 @@ func run() error {
 	defer func() { _ = store.Close() }()
 
 	srv, err := providerkit.New(backend, store, providerkit.Options{
-		// Multi-zone provider: require a zone on every machine.
+		// Zoned provider: every machine carries the single zone this process serves.
 		RequireZone: true,
 		Logger:      logger,
 		Timeouts:    timeoutsFor(isCloud),

@@ -37,6 +37,23 @@ type scwClient interface {
 	// store can still rebuild inventory.
 	DescribeManaged(ctx context.Context) ([]serverInstance, error)
 
+	// ReapOrphanVolumes deletes BigFleet-managed volumes that are no longer
+	// attached to any server — boot volumes left behind by an out-of-band server
+	// deletion, or by a Delete whose volume cleanup was deferred (DeleteServer is
+	// non-fatal on a stuck volume so a teardown never wedges the machine at
+	// FAILED). Volumes are matched by the bigfleet:managed tag (stamped at create),
+	// so the reaper never touches a volume BigFleet does not own. Returns the
+	// number reaped. Best-effort; the Instances client implements it, the Elastic
+	// Metal client does not (owned hardware has no detachable cloud volumes).
+	ReapOrphanVolumes(ctx context.Context) (int, error)
+
+	// EnsureRunning powers a server on (and waits until it is running) if it is
+	// stopped. Configure/Drain call it before delivering the bootstrap, because a
+	// stopped Idle host (e.g. one recovered by Describe) would otherwise be bound
+	// and Configured against a powered-off machine whose agent can never poll →
+	// wedge at FAILED while storage bills. A no-op when the server is already up.
+	EnsureRunning(ctx context.Context, serverID string) error
+
 	// ApplyBootstrap binds a running server to a cluster and delivers the opaque
 	// bootstrap blob. The blob is the kubelet join data — never parse it. The
 	// real Instances client publishes the blob for the on-host agent to fetch

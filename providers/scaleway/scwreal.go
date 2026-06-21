@@ -221,6 +221,13 @@ func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 	}
 	srv := res.Server
 
+	// Stamp the managed + machine-id tags on the implicitly-created boot volume(s)
+	// so ReapOrphanVolumes can later identify and delete a volume left orphaned by
+	// an out-of-band server deletion. Best-effort (a tag failure is logged, not
+	// fatal): a normal Delete still removes the volume inline; the reaper is only
+	// the backstop.
+	r.tagVolumes(ctx, spec.MachineID, srv.Volumes)
+
 	// Set the cloud-init user-data (consumed at first boot only), then power on.
 	if len(userData) > 0 {
 		if err := r.api.SetServerUserData(&instance.SetServerUserDataRequest{
@@ -240,6 +247,16 @@ func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 		return serverInstance{}, fmt.Errorf("power on %s: %w", srv.ID, err)
 	}
 	return r.waitRunning(ctx, srv.ID)
+}
+
+// EnsureRunning powers a stopped server back on and waits for it, used by
+// Configure/Drain before delivering the bootstrap so the on-host agent is alive
+// to receive it. No user-data re-apply: an Idle host has already booted (its
+// agent config is in place); we only need it running again. No-op when already
+// running/starting.
+func (r *scwReal) EnsureRunning(ctx context.Context, serverID string) error {
+	_, err := r.ensureRunning(ctx, serverID, "")
+	return err
 }
 
 // ensureRunning recovers an already-created server toward running. If it is
@@ -351,10 +368,15 @@ func (r *scwReal) DeleteServer(ctx context.Context, serverID string) error {
 	// Delete the now-detached volumes so storage does not leak. Modern images boot
 	// on a Block Storage (sbs_volume) volume managed by the block API; legacy
 	// l_ssd/b_ssd volumes are managed by the instance API. 404 = already gone;
-	// transient errors are retried inside deleteVolumes. A volume that still can't
-	// be deleted is surfaced (the kit drives the machine to FAILED with a
-	// last_error naming the volume) rather than silently leaked.
-	return r.deleteVolumes(ctx, serverID, volumes)
+	// transient errors are retried inside deleteVolumes. A volume that STILL can't
+	// be deleted is non-fatal here: the server (compute) is already gone, so the
+	// machine must not wedge at FAILED — and the volume is tagged, so the orphan
+	// reaper retries it on the reconcile cadence. Surfacing it would leave the
+	// machine stuck FAILED forever while the reaper would have cleaned it up.
+	if err := r.deleteVolumes(ctx, serverID, volumes); err != nil {
+		r.logger.Warn("delete: volume cleanup incomplete; orphan reaper will retry", "server", serverID, "err", err)
+	}
+	return nil
 }
 
 // deleteVolumes removes the server's detached volumes via the correct API for
@@ -398,6 +420,117 @@ func (r *scwReal) deleteVolumes(ctx context.Context, serverID string, volumes ma
 		return fmt.Errorf("delete: %d volume(s) of server %s could not be deleted: %v", len(failed), serverID, failed)
 	}
 	return nil
+}
+
+// tagVolumes stamps the managed + machine-id tags on a server's attached volumes
+// so ReapOrphanVolumes can later identify (and only ever delete) volumes BigFleet
+// owns. Routes each volume to its plane: sbs_volume → block API, l_ssd/b_ssd →
+// instance API. Best-effort — a tag failure is logged, not fatal (a normal Delete
+// still removes the volume inline; the reaper is the backstop for the out-of-band
+// case, and only an untagged volume escapes it).
+func (r *scwReal) tagVolumes(ctx context.Context, machineID string, volumes map[string]*instance.VolumeServer) {
+	for _, vol := range volumes {
+		if vol == nil || vol.ID == "" {
+			continue
+		}
+		tags := []string{tagManaged, tagMachineID + machineID}
+		var err error
+		if vol.VolumeType == instance.VolumeServerVolumeTypeSbsVolume {
+			_, err = r.block.UpdateVolume(&block.UpdateVolumeRequest{Zone: r.zone, VolumeID: vol.ID, Tags: &tags}, scw.WithContext(ctx))
+		} else {
+			_, err = r.api.UpdateVolume(&instance.UpdateVolumeRequest{Zone: r.zone, VolumeID: vol.ID, Tags: &tags}, scw.WithContext(ctx))
+		}
+		if err != nil {
+			r.logger.Warn("tag volume failed; orphan reaper may not catch it if leaked", "machine_id", machineID, "volume", vol.ID, "err", err)
+		}
+	}
+}
+
+// orphanVolumeGrace is how long a detached managed volume must have existed
+// before ReapOrphanVolumes will delete it. It guards against deleting a volume
+// that is only momentarily detached during a live CreateServer (the boot volume
+// is attached as part of create, but the grace makes the reaper robust to any
+// brief create-time window and to clock skew).
+const orphanVolumeGrace = 10 * time.Minute
+
+// ReapOrphanVolumes deletes BigFleet-managed volumes no longer attached to any
+// server, scanning both planes: the instance API (l_ssd/b_ssd), where an orphan
+// has Server==nil, and the block API (sbs_volume), where an orphan has no
+// References. Only volumes carrying the managed tag and older than
+// orphanVolumeGrace are eligible, so a volume mid-create is never reaped out from
+// under a live CreateServer and a volume BigFleet does not own is never touched.
+// Best-effort: returns the count deleted; per-volume failures are logged and
+// retried on the next reconcile.
+func (r *scwReal) ReapOrphanVolumes(ctx context.Context) (int, error) {
+	cutoff := time.Now().Add(-orphanVolumeGrace)
+	reaped := 0
+
+	// instance-plane volumes (l_ssd/b_ssd): orphan == no attached server.
+	page := int32(1)
+	per := uint32(100)
+	for {
+		res, err := r.api.ListVolumes(&instance.ListVolumesRequest{
+			Zone: r.zone, Tags: []string{tagManaged}, Page: &page, PerPage: &per, Project: optStr(r.cfg.Creds.projectID),
+		}, scw.WithContext(ctx))
+		if err != nil {
+			return reaped, fmt.Errorf("reap: list instance volumes: %w", err)
+		}
+		if res == nil || len(res.Volumes) == 0 {
+			break
+		}
+		for _, vol := range res.Volumes {
+			if vol == nil || vol.Server != nil {
+				continue // still attached
+			}
+			if vol.CreationDate != nil && vol.CreationDate.After(cutoff) {
+				continue // too young — may belong to an in-flight create
+			}
+			if err := r.api.DeleteVolume(&instance.DeleteVolumeRequest{Zone: r.zone, VolumeID: vol.ID}, scw.WithContext(ctx)); err != nil && !is404(err) {
+				r.logger.Warn("reap: delete orphan instance volume failed; will retry", "volume", vol.ID, "err", err)
+				continue
+			}
+			r.logger.Info("reaped orphan volume", "plane", "instance", "volume", vol.ID)
+			reaped++
+		}
+		if len(res.Volumes) < int(per) {
+			break
+		}
+		page++
+	}
+
+	// block-plane volumes (sbs_volume): orphan == no references to any resource.
+	bpage := int32(1)
+	bsize := uint32(100)
+	for {
+		res, err := r.block.ListVolumes(&block.ListVolumesRequest{
+			Zone: r.zone, Tags: []string{tagManaged}, Page: &bpage, PageSize: &bsize, ProjectID: optStr(r.cfg.Creds.projectID),
+		}, scw.WithContext(ctx))
+		if err != nil {
+			return reaped, fmt.Errorf("reap: list block volumes: %w", err)
+		}
+		if res == nil || len(res.Volumes) == 0 {
+			break
+		}
+		for _, vol := range res.Volumes {
+			if vol == nil || len(vol.References) > 0 {
+				continue // still referenced (attached)
+			}
+			if vol.CreatedAt != nil && vol.CreatedAt.After(cutoff) {
+				continue // too young
+			}
+			if err := r.block.DeleteVolume(&block.DeleteVolumeRequest{Zone: r.zone, VolumeID: vol.ID}, scw.WithContext(ctx)); err != nil && !is404(err) {
+				r.logger.Warn("reap: delete orphan block volume failed; will retry", "volume", vol.ID, "err", err)
+				continue
+			}
+			r.logger.Info("reaped orphan volume", "plane", "block", "volume", vol.ID)
+			reaped++
+		}
+		if uint32(len(res.Volumes)) < bsize {
+			break
+		}
+		bpage++
+	}
+	return reaped, nil
 }
 
 // waitStopped polls until the server reaches the stopped state (poweroff is
@@ -633,12 +766,20 @@ func (r *scwReal) serverByName(ctx context.Context, name string) *instance.Serve
 	if err != nil {
 		return nil
 	}
+	// If a create double-provision left more than one server under this name, pick
+	// the lowest server id — the same deterministic survivor the duplicate reaper
+	// keeps — so idempotent recovery and the reaper converge on the same server
+	// instead of fighting over which one is canonical.
+	var chosen *instance.Server
 	for _, srv := range servers {
-		if srv.Name == name {
-			return srv
+		if srv.Name != name {
+			continue
+		}
+		if chosen == nil || srv.ID < chosen.ID {
+			chosen = srv
 		}
 	}
-	return nil
+	return chosen
 }
 
 func (r *scwReal) setClusterTag(ctx context.Context, serverID, clusterID string) error {
