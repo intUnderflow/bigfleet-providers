@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
@@ -281,14 +282,16 @@ func (b *libvirtBackend) resolveHost(ctx context.Context, m providerkit.Machine)
 	return domainInstance{Zone: zone, DomainName: name, MachineID: m.ID}, nil
 }
 
-// splitHostRef splits a "<zone>/<domain>" host ref into its parts.
+// splitHostRef splits a "<zone>/<domain>" host ref into its parts. It splits on
+// the LAST '/': a libvirt domain name never contains '/', so this round-trips
+// correctly even when a zone label itself contains '/'.
 func splitHostRef(ref string) (zone, domain string, ok bool) {
-	for i := 0; i < len(ref); i++ {
-		if ref[i] == '/' {
-			return ref[:i], ref[i+1:], ref[:i] != "" && ref[i+1:] != ""
-		}
+	i := strings.LastIndexByte(ref, '/')
+	if i < 0 {
+		return "", "", false
 	}
-	return "", "", false
+	zone, domain = ref[:i], ref[i+1:]
+	return zone, domain, zone != "" && domain != ""
 }
 
 func cloneMap(in map[string]string) map[string]string {

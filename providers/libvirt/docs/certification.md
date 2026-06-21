@@ -89,7 +89,7 @@ extension suite at it:
 # 1. Boot the provider against real libvirt (see Install & deploy / Configuration).
 ./bin/libvirt \
   --addr 127.0.0.1:9099 \
-  --connect 'rack1=qemu+libssh://bigfleet@host-a/system?keyfile=./id_ed25519&known_hosts=./known_hosts' \
+  --connect 'rack1=qemu+libssh://bigfleet@host-a/system?keyfile=./id_ed25519&known_hosts=./known_hosts&known_hosts_verify=normal' \
   --image ubuntu-24.04.qcow2 \
   --offerings ./offerings.json
 

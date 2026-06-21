@@ -73,8 +73,10 @@ rack1=qemu+libssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_
 pinned `known_hosts` file — an unknown host or a changed host key aborts the
 connection. Use a **dedicated** key for the provider, not an operator's personal
 key, and pin `known_hosts` so the transport is not trust-on-first-use
-(`known_hosts_verify=auto` would trust-on-first-use; `ignore` would disable
-verification — don't use those in production).
+(`known_hosts_verify=auto` would trust-on-first-use). The provider **rejects at
+startup** any SSH `--connect` URI that disables host-key verification
+(`known_hosts_verify=ignore` or `no_verify`), so a misconfiguration can't quietly
+open a MITM window on the cluster-join material.
 
 ## 2. `qemu+tls://` — libvirt native TLS
 

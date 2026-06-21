@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -76,6 +77,9 @@ func parseConnections(connect, defaultZone string) ([]hostConn, error) {
 	// single-host bare URI carry query params like
 	// "?keyfile=...&known_hosts=..." without being mis-split into zone=uri.
 	if !strings.Contains(connect, ",") && isBareURI(connect) {
+		if err := validateConnectURI(connect); err != nil {
+			return nil, err
+		}
 		return []hostConn{{Zone: defaultZone, URI: connect}}, nil
 	}
 	var out []hostConn
@@ -94,6 +98,12 @@ func parseConnections(connect, defaultZone string) ([]hostConn, error) {
 		if zone == "" || uri == "" {
 			return nil, fmt.Errorf("--connect entry %q must be zone=uri", part)
 		}
+		if strings.ContainsAny(zone, "/") {
+			return nil, fmt.Errorf("--connect zone %q must not contain '/'", zone)
+		}
+		if err := validateConnectURI(uri); err != nil {
+			return nil, err
+		}
 		if seen[zone] {
 			return nil, fmt.Errorf("--connect lists zone %q twice", zone)
 		}
@@ -108,16 +118,47 @@ func parseConnections(connect, defaultZone string) ([]hostConn, error) {
 
 // isBareURI reports whether a single --connect entry is a bare libvirt URI (to
 // be assigned to the default zone) rather than a "zone=uri" assignment. A
-// zone=uri entry's prefix before the first '=' is a plain zone label; a bare
-// URI's first '=' is inside the URI (after "://" or in a "?key=val" query), so
-// its prefix contains ':' or '/'. An entry with no '=' at all (e.g.
-// "qemu:///system") is also bare.
+// libvirt URI always has a scheme, so the text before its first '=' contains a
+// ':' (e.g. "qemu+libssh://h/system?keyfile" or "qemu:///system"); a zone=uri
+// entry's prefix is a plain zone label with no ':'. An entry with no '=' at all
+// is a bare URI.
 func isBareURI(s string) bool {
 	eq := strings.Index(s, "=")
 	if eq < 0 {
 		return true
 	}
-	return strings.ContainsAny(s[:eq], ":/")
+	return strings.Contains(s[:eq], ":")
+}
+
+// validateConnectURI rejects an SSH (libssh/ssh) connect URI that would silently
+// turn OFF host-key verification — so a misconfiguration can't quietly open a
+// MITM window on the cluster-join material delivered over the connection.
+// Non-SSH transports (local socket, tcp, tls) carry no SSH host key, so they
+// pass. Strict verification (known_hosts_verify=normal, the default) and
+// trust-on-first-use (auto) are allowed; only the verification-disabling
+// settings are refused.
+func validateConnectURI(uri string) error {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return fmt.Errorf("invalid --connect URI %q: %w", uri, err)
+	}
+	transport := ""
+	if parts := strings.SplitN(u.Scheme, "+", 2); len(parts) == 2 {
+		transport = parts[1]
+	}
+	switch transport {
+	case "ssh", "libssh", "libssh2":
+	default:
+		return nil // not an SSH transport — no host key to verify
+	}
+	q := u.Query()
+	if v := q.Get("known_hosts_verify"); v == "ignore" {
+		return fmt.Errorf("--connect URI %q disables SSH host-key verification (known_hosts_verify=ignore); use 'normal' (the default, strict against known_hosts) or 'auto'", uri)
+	}
+	if v := q.Get("no_verify"); v != "" && v != "0" {
+		return fmt.Errorf("--connect URI %q sets no_verify, disabling SSH host-key verification; remove it", uri)
+	}
+	return nil
 }
 
 // zones returns the sorted zone names across a set of host connections.

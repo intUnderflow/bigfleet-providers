@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -238,8 +239,10 @@ func TestOffering_CapacityType(t *testing.T) {
 	}
 }
 
-// Bare-metal offerings price at 0 (owned hardware) and omit Delete semantics in
-// the shard, but the kit still serves the field shape correctly.
+// Bare-metal pricing is 0 (owned hardware); on-demand is the synthetic rate; an
+// explicit override wins. (Delete itself is always implemented by this backend —
+// it is the shard that stops emitting Delete for bare-metal capacity, not the
+// provider — so there is no provider-side Unimplemented behaviour to assert here.)
 func TestPricing_BareMetalZero(t *testing.T) {
 	catalog := newInstanceCatalog(nil)
 	pr := newPricing(catalog, 0, 0, nil)
@@ -365,6 +368,63 @@ func TestSplitHostRef(t *testing.T) {
 	}
 	if _, _, ok := splitHostRef("noslash"); ok {
 		t.Error("ref with no slash should not split")
+	}
+	// A zone label containing '/' must round-trip: split on the LAST '/' (domain
+	// names never contain '/').
+	z, d, ok = splitHostRef("dc1/rack1/bigfleet-000001")
+	if !ok || z != "dc1/rack1" || d != "bigfleet-000001" {
+		t.Errorf("slash-in-zone split = (%q,%q,%v), want (dc1/rack1, bigfleet-000001, true)", z, d, ok)
+	}
+}
+
+func TestValidateConnectURI(t *testing.T) {
+	// Disabling host-key verification is rejected for SSH transports.
+	for _, bad := range []string{
+		"qemu+libssh://h/system?known_hosts_verify=ignore",
+		"qemu+libssh://h/system?no_verify=1",
+		"qemu+ssh://h/system?no_verify=1",
+	} {
+		if err := validateConnectURI(bad); err == nil {
+			t.Errorf("expected %q to be rejected (host-key verification disabled)", bad)
+		}
+	}
+	// Strict / TOFU / explicit-normal and non-SSH transports are accepted.
+	for _, ok := range []string{
+		"qemu+libssh://h/system?keyfile=/k&known_hosts=/kh&known_hosts_verify=normal",
+		"qemu+libssh://h/system?known_hosts_verify=auto",
+		"qemu:///system",
+		"qemu+tls://h/system",
+	} {
+		if err := validateConnectURI(ok); err != nil {
+			t.Errorf("expected %q to be accepted, got %v", ok, err)
+		}
+	}
+	// parseConnections enforces it (and rejects a zone containing '/').
+	if _, err := parseConnections("qemu+libssh://h/system?known_hosts_verify=ignore", "local"); err == nil {
+		t.Error("parseConnections should reject a verification-disabling bare URI")
+	}
+	if _, err := parseConnections("a/b=qemu:///system", "local"); err == nil {
+		t.Error("parseConnections should reject a zone containing '/'")
+	}
+}
+
+func TestDomainName_LongIDsDoNotAlias(t *testing.T) {
+	// Two distinct long ids that share a 60-char base32 prefix must map to
+	// distinct domain names (hashed, not truncated).
+	a := strings.Repeat("x", 80) + "A"
+	b := strings.Repeat("x", 80) + "B"
+	na, nb := domainName(a), domainName(b)
+	if na == nb {
+		t.Errorf("distinct long ids aliased to the same domain name %q", na)
+	}
+	for _, n := range []string{na, nb} {
+		if len(n) > 60 {
+			t.Errorf("domain name %q exceeds 60 chars (%d)", n, len(n))
+		}
+	}
+	// A short id keeps the readable base32 form and is deterministic.
+	if domainName("op-1") != domainName("op-1") {
+		t.Error("domainName not deterministic")
 	}
 }
 

@@ -20,7 +20,7 @@ The `CapacityProvider` gRPC service, the `grpc.health.v1` health service, and
 TLS flags:
 
 ```sh
-./bin/libvirt --provider libvirt-dc1 --connect 'rack1=qemu+libssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts' \
+./bin/libvirt --provider libvirt-dc1 --connect 'rack1=qemu+libssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts&known_hosts_verify=normal' \
               --image ubuntu-24.04.qcow2 \
               --tls-cert server.pem --tls-key server-key.pem \
               --tls-ca client-ca.pem

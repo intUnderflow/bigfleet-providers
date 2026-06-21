@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base32"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -22,10 +24,18 @@ import (
 // stored verbatim in the domain's bigfleet metadata for recovery.
 var machineIDEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
+// domainName derives a deterministic, libvirt-safe domain name from a token (the
+// operation id, or the machine id when there is no op id). Short tokens use a
+// readable lowercase-base32 encoding; a token whose encoding would overflow the
+// length budget is named by a SHA-256 hash instead of being truncated, so two
+// distinct long tokens can never alias to the same domain name.
 func domainName(token string) string {
-	name := "bigfleet-" + strings.ToLower(machineIDEncoding.EncodeToString([]byte(token)))
-	if len(name) > 60 { // libvirt domain names are generous, but keep it sane
-		name = name[:60]
+	const maxLen = 60 // libvirt domain names are generous, but keep it sane
+	enc := strings.ToLower(machineIDEncoding.EncodeToString([]byte(token)))
+	name := "bigfleet-" + enc
+	if len(name) > maxLen {
+		sum := sha256.Sum256([]byte(token))
+		name = "bigfleet-" + hex.EncodeToString(sum[:20]) // 40 hex chars: 160-bit, collision-resistant
 	}
 	return name
 }
@@ -161,6 +171,16 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 		return domainInstance{}, fmt.Errorf("look up domain %s: %w", name, err)
 	}
 
+	// Also idempotent on the machine id: a previous Create the kit timed out may
+	// have actually completed under a different operation id (hence a different
+	// name) — recover that domain rather than launch a duplicate for the same
+	// machine.
+	if dom, ok, err := r.findByMachineID(c, spec.MachineID); err != nil {
+		return domainInstance{}, err
+	} else if ok {
+		return r.domainView(c, dom)
+	}
+
 	pool, err := c.lv.StoragePoolLookupByName(r.cfg.StoragePool)
 	if err != nil {
 		return domainInstance{}, fmt.Errorf("look up storage pool %q: %w", r.cfg.StoragePool, err)
@@ -172,6 +192,17 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 	basePath, err := c.lv.StorageVolGetPath(base)
 	if err != nil {
 		return domainInstance{}, fmt.Errorf("base image path: %w", err)
+	}
+	// The overlay must be at least the base image's virtual size, or qemu rejects
+	// it — so size it to max(base virtual size, configured floor) rather than a
+	// fixed default that could be smaller than the golden image.
+	_, baseCapacity, _, err := c.lv.StorageVolGetInfo(base)
+	if err != nil {
+		return domainInstance{}, fmt.Errorf("base image info: %w", err)
+	}
+	overlayBytes := baseCapacity
+	if floor := uint64(r.cfg.OverlayGiB) * 1024 * 1024 * 1024; overlayBytes < floor {
+		overlayBytes = floor
 	}
 
 	// From here on we create overlay/seed volumes and define the domain. If a
@@ -192,7 +223,7 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 
 	// Copy-on-write overlay disk backed by the golden base image.
 	overlayName := name + "-overlay.qcow2"
-	overlay, err := c.lv.StorageVolCreateXML(pool, overlayVolumeXML(overlayName, basePath, r.cfg.OverlayGiB), 0)
+	overlay, err := c.lv.StorageVolCreateXML(pool, overlayVolumeXML(overlayName, basePath, overlayBytes), 0)
 	if err != nil {
 		return domainInstance{}, fmt.Errorf("create overlay volume: %w", err)
 	}
@@ -292,6 +323,22 @@ func (r *libvirtReal) deleteDomain(c *hostConnection, name string) error {
 	return nil
 }
 
+// findByMachineID returns the managed domain tagged with the given machine id,
+// if any (used to make Create idempotent on the machine id, not just the
+// operation-id-derived name).
+func (r *libvirtReal) findByMachineID(c *hostConnection, machineID string) (libvirt.Domain, bool, error) {
+	domains, _, err := c.lv.ConnectListAllDomains(1, libvirt.ConnectListDomainsPersistent)
+	if err != nil {
+		return libvirt.Domain{}, false, fmt.Errorf("list domains: %w", err)
+	}
+	for _, dom := range domains {
+		if mid, _ := r.readMetadata(c, dom); mid == machineID {
+			return dom, true, nil
+		}
+	}
+	return libvirt.Domain{}, false, nil
+}
+
 func (r *libvirtReal) deleteVolumes(c *hostConnection, name string) {
 	pool, err := c.lv.StoragePoolLookupByName(r.cfg.StoragePool)
 	if err != nil {
@@ -314,9 +361,14 @@ func (r *libvirtReal) DescribeManaged(_ context.Context) ([]domainInstance, erro
 			return nil, fmt.Errorf("list domains in zone %q: %w", zone, err)
 		}
 		for _, dom := range domains {
+			// Skip non-bigfleet domains before probing state, so an unrelated
+			// VM's transient state blip can't fail our reconcile.
+			if mid, _ := r.readMetadata(c, dom); mid == "" {
+				continue
+			}
 			view, err := r.domainView(c, dom)
-			if err != nil || view.MachineID == "" {
-				continue // not a bigfleet-managed domain
+			if err != nil {
+				return nil, fmt.Errorf("inspect managed domain %s in zone %q: %w", dom.Name, zone, err)
 			}
 			out = append(out, view)
 		}
@@ -329,6 +381,12 @@ func (r *libvirtReal) ApplyBootstrap(ctx context.Context, dom domainInstance, cl
 	if err != nil {
 		return err
 	}
+	// Bound the whole sequence (the outer lookup/setMetadata RPCs as well as the
+	// guest-exec loop) by the transition ctx, like Create/Delete.
+	return callCtxErr(ctx, func() error { return r.applyBootstrap(ctx, c, dom, clusterID, bootstrap) })
+}
+
+func (r *libvirtReal) applyBootstrap(ctx context.Context, c *hostConnection, dom domainInstance, clusterID string, bootstrap []byte) error {
 	d, err := c.lv.DomainLookupByName(dom.DomainName)
 	if err != nil {
 		return fmt.Errorf("configure: look up domain %s: %w", dom.DomainName, err)
@@ -351,6 +409,10 @@ func (r *libvirtReal) DrainNode(ctx context.Context, dom domainInstance, gracePe
 	if err != nil {
 		return err
 	}
+	return callCtxErr(ctx, func() error { return r.drainNode(ctx, c, dom, gracePeriodSeconds) })
+}
+
+func (r *libvirtReal) drainNode(ctx context.Context, c *hostConnection, dom domainInstance, gracePeriodSeconds int64) error {
 	d, err := c.lv.DomainLookupByName(dom.DomainName)
 	if err != nil {
 		return fmt.Errorf("drain: look up domain %s: %w", dom.DomainName, err)
@@ -387,18 +449,22 @@ func (r *libvirtReal) Close() error {
 // --- helpers --------------------------------------------------------------
 
 // domainView builds the substrate view of a domain from its libvirt identity +
-// bigfleet metadata.
+// bigfleet metadata. A DomainGetState failure is surfaced (not swallowed into
+// running=false), so a transient RPC error never mislabels a live domain as
+// not-running.
 func (r *libvirtReal) domainView(c *hostConnection, dom libvirt.Domain) (domainInstance, error) {
 	machineID, clusterID := r.readMetadata(c, dom)
 	state, _, err := c.lv.DomainGetState(dom, 0)
-	running := err == nil && libvirt.DomainState(state) == libvirt.DomainRunning
+	if err != nil {
+		return domainInstance{}, fmt.Errorf("get state of domain %s: %w", dom.Name, err)
+	}
 	return domainInstance{
 		Zone:       c.zone,
 		DomainName: dom.Name,
 		UUID:       uuidString(dom.UUID),
 		MachineID:  machineID,
 		ClusterID:  clusterID,
-		Running:    running,
+		Running:    libvirt.DomainState(state) == libvirt.DomainRunning,
 	}, nil
 }
 
@@ -433,10 +499,13 @@ func (r *libvirtReal) setMetadata(c *hostConnection, dom libvirt.Domain, machine
 // guestWriteAndRun writes the bootstrap blob to a file in the guest and runs the
 // in-image bootstrap hook with the cluster id, via the qemu guest agent. The
 // blob is opaque, so it is delivered base64-encoded (never parsed) and the
-// in-image hook decodes + applies it.
+// in-image hook decodes + applies it. The blob file is the cluster-join secret,
+// so an EXIT trap shreds/removes it whether the hook succeeds or fails — it is
+// never left cleartext-at-rest in the guest.
 func (r *libvirtReal) guestWriteAndRun(ctx context.Context, c *hostConnection, dom libvirt.Domain, blob []byte, clusterID string) error {
 	script := fmt.Sprintf(
 		"set -e; umask 077; mkdir -p /opt/bigfleet; "+
+			"trap 'rm -f /opt/bigfleet/bootstrap.blob' EXIT; "+
 			"printf '%%s' %q | base64 -d > /opt/bigfleet/bootstrap.blob; "+
 			"/opt/bigfleet/bootstrap %q",
 		base64.StdEncoding.EncodeToString(blob), clusterID)
