@@ -31,7 +31,7 @@ call the provider makes is counted and timed.
 
 | Metric | Type | Labels | What it tells you |
 |---|---|---|---|
-| `bigfleet_scaleway_api_calls_total` | counter | `op`, `outcome` | Scaleway API call volume, split by operation (`CreateServer`, `DeleteServer`, `DescribeManaged`, `Configure`, `Drain`, `Pricing`, `Catalogue`) and `success`/`error`. The first place to look when creates or drains are failing. |
+| `bigfleet_scaleway_api_calls_total` | counter | `op`, `outcome` | Scaleway API call volume, split by operation (`CreateServer`, `DeleteServer`, `DescribeManaged`, `EnsureRunning`, `ReapOrphanVolumes`, `Configure`, `Drain`, `Pricing`, `Catalogue`) and `success`/`error`. The first place to look when creates or drains are failing. |
 | `bigfleet_scaleway_api_duration_seconds` | histogram | `op` | Scaleway API latency by operation. Watch the `CreateServer` tail on Elastic Metal — physical commissioning is slow. |
 
 ### gRPC

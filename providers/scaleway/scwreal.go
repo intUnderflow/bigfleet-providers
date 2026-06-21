@@ -482,6 +482,13 @@ func (r *scwReal) ReapOrphanVolumes(ctx context.Context) (int, error) {
 			if vol == nil || vol.Server != nil {
 				continue // still attached
 			}
+			if vol.VolumeType == instance.VolumeVolumeTypeSbsVolume {
+				// An sbs_volume is owned by the block plane (it can surface on the
+				// instance plane too); the block loop below reaps it via the block API.
+				// Deleting it here would be a wrong-plane delete, breaking the plane
+				// routing the inline cleanup relies on.
+				continue
+			}
 			if vol.CreationDate != nil && vol.CreationDate.After(cutoff) {
 				continue // too young — may belong to an in-flight create
 			}
