@@ -165,9 +165,12 @@ func newSCWReal(cfg scwRealConfig, logger *slog.Logger) (scwClient, error) {
 func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInstance, error) {
 	name := serverName(spec)
 	// Idempotent create: a retried Create whose name already exists recovers the
-	// existing server instead of launching a second one.
+	// existing server instead of launching a second one. Recovery is
+	// power-state-aware (ensureRunning), because a Create that died between
+	// CreateServer and Poweron leaves a STOPPED server that would otherwise be
+	// polled forever.
 	if existing := r.serverByName(ctx, name); existing != nil {
-		return r.waitRunning(ctx, existing.ID)
+		return r.ensureRunning(ctx, existing.ID)
 	}
 
 	// Bake the generic, pre-binding agent bootstrap into user_data: the operator's
@@ -192,7 +195,7 @@ func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 	}, scw.WithContext(ctx))
 	if err != nil {
 		if existing := r.serverByName(ctx, name); existing != nil {
-			return r.waitRunning(ctx, existing.ID)
+			return r.ensureRunning(ctx, existing.ID)
 		}
 		return serverInstance{}, fmt.Errorf("create server %s: %w", spec.CommercialType, err)
 	}
@@ -220,6 +223,35 @@ func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 		return serverInstance{}, fmt.Errorf("power on %s: %w", srv.ID, err)
 	}
 	return r.waitRunning(ctx, srv.ID)
+}
+
+// ensureRunning recovers an already-created server toward running: if it is
+// stopped (a Create that died before/at Poweron leaves it stopped — Scaleway
+// Instances boot stopped), it issues an idempotent Poweron, then waits. Without
+// this, a recovery branch would poll a stopped server forever (timeout → sticky
+// Create failure + leaked server/volume on every retry).
+func (r *scwReal) ensureRunning(ctx context.Context, id string) (serverInstance, error) {
+	res, err := r.api.GetServer(&instance.GetServerRequest{Zone: r.zone, ServerID: id}, scw.WithContext(ctx))
+	if err != nil {
+		return serverInstance{}, fmt.Errorf("recover server %s: %w", id, err)
+	}
+	if res == nil || res.Server == nil {
+		return serverInstance{}, fmt.Errorf("server %s vanished during recovery", id)
+	}
+	switch res.Server.State {
+	case instance.ServerStateRunning, instance.ServerStateStarting:
+		// already on its way up
+	default:
+		// stopped / stopped-in-place / locked-then-cleared: power it on. A poweron
+		// on an already-running server would error, but we only reach here when it
+		// is not running/starting.
+		if _, err := r.api.ServerAction(&instance.ServerActionRequest{
+			Zone: r.zone, ServerID: id, Action: instance.ServerActionPoweron,
+		}, scw.WithContext(ctx)); err != nil && !is404(err) {
+			return serverInstance{}, fmt.Errorf("recover: power on %s: %w", id, err)
+		}
+	}
+	return r.waitRunning(ctx, id)
 }
 
 // waitRunning polls until the server reaches the running state (so the kit's IDLE

@@ -166,7 +166,22 @@ func (b *scalewayBackend) Describe(ctx context.Context) ([]providerkit.Instance,
 		out = append(out, slot)
 	}
 	// Tagged servers matching no current offering slot (offering shrank, or a
-	// manually tagged server), then untagged-but-running managed servers.
+	// manually tagged server), then untagged-but-running managed servers. Resolve
+	// the hardware capacity of any such orphan type that isn't already cached
+	// (offered types are resolved at startup; the pinned table covers the common
+	// ones) so allocatable isn't nil for an operator-supplied unpinned type —
+	// otherwise density would collapse to 1. Describe is the seed/reconcile path,
+	// not the List hot path, so a bounded catalogue lookup here is fine.
+	var orphanTypes []string
+	for _, srv := range bySlot {
+		orphanTypes = append(orphanTypes, srv.CommercialType)
+	}
+	for _, srv := range orphans {
+		orphanTypes = append(orphanTypes, srv.CommercialType)
+	}
+	if len(orphanTypes) > 0 {
+		b.types.resolve(ctx, orphanTypes)
+	}
 	for id, srv := range bySlot {
 		out = append(out, b.serverToIdle(id, srv))
 	}

@@ -44,7 +44,7 @@ Generated Go types and the server interface come from `github.com/intUnderflow/b
 | Provider | Capacity types | Status |
 |---|---|---|
 | [`aws`](providers/aws) | on-demand, spot, reserved | EC2 — passes conformance (fake EC2 backend); live demo needs AWS creds |
-| [`scaleway`](providers/scaleway) | on-demand (Instances), bare-metal (Elastic Metal) | CERTIFIED (fake backend, credential-free); live demo needs Scaleway creds |
+| [`scaleway`](providers/scaleway) | on-demand (Instances); bare-metal (Elastic Metal, fake-only) | CERTIFIED (fake backend, credential-free). Real backend: Instances only — the Elastic Metal real backend is not built yet |
 | [`_template`](providers/_template) | on-demand + spot (example) | copy-me skeleton — passes conformance against an in-memory backend |
 
 More providers (gcp, libvirt, …) are added by copying `_template`; the table grows as they land.

@@ -2,10 +2,12 @@
 #
 # Scaleway auth is API-key based (not IAM roles like AWS): the provider presents
 # an access key + secret key belonging to an IAM application, scoped by an IAM
-# policy. This module creates, least-privilege:
+# policy. Scaleway IAM grants are PRODUCT-scoped permission sets (no per-call
+# action lists), so this module grants the narrowest predefined sets that cover
+# the code's calls, scoped to a single project. It creates:
 #
 #   * an IAM application (the machine identity the provider runs as),
-#   * an IAM policy granting only the permission sets the code calls, and
+#   * an IAM policy granting those permission sets for one project, and
 #   * an API key for the application (access key + secret key outputs).
 #
 # Deliver the outputs to the cluster as a Kubernetes Secret (see
@@ -41,7 +43,7 @@ variable "project_id" {
 }
 
 variable "enable_elastic_metal" {
-  description = "Also grant the Elastic Metal (bare-metal) permission set. Leave false for an Instances-only deployment."
+  description = "Also grant the Elastic Metal (bare-metal) permission set. NOTE: the real Elastic Metal backend is not yet built into the provider binary (it runs on the fake backend only), so leave this false for any real deployment; it exists for when the Elastic Metal backend ships."
   type        = bool
   default     = false
 }
@@ -51,19 +53,26 @@ variable "enable_elastic_metal" {
 # ---------------------------------------------------------------------------
 resource "scaleway_iam_application" "provider" {
   name        = "${var.name}-app"
-  description = "BigFleet Scaleway capacity provider (least-privilege Instances/Elastic Metal access)."
+  description = "BigFleet Scaleway capacity provider (Instances + Block Storage access, scoped to one project)."
 }
 
 # ---------------------------------------------------------------------------
-# Policy — least privilege, scoped to one project
+# Policy — scoped to one project, using Scaleway's predefined permission sets
 # ---------------------------------------------------------------------------
-# InstancesFullAccess covers the calls the Instances backend makes (create/get/
-# list/delete servers, server actions, user-data, server types/pricing). For a
-# tighter grant Scaleway also offers narrower Instances permission sets; this is
-# the documented baseline. The Elastic Metal set is added only when requested.
+# Scaleway IAM authorises by PRODUCT-scoped permission sets, not per-API-call
+# rules (there is no AWS-style action list), so "least privilege" here means: the
+# narrowest predefined sets that cover the calls the code makes, scoped to a
+# single project. The provider needs:
+#   - InstancesFullAccess   — create/get/list/delete servers, server actions,
+#                             user-data, and server types/pricing.
+#   - BlockStorageFullAccess — delete the boot Block Storage (sbs) volume on
+#                             Delete (the instance API cannot delete sbs volumes),
+#                             so this is required to avoid a storage leak.
+# BareMetalFullAccess is added only when enable_elastic_metal is set (note: the
+# real Elastic Metal backend is not yet built — see var.enable_elastic_metal).
 locals {
   permission_sets = concat(
-    ["InstancesFullAccess"],
+    ["InstancesFullAccess", "BlockStorageFullAccess"],
     var.enable_elastic_metal ? ["BareMetalFullAccess"] : [],
   )
 }
