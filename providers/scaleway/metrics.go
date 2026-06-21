@@ -1,0 +1,168 @@
+package main
+
+import (
+	"context"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+)
+
+// metrics is the Scaleway provider's Prometheus instrumentation, exposed at
+// /metrics. It matches BigFleet's stack (prometheus/client_golang) so an
+// operator gets Scaleway API visibility, RPC latency/outcomes, and the
+// background loops' health out of the box.
+type metrics struct {
+	reg *prometheus.Registry
+
+	apiCalls     *prometheus.CounterVec   // bigfleet_scaleway_api_calls_total{op,outcome}
+	apiDuration  *prometheus.HistogramVec // bigfleet_scaleway_api_duration_seconds{op}
+	rpcCalls     *prometheus.CounterVec   // bigfleet_scaleway_grpc_requests_total{method,code}
+	rpcDuration  *prometheus.HistogramVec // bigfleet_scaleway_grpc_request_duration_seconds{method}
+	panics       prometheus.Counter       // bigfleet_scaleway_panics_total
+	reconcile    *prometheus.CounterVec   // bigfleet_scaleway_reconcile_total{outcome}
+	priceRefresh *prometheus.CounterVec   // bigfleet_scaleway_price_refresh_total{outcome}
+}
+
+func newMetrics() *metrics {
+	reg := prometheus.NewRegistry()
+	f := promauto(reg)
+	m := &metrics{
+		reg: reg,
+		apiCalls: f.counterVec(prometheus.CounterOpts{
+			Name: "bigfleet_scaleway_api_calls_total",
+			Help: "Scaleway API calls by operation and outcome.",
+		}, "op", "outcome"),
+		apiDuration: f.histogramVec(prometheus.HistogramOpts{
+			Name:    "bigfleet_scaleway_api_duration_seconds",
+			Help:    "Scaleway API call latency by operation.",
+			Buckets: prometheus.DefBuckets,
+		}, "op"),
+		rpcCalls: f.counterVec(prometheus.CounterOpts{
+			Name: "bigfleet_scaleway_grpc_requests_total",
+			Help: "CapacityProvider gRPC requests by method and status code.",
+		}, "method", "code"),
+		rpcDuration: f.histogramVec(prometheus.HistogramOpts{
+			Name:    "bigfleet_scaleway_grpc_request_duration_seconds",
+			Help:    "CapacityProvider gRPC request latency by method.",
+			Buckets: prometheus.DefBuckets,
+		}, "method"),
+		panics: f.counter(prometheus.CounterOpts{
+			Name: "bigfleet_scaleway_panics_total",
+			Help: "Recovered panics in gRPC handlers.",
+		}),
+		reconcile: f.counterVec(prometheus.CounterOpts{
+			Name: "bigfleet_scaleway_reconcile_total",
+			Help: "Background reconcile runs by outcome.",
+		}, "outcome"),
+		priceRefresh: f.counterVec(prometheus.CounterOpts{
+			Name: "bigfleet_scaleway_price_refresh_total",
+			Help: "Background price-refresh runs by outcome.",
+		}, "outcome"),
+	}
+	reg.MustRegister(collectors.NewGoCollector())
+	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	return m
+}
+
+func (m *metrics) observeAPI(op string, start time.Time, err error) {
+	outcome := "success"
+	if err != nil {
+		outcome = "error"
+	}
+	m.apiCalls.WithLabelValues(op, outcome).Inc()
+	m.apiDuration.WithLabelValues(op).Observe(time.Since(start).Seconds())
+}
+
+// metricsSCWClient decorates an scwClient, recording call counts/latency per
+// operation. It is transparent — it returns exactly what the inner client does.
+type metricsSCWClient struct {
+	inner scwClient
+	m     *metrics
+}
+
+func newMetricsSCWClient(inner scwClient, m *metrics) scwClient {
+	if m == nil {
+		return inner
+	}
+	return &metricsSCWClient{inner: inner, m: m}
+}
+
+func (c *metricsSCWClient) CreateServer(ctx context.Context, spec serverSpec) (serverInstance, error) {
+	start := time.Now()
+	srv, err := c.inner.CreateServer(ctx, spec)
+	c.m.observeAPI("CreateServer", start, err)
+	return srv, err
+}
+func (c *metricsSCWClient) DeleteServer(ctx context.Context, id string) error {
+	start := time.Now()
+	err := c.inner.DeleteServer(ctx, id)
+	c.m.observeAPI("DeleteServer", start, err)
+	return err
+}
+func (c *metricsSCWClient) DescribeManaged(ctx context.Context) ([]serverInstance, error) {
+	start := time.Now()
+	out, err := c.inner.DescribeManaged(ctx)
+	c.m.observeAPI("DescribeManaged", start, err)
+	return out, err
+}
+func (c *metricsSCWClient) EnsureRunning(ctx context.Context, id string) error {
+	start := time.Now()
+	err := c.inner.EnsureRunning(ctx, id)
+	c.m.observeAPI("EnsureRunning", start, err)
+	return err
+}
+func (c *metricsSCWClient) ReapOrphanVolumes(ctx context.Context) (int, error) {
+	start := time.Now()
+	n, err := c.inner.ReapOrphanVolumes(ctx)
+	c.m.observeAPI("ReapOrphanVolumes", start, err)
+	return n, err
+}
+func (c *metricsSCWClient) ApplyBootstrap(ctx context.Context, srv serverInstance, cluster string, blob []byte) error {
+	start := time.Now()
+	err := c.inner.ApplyBootstrap(ctx, srv, cluster, blob)
+	c.m.observeAPI("Configure", start, err)
+	return err
+}
+func (c *metricsSCWClient) DrainNode(ctx context.Context, srv serverInstance, grace int64) error {
+	start := time.Now()
+	err := c.inner.DrainNode(ctx, srv, grace)
+	c.m.observeAPI("Drain", start, err)
+	return err
+}
+func (c *metricsSCWClient) PriceUSD(ctx context.Context, commercialType, zone string) (float64, error) {
+	start := time.Now()
+	v, err := c.inner.PriceUSD(ctx, commercialType, zone)
+	c.m.observeAPI("Pricing", start, err)
+	return v, err
+}
+func (c *metricsSCWClient) DescribeCommercialTypeCapacities(ctx context.Context, types []string) (map[string]commercialCapacity, error) {
+	start := time.Now()
+	out, err := c.inner.DescribeCommercialTypeCapacities(ctx, types)
+	c.m.observeAPI("Catalogue", start, err)
+	return out, err
+}
+
+var _ scwClient = (*metricsSCWClient)(nil)
+
+// promauto is a tiny factory that registers each metric on a specific registry
+// (so the provider uses an isolated registry, not the global default).
+type promFactory struct{ reg *prometheus.Registry }
+
+func promauto(reg *prometheus.Registry) promFactory { return promFactory{reg} }
+
+func (f promFactory) counter(o prometheus.CounterOpts) prometheus.Counter {
+	c := prometheus.NewCounter(o)
+	f.reg.MustRegister(c)
+	return c
+}
+func (f promFactory) counterVec(o prometheus.CounterOpts, labels ...string) *prometheus.CounterVec {
+	c := prometheus.NewCounterVec(o, labels)
+	f.reg.MustRegister(c)
+	return c
+}
+func (f promFactory) histogramVec(o prometheus.HistogramOpts, labels ...string) *prometheus.HistogramVec {
+	h := prometheus.NewHistogramVec(o, labels)
+	f.reg.MustRegister(h)
+	return h
+}

@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "bigfleet-scaleway.fullname" . }}
+  labels:
+    {{- include "bigfleet-scaleway.labels" . | nindent 4 }}
+  {{- if or .Values.metrics.prometheusScrape .Values.service.annotations }}
+  annotations:
+    {{- if .Values.metrics.prometheusScrape }}
+    prometheus.io/scrape: "true"
+    prometheus.io/port: {{ .Values.ports.metrics | quote }}
+    prometheus.io/path: "/metrics"
+    {{- end }}
+    {{- with .Values.service.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "bigfleet-scaleway.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: grpc
+      port: {{ .Values.ports.grpc }}
+      targetPort: grpc
+      protocol: TCP
+      appProtocol: grpc
+    - name: metrics
+      port: {{ .Values.ports.metrics }}
+      targetPort: metrics
+      protocol: TCP
+    {{- if .Values.bootstrap.tls.secretName }}
+    - name: bootstrap
+      port: {{ .Values.bootstrap.port }}
+      targetPort: bootstrap
+      protocol: TCP
+    {{- end }}

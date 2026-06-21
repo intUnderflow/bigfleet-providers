@@ -1,0 +1,2 @@
+# Stray binary from a bare `go build ./...` (the Makefile builds into /bin instead).
+/scaleway

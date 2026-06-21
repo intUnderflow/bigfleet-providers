@@ -1,0 +1,180 @@
+# Values for the bigfleet-scaleway chart.
+#
+# One release per Scaleway region/zone (and per substrate). To run several
+# zones, install the chart once per zone with a distinct release name, zone, and
+# offerings file, e.g.:
+#
+#   helm install scaleway-fr-par-1 ./helm \
+#     --set zone=fr-par-1 \
+#     --set provider=scaleway-fr-par \
+#     --set credentials.secretName=bigfleet-scaleway-creds \
+#     --set-file offerings.content=offerings.fr-par-1.json
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-scaleway
+  tag: ""            # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Number of replicas. Keep at 1 per region/zone: the provider holds
+# region-scoped state and is the single CapacityProvider process for it.
+replicaCount: 1
+
+# --- core provider config ---------------------------------------------------
+# The single Scaleway zone this process serves (--zone). One zone per process;
+# all offerings must be in this zone. Deploy another release for other zones.
+zone: fr-par-1
+# HostRef provider label (--provider), e.g. scaleway-fr-par.
+provider: ""
+# Substrate served by this process: instances (ON_DEMAND) | elastic-metal
+# (BARE_METAL). One substrate per process. (--substrate)
+# NOTE: elastic-metal is fake-backend only today — the real Elastic Metal client
+# is not built yet and fails fast at startup with real credentials. Use
+# instances for any real deployment.
+substrate: instances
+# Scaleway backend mode: auto | scaleway | fake (--scaleway-backend). auto =
+# scaleway when credentials are set.
+scalewayBackend: auto
+
+ports:
+  # gRPC CapacityProvider (--addr).
+  grpc: 9000
+  # /metrics, /healthz, /readyz (--metrics-addr).
+  metrics: 9090
+
+# --- Scaleway server parameters ---------------------------------------------
+scaleway:
+  image: ""                     # --image (base image for CreateServer), REQUIRED for the real backend
+  eurToUSD: 1.08                # --eur-usd (EUR->USD price conversion)
+  seedCount: 32                 # --seed-count (default offerings size)
+
+# --- API credentials --------------------------------------------------------
+# The provider authenticates with a Scaleway IAM application API key (access key
+# + secret key) plus a project id, mounted as env vars from a Secret. Create it
+# with deploy/iam (Terraform) or imperatively:
+#   kubectl create secret generic bigfleet-scaleway-creds \
+#     --from-literal=SCW_ACCESS_KEY=... \
+#     --from-literal=SCW_SECRET_KEY=... \
+#     --from-literal=SCW_DEFAULT_PROJECT_ID=...
+credentials:
+  secretName: ""                # Secret holding SCW_ACCESS_KEY / SCW_SECRET_KEY / SCW_DEFAULT_PROJECT_ID
+
+# --- bootstrap delivery (Configure) -----------------------------------------
+# Configure delivers the cluster-join bootstrap to the running host. Scaleway
+# user-data is consumed only at first boot, so the base image installs a small
+# on-host agent that, on Configure, dials the provider's HTTPS bootstrap channel,
+# short-polls for its OWN machine-specific command (204 when none pending),
+# applies the blob, and acks.
+# The channel is mutually authenticated: the agent pins the provider's CA, and
+# the provider authorises each agent with a per-machine HMAC bearer token derived
+# from the shared --bootstrap-secret + the machine id. Required for the real
+# backend.
+bootstrap:
+  # --bootstrap-addr: in-pod HTTPS listen address for the agent channel.
+  addr: ":9443"
+  # --bootstrap-endpoint: externally-reachable URL the agent dials (injected into
+  # server user_data). REQUIRED for the real backend, e.g.
+  # https://scaleway-fr-par.bigfleet.svc:9443
+  endpoint: ""
+  # Service port exposing the agent channel.
+  port: 9443
+  # Secret holding the bootstrap-channel server cert: tls.crt, tls.key, and
+  # optionally ca.crt (the CA the agent pins). A kubernetes.io/tls Secret usually
+  # has only tls.crt/tls.key; set includeCA=true only if the Secret also carries
+  # ca.crt, otherwise the provider defaults the pinned CA to the server cert.
+  tls:
+    secretName: ""
+    includeCA: false
+  # Secret holding the HMAC secret that mints per-machine agent tokens
+  # (key: bootstrap-secret), exposed as BIGFLEET_BOOTSTRAP_SECRET. Pin it so
+  # tokens survive a provider restart.
+  secret:
+    secretName: ""
+    secretKey: bootstrap-secret
+
+# --- offerings --------------------------------------------------------------
+# When content is set, it is rendered into a ConfigMap, mounted, and passed via
+# --offerings. Use --set-file offerings.content=offerings.json on install.
+offerings:
+  content: ""
+
+# Optional generic pre-binding cloud-init baked into CreateServer user-data
+# (--base-user-data); this is where the on-host agent is installed. Same
+# mechanism as offerings: set content to enable.
+baseUserData:
+  content: ""
+
+# --- background loops -------------------------------------------------------
+priceRefresh: 30m               # --price-refresh
+reconcileInterval: 2m           # --reconcile-interval
+
+# --- durable state ----------------------------------------------------------
+# When enabled, --state points at a file on a PersistentVolume so fence marks,
+# the idempotency map, inventory, and bindings survive restarts.
+state:
+  enabled: false
+  path: /var/lib/bigfleet-scaleway/state.json
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+
+# --- TLS / mTLS -------------------------------------------------------------
+# Provide a Secret with tls.crt + tls.key (and optionally ca.crt for mTLS).
+# When ca.crt is present the provider requires + verifies client certs (mTLS).
+tls:
+  enabled: false
+  secretName: ""                 # Secret holding tls.crt, tls.key, [ca.crt]
+  mtls: false                   # mount ca.crt and pass --tls-ca
+
+# --- gRPC reflection (--reflection) -----------------------------------------
+reflection: true
+
+# Extra raw flags appended verbatim to the args.
+extraArgs: []
+
+# --- ServiceAccount ---------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# --- Service ----------------------------------------------------------------
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Scrape annotations added to the Service for the metrics port.
+metrics:
+  prometheusScrape: true
+
+# --- pod scheduling / resources ---------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# Hardened defaults to match the distroless/static:nonroot image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
