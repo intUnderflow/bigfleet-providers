@@ -1,0 +1,166 @@
+# Values for the bigfleet-upcloud chart.
+#
+# One release per UpCloud zone. To run several zones, install the chart once per
+# zone with a distinct release name, zone, and credentials, e.g.:
+#
+#   helm install upcloud-fi-hel1 ./helm \
+#     --set zone=fi-hel1 \
+#     --set provider=upcloud-fi-hel1 \
+#     --set credentials.secretName=bigfleet-upcloud-credentials \
+#     --set upcloud.template=<ubuntu-24.04-template-uuid> \
+#     --set-file offerings.content=offerings.fi-hel1.json
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-upcloud
+  tag: ""            # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Number of replicas. Keep at 1 per zone: the provider is the single
+# CapacityProvider process for its zone.
+replicaCount: 1
+
+# --- core provider config ---------------------------------------------------
+# UpCloud zone this process serves (--zone), e.g. fi-hel1. Required for the real
+# backend; also the first default-offering zone (--zone-a).
+zone: fi-hel1
+# Second zone for the default offerings (--zone-b).
+zoneB: de-fra1
+# HostRef provider label (--provider), e.g. upcloud-fi-hel1.
+provider: ""
+# UpCloud backend mode: auto | upcloud | fake (--upcloud-backend). auto = upcloud
+# when API credentials AND a zone are set, else fake.
+upcloudBackend: auto
+
+ports:
+  # gRPC CapacityProvider (--addr).
+  grpc: 9000
+  # /metrics, /healthz, /readyz (--metrics-addr).
+  metrics: 9090
+
+# --- UpCloud server parameters ----------------------------------------------
+upcloud:
+  # --template: the OS template storage UUID cloned at server create (e.g. an
+  # Ubuntu 24.04 cloud-init template). REQUIRED for the real backend.
+  template: ""
+  # --eur-usd: EUR->USD conversion applied to the pinned plan price table.
+  eurUSD: 1.08
+  # --seed-count: number of Speculative slots when using the default offerings.
+  seedCount: 32
+
+# --- API credentials (HTTP Basic, an API sub-account) -----------------------
+# The provider authenticates with an UpCloud API sub-account (created in the
+# Control Panel's People page, scoped to API access), mounted as the
+# UPCLOUD_USERNAME / UPCLOUD_PASSWORD env vars from a Secret. Create it with:
+#   kubectl -n bigfleet create secret generic bigfleet-upcloud-credentials \
+#     --from-literal=username="$UPCLOUD_USERNAME" \
+#     --from-literal=password="$UPCLOUD_PASSWORD"
+credentials:
+  secretName: ""                # Secret holding the API sub-account credentials
+  usernameKey: username
+  passwordKey: password
+
+# --- SSH bootstrap delivery -------------------------------------------------
+# Configure/Drain deliver the cluster-specific bootstrap blob to the running
+# server over SSH, with the server's host key VERIFIED against a fingerprint
+# pinned at create. Provide the SSH private key (the provider authenticates with
+# it) in a Secret, and the matching authorized public key injected into servers
+# at create. Required for the real backend's Configure to deliver the blob.
+ssh:
+  # Secret holding the SSH private key (key: id) mounted at /etc/bigfleet/ssh/id.
+  privateKeySecretName: ""
+  privateKeySecretKey: id
+  # Authorized public key injected into servers at create (--ssh-pubkey), so the
+  # private key above can authenticate.
+  publicKey: ""
+  # SSH user for Configure/Drain delivery (--ssh-user).
+  user: root
+  # Image path that applies the delivered bootstrap blob (--bootstrap-hook).
+  bootstrapHook: /opt/bigfleet/bootstrap
+
+# --- offerings --------------------------------------------------------------
+# When content is set, it is rendered into a ConfigMap, mounted, and passed via
+# --offerings. Use --set-file offerings.content=offerings.json on install.
+offerings:
+  content: ""
+
+# Optional generic pre-binding cloud-init baked into server create user_data
+# (--base-user-data); installs the on-host bootstrap hook ONLY — never the
+# secret-bearing blob. Set content to enable.
+baseUserData:
+  content: ""
+
+# --- background loops -------------------------------------------------------
+reconcileInterval: 2m           # --reconcile-interval
+
+# --- durable state ----------------------------------------------------------
+# When enabled, --state points at a file on a PersistentVolume so fence marks,
+# the idempotency map, inventory, bindings, and pinned SSH host keys survive
+# restarts.
+state:
+  enabled: false
+  path: /var/lib/bigfleet-upcloud/state.json
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+
+# --- TLS / mTLS (gRPC listener) ---------------------------------------------
+# Provide a Secret with tls.crt + tls.key (and optionally ca.crt for mTLS). When
+# ca.crt is present the provider requires + verifies client certs (mTLS).
+tls:
+  enabled: false
+  secretName: ""                 # Secret holding tls.crt, tls.key, [ca.crt]
+  mtls: false                   # mount ca.crt and pass --tls-ca
+
+# --- gRPC reflection (--reflection) -----------------------------------------
+reflection: true
+
+# Extra raw flags appended verbatim to the args.
+extraArgs: []
+
+# --- ServiceAccount ---------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# --- Service ----------------------------------------------------------------
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Scrape annotations added to the Service for the metrics port.
+metrics:
+  prometheusScrape: true
+
+# --- pod scheduling / resources ---------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# Hardened defaults to match the distroless/static:nonroot image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL

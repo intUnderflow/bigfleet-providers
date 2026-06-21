@@ -1,0 +1,4 @@
+# A bare `go build .` inside this module drops a binary named after the
+# module dir here. It is never consumed (deploy/Dockerfile builds from source),
+# so ignore it — never commit it.
+/upcloud
