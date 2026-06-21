@@ -276,8 +276,12 @@ func applyPriceOverrides(pr *pricing, spec string) error {
 			return fmt.Errorf("--flavor-price: expected flavor=USD, got %q", pair)
 		}
 		usd, err := strconv.ParseFloat(strings.TrimSpace(usdStr), 64)
-		if err != nil || usd < 0 {
-			return fmt.Errorf("--flavor-price: bad price for %q: %q", flavor, usdStr)
+		// Reject non-positive prices: the flag exists to price a flavor missing
+		// from the pinned table, not to model free/sunk-cost capacity. A 0 would
+		// publish price_per_hour=0 and always win BigFleet's cost ranking, so an
+		// accidental "flavor=0" must fail rather than silently distort scheduling.
+		if err != nil || usd <= 0 {
+			return fmt.Errorf("--flavor-price: price for %q must be > 0, got %q", flavor, usdStr)
 		}
 		pr.setOverride(flavor, usd)
 	}

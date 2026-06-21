@@ -840,8 +840,11 @@ func flavorName(flavor map[string]any) string {
 	if n, ok := flavor["original_name"].(string); ok {
 		return n
 	}
-	// Older microversions expose only the flavor id under "id"; the backend
-	// recovers the flavor for pricing/allocatable from the FileStore in that case.
+	// newOVHReal pins compute microversion 2.47 precisely so "original_name" is
+	// always present, so the branch above is the expected path. Returning the
+	// flavor id here is only a last-resort fallback for an unexpected response
+	// shape (the id is still stable, though it won't match the name-keyed price
+	// table or allocatable cache).
 	if id, ok := flavor["id"].(string); ok {
 		return id
 	}

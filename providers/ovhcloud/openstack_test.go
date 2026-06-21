@@ -85,7 +85,7 @@ func TestApplyPriceOverrides(t *testing.T) {
 	if err := applyPriceOverrides(p, ""); err != nil {
 		t.Errorf("empty spec should be a no-op, got %v", err)
 	}
-	for _, bad := range []string{"noequals", "flav=", "flav=abc", "flav=-1"} {
+	for _, bad := range []string{"noequals", "flav=", "flav=abc", "flav=-1", "flav=0"} {
 		if err := applyPriceOverrides(newPricing(1.0), bad); err == nil {
 			t.Errorf("expected error for %q", bad)
 		}
