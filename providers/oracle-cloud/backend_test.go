@@ -240,7 +240,9 @@ func TestInstanceToIdle_RecoversFields(t *testing.T) {
 	}
 }
 
-// A bare-metal shape declared on-demand becomes BARE_METAL capacity at price 0.
+// Capacity is mapped by the declared capacity_type, not the shape prefix: a BM.*
+// shape declared on_demand is ON_DEMAND (priced), while capacity_type=bare_metal
+// is BARE_METAL (held, price 0).
 func TestOffering_BareMetalShape(t *testing.T) {
 	// Capacity is mapped by the DECLARED capacity_type, not the shape prefix: a
 	// BM.* shape declared on_demand is genuine (hourly-billed) on-demand capacity.

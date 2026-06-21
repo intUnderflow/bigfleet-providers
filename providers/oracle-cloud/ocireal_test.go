@@ -95,3 +95,13 @@ func TestBootstrapSteps_TooLarge(t *testing.T) {
 		t.Fatal("expected an error for an oversized bootstrap blob, got nil")
 	}
 }
+
+// A pathologically long hook path makes even the wrapper exceed the command-text
+// cap; bootstrapSteps must surface a clear error rather than emit an oversized
+// command for OCI to reject.
+func TestBootstrapSteps_LongHookPathRejected(t *testing.T) {
+	longHook := "/opt/" + strings.Repeat("x", 5000)
+	if _, err := bootstrapSteps(longHook, "c1", make([]byte, 8*1024), "op-1"); err == nil {
+		t.Fatal("expected an error when a step exceeds the command-text cap, got nil")
+	}
+}

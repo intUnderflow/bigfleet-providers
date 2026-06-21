@@ -401,6 +401,14 @@ func bootstrapSteps(hookPath, clusterID string, bootstrap []byte, operationID st
 		"set -euo pipefail; umask 077; base64 -d %s > %s; rm -f %s; %s %s",
 		stage, blobPath, stage, hook, cluster)
 	steps = append(steps, runStep{name: "bigfleet-configure-run", script: final, token: operationID + "-run"})
+	// The chunk payload is sized to fit, but a long --bootstrap-hook path and/or
+	// cluster id still inflate the wrapper (and the final decode/run step), so
+	// validate every script against the cap rather than letting OCI reject it.
+	for _, s := range steps {
+		if len(s.script) > maxCommandText {
+			return nil, fmt.Errorf("bootstrap command %q is %d bytes, over the %d-byte cap (shorten --bootstrap-hook or the cluster id, or stage the blob out-of-band)", s.name, len(s.script), maxCommandText)
+		}
+	}
 	return steps, nil
 }
 
