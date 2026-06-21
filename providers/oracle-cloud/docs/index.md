@@ -54,13 +54,15 @@ identity setup):
 
 ## Deploy it
 
-The provider is a published container image plus a Helm chart — you don't build
-from source. The path is:
+The provider is a small Go binary you build into a container image (a `Dockerfile`
+is provided) and deploy with the Helm chart. The path is:
 
-1. **Authorize the provider** — provision the dynamic group + IAM policy for the
+1. **Build & push the image** from the repo root with the provided `Dockerfile`
+   (see [Install & deploy](/providers/oracle-cloud/install/)).
+2. **Authorize the provider** — provision the dynamic group + IAM policy for the
    Instance-Principal / Workload-Identity path (or mount an `~/.oci/config`
    Secret). See [Credentials & auth](/providers/oracle-cloud/credentials/).
-2. **Install the Helm chart, one release per region**, pointing it at your region,
+3. **Install the Helm chart, one release per region**, pointing it at your region,
    compartment, subnet, base image, and your **offerings** (the quota of capacity
    it may provision). Enable durable state on a PersistentVolume so bindings
    survive restarts.

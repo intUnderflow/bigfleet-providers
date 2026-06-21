@@ -16,12 +16,13 @@ import (
 // Two signals, per the author guide (§4.4):
 //   - Forecast: a conservative per-shape hourly prior (OCI does not publish a
 //     spot-interruption-frequency feed the way AWS does), tunable via a prior
-//     table. Used for SPECULATIVE slots and running instances with no observed
-//     preemption yet.
-//   - Observed: once OCI signals an impending preemption (the Events service
-//     emits a preemption-action event ahead of stop/terminate), markPreemption
-//     raises that machine's probability toward 1.0. Wire markPreemption to an
-//     OCI Events/Notifications subscription in production.
+//     table. This is what the provider publishes today for every SPOT machine.
+//   - Observed (provided hook, not wired by default): markPreemption raises a
+//     specific machine's probability toward 1.0 once a preemption signal is seen.
+//     The provider does NOT ship a live OCI Events/Notifications subscription, so
+//     this path is dormant unless an operator wires markPreemption to OCI
+//     preemption-action events; until then only the forecast prior is published
+//     (which already satisfies the SPOT > 0 invariant).
 type interruption struct {
 	mu       sync.Mutex
 	observed map[string]float64 // machineID -> raised probability from a preemption signal

@@ -52,6 +52,10 @@ type launchSpec struct {
 	MemoryGB           float64
 	// Preemptible launches the instance as an OCI Preemptible Instance (spot).
 	Preemptible bool
+	// Capacity is the canonical capacity_type string (on_demand | spot |
+	// bare_metal), recorded as a freeform tag at launch so the recovery path can
+	// reconstruct the declared capacity instead of guessing it from the shape.
+	Capacity string
 	// IdempotencyToken is the kit's per-operation id. The fake uses it to model
 	// idempotent launch (a repeated token returns the existing instance); the
 	// real client passes it as OCI's OpcRetryToken (and derives a stable display
@@ -74,6 +78,7 @@ type ociInstance struct {
 	OCPUs              float64 // launch ShapeConfig (flexible shapes)
 	MemoryGB           float64
 	Preemptible        bool   // launched as an OCI Preemptible Instance
+	Capacity           string // bigfleet-capacity freeform tag (canonical capacity_type), empty if untagged
 	ClusterID          string // bigfleet-cluster freeform tag, empty when unbound
 	PrivateIP          string // for Run Command targeting / diagnostics
 	// Running reports whether the instance is in a live state (provisioning /

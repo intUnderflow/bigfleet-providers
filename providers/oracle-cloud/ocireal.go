@@ -23,6 +23,7 @@ const (
 	tagManaged   = "bigfleet-managed"
 	tagMachineID = "bigfleet-machine-id"
 	tagCluster   = "bigfleet-cluster"
+	tagCapacity  = "bigfleet-capacity"
 )
 
 // ociRealConfig is the launch configuration for the production OCI Compute client.
@@ -143,6 +144,7 @@ func (r *ociReal) LaunchInstance(ctx context.Context, spec launchSpec) (ociInsta
 		FreeformTags: map[string]string{
 			tagManaged:   "true",
 			tagMachineID: spec.MachineID,
+			tagCapacity:  spec.Capacity,
 		},
 	}
 	if isFlexShape(spec.Shape) {
@@ -219,9 +221,27 @@ func (r *ociReal) TerminateInstance(ctx context.Context, instanceID string) erro
 		if isNotFound(err) {
 			return nil // already gone — idempotent
 		}
+		// An instance already terminating/terminated returns 409 IncorrectState (or
+		// similar) rather than 404. Re-read it: if it is gone or already on its way
+		// down, the terminate is a successful no-op; otherwise surface the error.
+		if r.alreadyGone(ctx, instanceID) {
+			return nil
+		}
 		return fmt.Errorf("TerminateInstance %s: %w", instanceID, err)
 	}
 	return nil
+}
+
+// alreadyGone reports whether the instance no longer exists or is already
+// terminating/terminated — so a Terminate that raced an out-of-band teardown (or
+// a prior attempt) is idempotently a no-op rather than a failure.
+func (r *ociReal) alreadyGone(ctx context.Context, instanceID string) bool {
+	resp, err := r.comp.GetInstance(ctx, core.GetInstanceRequest{InstanceId: common.String(instanceID)})
+	if err != nil {
+		return isNotFound(err)
+	}
+	return resp.LifecycleState == core.InstanceLifecycleStateTerminated ||
+		resp.LifecycleState == core.InstanceLifecycleStateTerminating
 }
 
 func (r *ociReal) DescribeManaged(ctx context.Context) ([]ociInstance, error) {
@@ -338,29 +358,37 @@ func (r *ociReal) waitCommand(ctx context.Context, commandID, instanceID, name s
 	deadline := time.Now().Add(r.cfg.CommandTimeout)
 	ticker := time.NewTicker(r.cfg.PollInterval)
 	defer ticker.Stop()
+	var lastErr error
 	for {
 		resp, err := r.agent.GetInstanceAgentCommandExecution(ctx, computeinstanceagent.GetInstanceAgentCommandExecutionRequest{
 			InstanceAgentCommandId: common.String(commandID),
 			InstanceId:             common.String(instanceID),
 		})
 		if err != nil {
-			return fmt.Errorf("poll command %s on %s: %w", name, instanceID, err)
-		}
-		switch resp.LifecycleState {
-		case computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateSucceeded:
-			return nil
-		case computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateFailed,
-			computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateTimedOut,
-			computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateCanceled:
-			// Every terminal non-success state fails fast — don't keep polling to the
-			// deadline once the agent has reported the command won't succeed.
-			return fmt.Errorf("command %s on %s ended in %s", name, instanceID, resp.LifecycleState)
+			// A read of a just-created command can transiently 404/error under
+			// eventual consistency. Don't fail the transition on a single bad read —
+			// keep polling and only surface the error if it persists to the deadline.
+			lastErr = err
+		} else {
+			switch resp.LifecycleState {
+			case computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateSucceeded:
+				return nil
+			case computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateFailed,
+				computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateTimedOut,
+				computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateCanceled:
+				// Every terminal non-success state fails fast — don't keep polling to
+				// the deadline once the agent reports the command won't succeed.
+				return fmt.Errorf("command %s on %s ended in %s", name, instanceID, resp.LifecycleState)
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("waiting for command %s on %s: %w", name, instanceID, ctx.Err())
 		case <-ticker.C:
 			if time.Now().After(deadline) {
+				if lastErr != nil {
+					return fmt.Errorf("polling command %s on %s did not succeed within %s: %w", name, instanceID, r.cfg.CommandTimeout, lastErr)
+				}
 				return fmt.Errorf("command %s on %s did not finish within %s", name, instanceID, r.cfg.CommandTimeout)
 			}
 		}
@@ -372,6 +400,7 @@ func (r *ociReal) waitCommand(ctx context.Context, commandID, instanceID, name s
 func (r *ociReal) toInstance(inst core.Instance) ociInstance {
 	out := ociInstance{
 		MachineID:   inst.FreeformTags[tagMachineID],
+		Capacity:    inst.FreeformTags[tagCapacity],
 		ClusterID:   inst.FreeformTags[tagCluster],
 		Preemptible: inst.PreemptibleInstanceConfig != nil,
 		Running: inst.LifecycleState == core.InstanceLifecycleStateRunning ||
@@ -407,23 +436,36 @@ func (r *ociReal) clearTag(ctx context.Context, instanceID, key string) error {
 }
 
 func (r *ociReal) updateTags(ctx context.Context, instanceID string, mutate func(map[string]string)) error {
-	resp, err := r.comp.GetInstance(ctx, core.GetInstanceRequest{InstanceId: common.String(instanceID)})
-	if err != nil {
-		return fmt.Errorf("get instance %s: %w", instanceID, err)
+	// Read-modify-write under optimistic concurrency: carry the GetInstance etag as
+	// if-match on the update so a concurrent writer can't silently clobber our
+	// change. On a 412 (etag moved) re-read and retry a few times.
+	const attempts = 3
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		resp, err := r.comp.GetInstance(ctx, core.GetInstanceRequest{InstanceId: common.String(instanceID)})
+		if err != nil {
+			return fmt.Errorf("get instance %s: %w", instanceID, err)
+		}
+		tags := map[string]string{}
+		for k, v := range resp.FreeformTags {
+			tags[k] = v
+		}
+		mutate(tags)
+		_, err = r.comp.UpdateInstance(ctx, core.UpdateInstanceRequest{
+			InstanceId:            common.String(instanceID),
+			IfMatch:               resp.Etag,
+			UpdateInstanceDetails: core.UpdateInstanceDetails{FreeformTags: tags},
+		})
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !isPreconditionFailed(err) {
+			return fmt.Errorf("update instance %s tags: %w", instanceID, err)
+		}
+		// etag moved under us — loop to re-read and reapply onto the latest tags.
 	}
-	tags := map[string]string{}
-	for k, v := range resp.FreeformTags {
-		tags[k] = v
-	}
-	mutate(tags)
-	_, err = r.comp.UpdateInstance(ctx, core.UpdateInstanceRequest{
-		InstanceId:            common.String(instanceID),
-		UpdateInstanceDetails: core.UpdateInstanceDetails{FreeformTags: tags},
-	})
-	if err != nil {
-		return fmt.Errorf("update instance %s tags: %w", instanceID, err)
-	}
-	return nil
+	return fmt.Errorf("update instance %s tags after %d attempts: %w", instanceID, attempts, lastErr)
 }
 
 // isNotFound reports whether err is an OCI 404 (so an idempotent terminate of an
@@ -431,6 +473,15 @@ func (r *ociReal) updateTags(ctx context.Context, instanceID string, mutate func
 func isNotFound(err error) bool {
 	if se, ok := common.IsServiceError(err); ok {
 		return se.GetHTTPStatusCode() == 404
+	}
+	return false
+}
+
+// isPreconditionFailed reports an OCI 412 (if-match etag mismatch), so a
+// concurrent tag write can be retried against the latest etag.
+func isPreconditionFailed(err error) bool {
+	if se, ok := common.IsServiceError(err); ok {
+		return se.GetHTTPStatusCode() == 412
 	}
 	return false
 }

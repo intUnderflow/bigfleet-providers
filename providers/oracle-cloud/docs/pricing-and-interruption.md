@@ -43,14 +43,17 @@ reports `0` looks free-and-safe and would be handed workloads it should never ru
 - **On-demand / bare metal:** `0` (no provider-side interruption).
 - **Preemptible (spot):** OCI Preemptible Instances are genuinely reclaimed when
   capacity is needed (OCI emits a preemption-action event ahead of stop/terminate
-  via the Events service). The provider declares:
+  via the Events service). The provider publishes:
   - a **forecast** — a conservative per-shape hourly prior (a tunable table;
-    scarcer / larger shapes carry a higher prior, default `0.10`), used for
-    Speculative slots and instances with no observed preemption; and
-  - an **observed** value — once a preemption signal is seen for a running
-    instance, its probability is raised toward `1.0`. Wire `markPreemption` to an
-    OCI Events/Notifications subscription for preemption-action events in
-    production; the published value is always the current, real one.
+    scarcer / larger shapes carry a higher prior, default `0.10`). This is what is
+    published today for every preemptible machine, and it already satisfies the
+    SPOT > 0 invariant.
+  - an **observed-escalation hook** (provided, not wired by default) —
+    `markPreemption` raises a specific machine's probability toward `1.0` once a
+    preemption signal is seen. The provider does **not** ship a live OCI
+    Events/Notifications subscription, so this path is dormant until an operator
+    wires `markPreemption` to OCI preemption-action events; until then the
+    forecast prior is the published value.
 
 Because every preemptible offering declares a non-zero forecast, the conformance
 **SPOT `interruption_probability` > 0** invariant holds by construction.

@@ -48,6 +48,7 @@ func (f *ociFake) LaunchInstance(_ context.Context, spec launchSpec) (ociInstanc
 		OCPUs:              spec.OCPUs,
 		MemoryGB:           spec.MemoryGB,
 		Preemptible:        spec.Preemptible,
+		Capacity:           spec.Capacity,
 		PrivateIP:          fmt.Sprintf("10.0.%d.%d", f.seq/250%250, f.seq%250+1),
 		Running:            true,
 	}

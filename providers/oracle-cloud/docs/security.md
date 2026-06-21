@@ -42,6 +42,18 @@ the control-plane analogue of AWS SSM `SendCommand`. The provider:
   so a failed Configure never leaves an instance mistagged as joined;
 - treats the blob as **opaque** — it is never parsed or logged.
 
+> **Persisted command record.** Like AWS SSM, OCI persists the Run Command record
+> (the command text and its captured output) at-rest, scoped to the compartment.
+> The bootstrap blob is embedded (base64) in the command text, so it lives in that
+> record until OCI ages it out — this is inherent to in-guest command delivery and
+> is why the channel is IAM-scoped to the provider's principal. Two operator
+> responsibilities follow: keep the compartment's command records access-controlled
+> (the same dynamic group / policy that grants `instance-agent-command-family`),
+> and ensure your bootstrap **hook never echoes the secret to stdout** — the
+> provider writes the blob to a file (not stdout), but the hook's own stdout is
+> captured into the command record. Rotate/short-TTL the join material if your
+> threat model requires it.
+
 ## Hardened runtime
 
 The image is `gcr.io/distroless/static:nonroot`: no shell, no package manager,

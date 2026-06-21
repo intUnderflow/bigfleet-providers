@@ -117,10 +117,17 @@ func (b *ociBackend) Describe(ctx context.Context) ([]providerkit.Instance, erro
 	bySlot := make(map[string]ociInstance, len(managed))
 	var orphans []ociInstance
 	for _, inst := range managed {
+		// Only a LIVE instance backs a slot, so the recovery path never reports a
+		// stopped/terminating host as IDLE (IDLE must mean a reachable host). A
+		// non-running tagged instance is releasing its slot, which returns to
+		// Speculative for re-provisioning.
+		if !inst.Running {
+			continue
+		}
 		switch {
 		case inst.MachineID != "":
-			bySlot[inst.MachineID] = inst // owns its slot, running or not
-		case inst.Running:
+			bySlot[inst.MachineID] = inst
+		default:
 			orphans = append(orphans, inst) // managed + running, but untagged
 		}
 	}
@@ -147,12 +154,17 @@ func (b *ociBackend) Describe(ctx context.Context) ([]providerkit.Instance, erro
 }
 
 func (b *ociBackend) instanceToIdle(machineID string, inst ociInstance) providerkit.Instance {
-	capacity := providerkit.CapacityOnDemand
-	switch {
-	case isBareMetalShape(inst.Shape):
-		capacity = providerkit.CapacityBareMetal
-	case inst.Preemptible:
-		capacity = providerkit.CapacitySpot
+	// Prefer the capacity recorded at launch (bigfleet-capacity tag); fall back to
+	// the preemptible flag for an untagged/manually-created instance. Defaulting an
+	// untagged instance to ON_DEMAND/SPOT (never BARE_METAL) keeps it idle-
+	// releasable rather than wrongly held forever — and never mis-prices a genuine
+	// hourly bare-metal instance at 0.
+	capacity := parseCapacity(inst.Capacity)
+	if capacity == providerkit.CapacityUnspecified {
+		capacity = providerkit.CapacityOnDemand
+		if inst.Preemptible {
+			capacity = providerkit.CapacitySpot
+		}
 	}
 	return providerkit.Instance{
 		ID:                      machineID,
@@ -204,6 +216,7 @@ func (b *ociBackend) CreateInstance(ctx context.Context, req providerkit.CreateI
 		OCPUs:              ocpus,
 		MemoryGB:           memGiB,
 		Preemptible:        m.CapacityType == providerkit.CapacitySpot,
+		Capacity:           capacityString(m.CapacityType),
 		IdempotencyToken:   req.OperationID,
 		BaseUserData:       b.baseUserData,
 	})
@@ -294,6 +307,37 @@ func (b *ociBackend) sizingFor(shape, zone string, capacity providerkit.Capacity
 		}
 	}
 	return fbOCPUs, fbMemGiB
+}
+
+// capacityString renders a kit CapacityType as the canonical freeform-tag value
+// recorded at launch (and parsed back by parseCapacity on the recovery path).
+func capacityString(c providerkit.CapacityType) string {
+	switch c {
+	case providerkit.CapacitySpot:
+		return "spot"
+	case providerkit.CapacityBareMetal:
+		return "bare_metal"
+	case providerkit.CapacityOnDemand:
+		return "on_demand"
+	default:
+		return ""
+	}
+}
+
+// parseCapacity maps a bigfleet-capacity tag value back to a kit CapacityType; an
+// empty/unknown tag yields CapacityUnspecified so the caller falls back to the
+// preemptible flag.
+func parseCapacity(s string) providerkit.CapacityType {
+	switch s {
+	case "spot":
+		return providerkit.CapacitySpot
+	case "bare_metal":
+		return providerkit.CapacityBareMetal
+	case "on_demand":
+		return providerkit.CapacityOnDemand
+	default:
+		return providerkit.CapacityUnspecified
+	}
 }
 
 func cloneMap(in map[string]string) map[string]string {

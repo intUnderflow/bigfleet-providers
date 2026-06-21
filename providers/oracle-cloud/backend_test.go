@@ -242,13 +242,63 @@ func TestInstanceToIdle_RecoversFields(t *testing.T) {
 
 // A bare-metal shape declared on-demand becomes BARE_METAL capacity at price 0.
 func TestOffering_BareMetalShape(t *testing.T) {
-	ct, err := (offering{Shape: "BM.Standard.E5.192", Capacity: "on_demand"}).capacityType()
-	if err != nil || ct != providerkit.CapacityBareMetal {
-		t.Fatalf("BM shape on_demand: got (%v, %v), want (BareMetal, nil)", ct, err)
+	// Capacity is mapped by the DECLARED capacity_type, not the shape prefix: a
+	// BM.* shape declared on_demand is genuine (hourly-billed) on-demand capacity.
+	if ct, err := (offering{Shape: "BM.Standard.E5.192", Capacity: "on_demand"}).capacityType(); err != nil || ct != providerkit.CapacityOnDemand {
+		t.Fatalf("BM shape on_demand: got (%v, %v), want (OnDemand, nil)", ct, err)
+	}
+	// An explicit bare_metal declaration is BARE_METAL (held, price 0).
+	if ct, err := (offering{Shape: "BM.Standard.E5.192", Capacity: "bare_metal"}).capacityType(); err != nil || ct != providerkit.CapacityBareMetal {
+		t.Fatalf("BM shape bare_metal: got (%v, %v), want (BareMetal, nil)", ct, err)
 	}
 	pr := testPricing(t)
 	if p := pr.price("BM.Standard.E5.192", 0, 0, providerkit.CapacityBareMetal); p != 0 {
 		t.Errorf("bare-metal price = %v, want 0", p)
+	}
+}
+
+// instanceToIdle maps capacity from the recorded bigfleet-capacity tag, not the
+// shape prefix: a BM.* instance launched on-demand recovers as ON_DEMAND.
+func TestInstanceToIdle_CapacityFromTag(t *testing.T) {
+	b, _ := newTestBackend(t, 4)
+	got := b.instanceToIdle("m-bm", ociInstance{
+		InstanceID: "ocid1.instance.oc1..bm", Shape: "BM.Standard.E5.192",
+		AvailabilityDomain: "Uocm:PHX-AD-1", Capacity: "on_demand",
+	})
+	if got.CapacityType != providerkit.CapacityOnDemand {
+		t.Errorf("BM instance tagged on_demand recovered as %v, want OnDemand", got.CapacityType)
+	}
+	// An explicit bare_metal tag recovers as BARE_METAL at price 0.
+	bm := b.instanceToIdle("m-bm2", ociInstance{
+		InstanceID: "ocid1.instance.oc1..bm2", Shape: "BM.Standard.E5.192",
+		AvailabilityDomain: "Uocm:PHX-AD-1", Capacity: "bare_metal",
+	})
+	if bm.CapacityType != providerkit.CapacityBareMetal || bm.PricePerHour != 0 {
+		t.Errorf("BM instance tagged bare_metal recovered as (%v, $%v), want (BareMetal, 0)", bm.CapacityType, bm.PricePerHour)
+	}
+}
+
+// Describe must not surface a non-running tagged instance as IDLE: a stopped
+// instance is releasing its slot, which returns to Speculative (IDLE=reachable).
+func TestDescribe_SkipsNonRunningInstance(t *testing.T) {
+	b, fake := newTestBackend(t, 4)
+	slot := b.speculativeSlots()[0]
+	// Inject a managed-but-stopped instance owning the slot.
+	fake.instances["dead"] = &ociInstance{
+		InstanceID: "dead", MachineID: slot.ID, Shape: slot.InstanceType,
+		AvailabilityDomain: slot.Zone, Running: false,
+	}
+	got, err := b.Describe(context.Background())
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	for _, in := range got {
+		if in.ID == slot.ID && in.State != providerkit.StateSpeculative {
+			t.Errorf("slot %s with a stopped instance = %v, want Speculative", slot.ID, in.State)
+		}
+		if in.Host.Ref == "dead" {
+			t.Errorf("non-running instance surfaced as a host: %+v", in)
+		}
 	}
 }
 

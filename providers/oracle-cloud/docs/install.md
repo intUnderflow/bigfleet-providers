@@ -1,6 +1,6 @@
 ---
 title: Install & deploy
-description: Deploy the BigFleet OCI provider with the published container image and Helm chart — one release per region, hardened non-root, with durable state.
+description: Deploy the BigFleet OCI provider — build the container image from source and install the Helm chart, one release per region, hardened non-root, with durable state.
 sidebar:
   order: 1
   label: Install & deploy
@@ -24,16 +24,21 @@ the single, region-scoped `CapacityProvider` process for its region).
 
 ## 1. The image
 
-Pull the published image (or build it from the repo root with
-`providers/oracle-cloud/deploy/Dockerfile` — it builds from the repo root so the
-multi-module `replace => ../..` resolves `providerkit`):
+Build the image from the repository root with
+`providers/oracle-cloud/deploy/Dockerfile` — it must build from the repo root so
+the multi-module `replace => ../..` resolves `providerkit`):
 
-```
-ghcr.io/intunderflow/bigfleet-oracle-cloud:0.1.0
+```sh
+docker build -f providers/oracle-cloud/deploy/Dockerfile \
+  -t <your-registry>/bigfleet-oracle-cloud:0.1.0 .
+docker push <your-registry>/bigfleet-oracle-cloud:0.1.0
 ```
 
-It is `distroless/static:nonroot` (uid 65532, no shell, read-only rootfs) and
-exposes the gRPC port (`9000`) and the metrics/health port (`9090`).
+Then set `image.repository`/`image.tag` to wherever you pushed it. (This repo
+does not publish an official image; if your own release pipeline publishes one,
+point the chart at that instead.) The result is `distroless/static:nonroot`
+(uid 65532, no shell, read-only rootfs) and exposes the gRPC port (`9000`) and the
+metrics/health port (`9090`).
 
 ## 2. Install the chart
 

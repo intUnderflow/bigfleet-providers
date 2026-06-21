@@ -33,12 +33,10 @@ type offering struct {
 func (o offering) capacityType() (providerkit.CapacityType, error) {
 	switch strings.ToLower(o.Capacity) {
 	case "on_demand", "on-demand", "ondemand", "":
-		// A BM.* shape declared on-demand is really fixed, already-paid-for
-		// capacity — treat it as BARE_METAL so price_per_hour=0 and the shard's
-		// idle-release path never deletes it.
-		if isBareMetalShape(o.Shape) {
-			return providerkit.CapacityBareMetal, nil
-		}
+		// Map by the DECLARED capacity, not the shape prefix: OCI bare metal is
+		// hourly-billed unless reserved, so a BM.* shape declared on-demand is
+		// genuine on-demand capacity (real price, idle-releasable). Declare
+		// capacity_type=bare_metal explicitly for a fixed/free-pool BM lane.
 		return providerkit.CapacityOnDemand, nil
 	case "spot", "preemptible":
 		if isBareMetalShape(o.Shape) {
