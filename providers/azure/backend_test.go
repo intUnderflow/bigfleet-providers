@@ -221,6 +221,41 @@ func TestDescribe_DeletingVMReleasesSlot(t *testing.T) {
 	t.Fatalf("Describe did not return slot %s", slot.ID)
 }
 
+// newAzureBackend must reject an offering whose VM size has no pinned on-demand
+// price, rather than let it publish PricePerHour=0 (read as "free").
+func TestNewAzureBackend_RejectsUnpricedOffering(t *testing.T) {
+	fake := newAzureFake()
+	logger := quietLogger()
+	offs := []offering{
+		{VMSize: "Standard_NOPRICE_v1", Zone: "eastus-1", Capacity: "on_demand", Count: 1, Resources: map[string]string{"cpu": "1", "memory": "2Gi"}},
+	}
+	_, err := newAzureBackend("azure-test", "eastus", fake, offs, newPricing("eastus", fake, logger), newInterruption(), nil, logger)
+	if err == nil {
+		t.Fatal("expected newAzureBackend to reject an offering with no pinned price")
+	}
+}
+
+// A zoneless orphan VM must be skipped during Describe (not emitted as a
+// zoneless Idle that would fatally fail the RequireZone seed validation).
+func TestDescribe_SkipsZonelessOrphan(t *testing.T) {
+	b, fake := newTestBackend(t, 4)
+	ctx := context.Background()
+
+	// An untagged (orphan) running VM with no zone.
+	if _, err := fake.CreateVM(ctx, vmSpec{VMSize: "Standard_D4s_v5"}); err != nil {
+		t.Fatalf("seed orphan: %v", err)
+	}
+	got, err := b.Describe(ctx)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	for _, inst := range got {
+		if inst.Zone == "" {
+			t.Errorf("Describe emitted a zoneless instance %q — would crash RequireZone seed", inst.ID)
+		}
+	}
+}
+
 // Two running VMs sharing a machine id (e.g. a re-driven Create after a partial
 // failure) must not silently leak: one owns the slot (Idle) and the other is
 // surfaced as an orphan under its resource id so it stays tracked and reclaimable.

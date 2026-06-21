@@ -26,9 +26,11 @@ type azureClient interface {
 	// out-of-band Spot evictions. The slot returns to Speculative.
 	DeleteVM(ctx context.Context, resourceID string) error
 
-	// DescribeManaged returns every BigFleet-managed VM in the resource group
-	// (VMs carrying the bigfleet-managed=true tag), so a provider with no
-	// persisted store can still rebuild inventory.
+	// DescribeManaged returns every BigFleet-managed VM (bigfleet-managed=true tag)
+	// in the configured location, so a provider with no persisted store can rebuild
+	// inventory. Scoped to the location so a shared resource group across regions
+	// doesn't cross-contaminate inventory, and reports real power state (a
+	// deallocated VM is not Running).
 	DescribeManaged(ctx context.Context) ([]vmInstance, error)
 
 	// ApplyBootstrap binds a running VM to a cluster and delivers the opaque

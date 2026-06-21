@@ -77,7 +77,9 @@ this section is the security rationale.
 - **Scope the role to the resource group**, not the subscription. The provider
   only ever touches VMs/NICs/disks/extensions in its one resource group, so the
   role assignment should be scoped there. A subscription-wide assignment is the
-  most common over-grant.
+  most common over-grant. A single resource group may be shared by several
+  per-region providers: inventory is scoped to each process's `--location`, so a
+  provider never sees, drains, or deletes another region's VMs.
 - **Prefer the custom role over Contributor.** The custom role grants only the
   compute/network actions the code calls (`virtualMachines/*`,
   `networkInterfaces/*`, `disks/*`, `extensions/*`, `skus/read`, and the subnet

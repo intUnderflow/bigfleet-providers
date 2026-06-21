@@ -39,6 +39,9 @@ func newAzureBackend(providerName, location string, client azureClient, offering
 	if len(offerings) == 0 {
 		return nil, fmt.Errorf("azure backend: no offerings configured")
 	}
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	for _, off := range offerings {
 		if _, err := off.capacityType(); err != nil {
 			return nil, fmt.Errorf("azure backend: offering %s/%s: %w", off.VMSize, off.Zone, err)
@@ -50,6 +53,12 @@ func newAzureBackend(providerName, location string, client azureClient, offering
 		// would only fail later at seed time — reject it up front.
 		if off.Zone == "" {
 			return nil, fmt.Errorf("azure backend: offering %s with empty zone", off.VMSize)
+		}
+		// An offering whose size has no pinned on-demand price would publish
+		// PricePerHour=0 (read as "free" and over-preferred by cost ranking). Reject
+		// it up front so coverage gaps fail loudly at startup, not silently at runtime.
+		if pr != nil && !pr.hasPrice(off.VMSize) {
+			return nil, fmt.Errorf("azure backend: offering %s has no pinned on-demand price for region %q (add it to onDemandByRegion)", off.VMSize, location)
 		}
 	}
 	return &azureBackend{
@@ -173,9 +182,20 @@ func (b *azureBackend) Describe(ctx context.Context) ([]providerkit.Instance, er
 	// Tagged VMs matching no current offering slot (offering shrank, or a manually
 	// tagged VM), then untagged-but-running managed VMs.
 	for id, vm := range bySlot {
+		if vm.Zone == "" {
+			// The provider registers RequireZone, so a zoneless recovered VM would
+			// fatally fail the kit's seed validation and take down first boot. Skip
+			// it (the persisted FileStore is the primary restart path anyway).
+			b.logger.Warn("skipping zoneless managed VM during describe", "ref", vm.ResourceID, "machine", id)
+			continue
+		}
 		out = append(out, b.vmToIdle(id, vm))
 	}
 	for _, vm := range orphans {
+		if vm.Zone == "" {
+			b.logger.Warn("skipping zoneless orphan VM during describe", "ref", vm.ResourceID)
+			continue
+		}
 		out = append(out, b.vmToIdle(vm.ResourceID, vm))
 	}
 	return out, nil

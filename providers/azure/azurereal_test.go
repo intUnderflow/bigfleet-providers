@@ -8,6 +8,43 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6"
 )
 
+// toVMInstance must derive the real power state from the expanded instance view:
+// a deallocated VM is not Running even though provisioning Succeeded; a running
+// VM is; and with no instance view it falls back to the Deleting heuristic.
+func TestToVMInstance_PowerState(t *testing.T) {
+	a := &azureReal{cfg: azureRealConfig{Location: "eastus"}}
+
+	mk := func(props *armcompute.VirtualMachineProperties) armcompute.VirtualMachine {
+		return armcompute.VirtualMachine{Location: to.Ptr("eastus"), Properties: props}
+	}
+	iv := func(power string) *armcompute.VirtualMachineProperties {
+		return &armcompute.VirtualMachineProperties{
+			InstanceView: &armcompute.VirtualMachineInstanceView{
+				Statuses: []*armcompute.InstanceViewStatus{
+					{Code: to.Ptr("ProvisioningState/succeeded")},
+					{Code: to.Ptr(power)},
+				},
+			},
+		}
+	}
+
+	if got := a.toVMInstance(mk(iv("PowerState/deallocated"))); got.Running {
+		t.Error("deallocated VM reported Running")
+	}
+	if got := a.toVMInstance(mk(iv("PowerState/running"))); !got.Running {
+		t.Error("running VM reported not Running")
+	}
+	// No instance view, ProvisioningState=Deleting -> fallback marks not running.
+	deleting := mk(&armcompute.VirtualMachineProperties{ProvisioningState: to.Ptr("Deleting")})
+	if got := a.toVMInstance(deleting); got.Running {
+		t.Error("deleting VM reported Running")
+	}
+	// No instance view, no Deleting -> default Running.
+	if got := a.toVMInstance(mk(&armcompute.VirtualMachineProperties{ProvisioningState: to.Ptr("Succeeded")})); !got.Running {
+		t.Error("succeeded VM (no instance view) should default Running")
+	}
+}
+
 // capacityFromSKU must round MemoryGB→MiB, not truncate: 3.5 GB can parse as
 // 3.4999… and a bare int64() would floor it to 3583 MiB.
 func TestCapacityFromSKU_RoundsMemory(t *testing.T) {

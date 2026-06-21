@@ -122,6 +122,14 @@ func (p *pricing) price(vmSize string, capacity providerkit.CapacityType) float6
 	}
 }
 
+// hasPrice reports whether vmSize has a pinned on-demand price for this region
+// (the baseline table when the region itself is unpinned). Used to fail startup
+// loudly on a coverage gap rather than publish a misleading 0.
+func (p *pricing) hasPrice(vmSize string) bool {
+	_, ok := p.onDemandUSD[vmSize]
+	return ok
+}
+
 // refresh fetches the current Spot price for each VM size and caches it.
 // Best-effort: a fetch error leaves the prior (or fallback) value. Call it once
 // at startup and on a timer; never on the List hot path. Returns the number of

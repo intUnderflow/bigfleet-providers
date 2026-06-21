@@ -65,7 +65,7 @@ What the custom role grants, and why (each line maps to a call the code makes):
 | `Microsoft.Compute/virtualMachines/{read,write,delete}` | Create / Delete / inventory |
 | `Microsoft.Compute/virtualMachines/extensions/{read,write,delete}` | Configure / Drain (CustomScript) |
 | `Microsoft.Compute/disks/{read,write,delete}` | the OS managed disk |
-| `Microsoft.Compute/locations/vmSizes/read`, `Microsoft.Compute/skus/read` | allocatable lookup |
+| `Microsoft.Compute/skus/read` | allocatable lookup (Resource SKUs) |
 | `Microsoft.Network/networkInterfaces/{read,write,delete}` | the VM's NIC |
 | `Microsoft.Network/virtualNetworks/subnets/{join/action,read}` | attach the NIC to the subnet |
 

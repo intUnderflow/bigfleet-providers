@@ -273,9 +273,17 @@ func (a *azureReal) DeleteVM(ctx context.Context, resourceID string) error {
 	return nil
 }
 
-// DescribeManaged lists every BigFleet-managed VM in the resource group.
+// DescribeManaged lists every BigFleet-managed VM in the configured location.
+// It expands the instance view so the real power state (running/deallocated) is
+// available, and filters by Location: in a shared resource group with one process
+// per region, a foreign-region managed VM must not surface as local inventory, or
+// it would become eligible for region-unguarded Delete/Drain (keyed only on
+// resource group + name).
 func (a *azureReal) DescribeManaged(ctx context.Context) ([]vmInstance, error) {
-	pager := a.vms.NewListPager(a.cfg.ResourceGroup, nil)
+	opts := &armcompute.VirtualMachinesClientListOptions{
+		Expand: to.Ptr(armcompute.ExpandTypeForListVMsInstanceView),
+	}
+	pager := a.vms.NewListPager(a.cfg.ResourceGroup, opts)
 	var out []vmInstance
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -285,6 +293,9 @@ func (a *azureReal) DescribeManaged(ctx context.Context) ([]vmInstance, error) {
 		for _, vm := range page.Value {
 			if vm == nil || !hasTag(vm.Tags, tagManaged, "true") {
 				continue
+			}
+			if vm.Location == nil || !strings.EqualFold(*vm.Location, a.cfg.Location) {
+				continue // another region's VM in a shared resource group
 			}
 			out = append(out, a.toVMInstance(*vm))
 		}
@@ -497,11 +508,35 @@ func (a *azureReal) toVMInstance(vm armcompute.VirtualMachine) vmInstance {
 		if p.Priority != nil && *p.Priority == armcompute.VirtualMachinePriorityTypesSpot {
 			out.Spot = true
 		}
+		// Prefer the real power state from the expanded instance view: a manually
+		// deallocated/stopped VM is not Running even though ProvisioningState is
+		// Succeeded. Fall back to the ProvisioningState=Deleting heuristic when the
+		// instance view is absent (e.g. a list without the expand).
+		if p.InstanceView != nil {
+			if running, found := powerStateRunning(p.InstanceView.Statuses); found {
+				out.Running = running
+			}
+		}
 		if p.ProvisioningState != nil && strings.EqualFold(*p.ProvisioningState, "Deleting") {
 			out.Running = false
 		}
 	}
 	return out
+}
+
+// powerStateRunning reads the VM power state from instance-view statuses. found
+// is false when no PowerState/* status is present, so callers can keep their
+// fallback rather than mistreating an unknown state as stopped.
+func powerStateRunning(statuses []*armcompute.InstanceViewStatus) (running, found bool) {
+	for _, s := range statuses {
+		if s == nil || s.Code == nil {
+			continue
+		}
+		if strings.HasPrefix(*s.Code, "PowerState/") {
+			return strings.EqualFold(*s.Code, "PowerState/running"), true
+		}
+	}
+	return false, false
 }
 
 // --- helpers ---------------------------------------------------------------
