@@ -103,6 +103,21 @@ func (f *libvirtFake) DrainNode(_ context.Context, dom domainInstance, _ int64) 
 	return nil
 }
 
+// setRunning flips a domain's power state, modelling a tagged domain that has
+// been shut off out of band (host reboot without autostart, in-guest poweroff).
+// Test-only: it lets a test drive Describe with a shut-off managed domain and
+// assert the slot is not advertised Idle. Returns false if the domain is unknown.
+func (f *libvirtFake) setRunning(zone, domainName string, running bool) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.domains[fakeKey(zone, domainName)]
+	if !ok {
+		return false
+	}
+	d.Running = running
+	return true
+}
+
 func (f *libvirtFake) Close() error { return nil }
 
 var _ libvirtClient = (*libvirtFake)(nil)

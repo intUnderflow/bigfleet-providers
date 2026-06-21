@@ -210,7 +210,14 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 	// later step fails before the domain is started, roll back what we made so a
 	// repeated Create does not leak storage or leave partial artifacts. Disarmed
 	// (committed) once DomainCreate succeeds — the running domain then owns them.
+	//
+	// Rollback deletes only the volumes THIS attempt actually created (createdVols),
+	// never ones it adopted: a retried Create under the same idempotency token can
+	// race an abandoned earlier worker that already created the same-named volumes
+	// and is still using them — deleting those would pull the disk out from under a
+	// live (or about-to-be-defined) domain.
 	committed := false
+	var createdVols []string
 	var definedDom *libvirt.Domain
 	defer func() {
 		if retErr == nil || committed {
@@ -219,12 +226,15 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 		if definedDom != nil {
 			_ = r.undefineDomain(c, *definedDom)
 		}
-		r.deleteVolumes(c, name)
+		r.deleteNamedVolumes(c, createdVols)
 	}()
 
 	// Copy-on-write overlay disk backed by the golden base image.
 	overlayName := name + "-overlay.qcow2"
-	overlay, err := c.lv.StorageVolCreateXML(pool, overlayVolumeXML(overlayName, basePath, overlayBytes), 0)
+	overlay, created, err := r.createOrAdoptVol(c, pool, overlayName, overlayVolumeXML(overlayName, basePath, overlayBytes))
+	if created {
+		createdVols = append(createdVols, overlayName)
+	}
 	if err != nil {
 		return domainInstance{}, fmt.Errorf("create overlay volume: %w", err)
 	}
@@ -235,7 +245,10 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 
 	// cloud-init NoCloud seed (pre-binding user-data; the cluster bootstrap is
 	// delivered later by ApplyBootstrap).
-	seedPath, err := r.writeSeed(c, pool, name, spec.MachineID, spec.BaseUserData)
+	seedPath, seedCreated, err := r.writeSeed(c, pool, name, spec.MachineID, spec.BaseUserData)
+	if seedCreated {
+		createdVols = append(createdVols, name+"-cidata.iso")
+	}
 	if err != nil {
 		return domainInstance{}, err
 	}
@@ -301,25 +314,48 @@ func (r *libvirtReal) recoverDomain(c *hostConnection, dom libvirt.Domain) (doma
 }
 
 // writeSeed creates a raw volume and uploads the cloud-init NoCloud ISO into it,
-// returning the volume path for the domain's CD-ROM.
-func (r *libvirtReal) writeSeed(c *hostConnection, pool libvirt.StoragePool, name, machineID string, userData []byte) (string, error) {
+// returning the volume path for the domain's CD-ROM. The bool reports whether
+// this call created the volume (vs adopted a pre-existing one) so the caller's
+// rollback only removes volumes it owns. The ISO content is deterministic from
+// (machineID, name, userData), so re-uploading into an adopted volume is safe.
+func (r *libvirtReal) writeSeed(c *hostConnection, pool libvirt.StoragePool, name, machineID string, userData []byte) (string, bool, error) {
 	iso, err := buildNoCloudISO(machineID, name, userData)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	seedName := name + "-cidata.iso"
-	seed, err := c.lv.StorageVolCreateXML(pool, seedVolumeXML(seedName, int64(len(iso))), 0)
+	seed, created, err := r.createOrAdoptVol(c, pool, seedName, seedVolumeXML(seedName, int64(len(iso))))
 	if err != nil {
-		return "", fmt.Errorf("create cloud-init volume: %w", err)
+		return "", false, fmt.Errorf("create cloud-init volume: %w", err)
 	}
 	if err := c.lv.StorageVolUpload(seed, bytes.NewReader(iso), 0, uint64(len(iso)), 0); err != nil {
-		return "", fmt.Errorf("upload cloud-init seed: %w", err)
+		return "", created, fmt.Errorf("upload cloud-init seed: %w", err)
 	}
 	path, err := c.lv.StorageVolGetPath(seed)
 	if err != nil {
-		return "", fmt.Errorf("cloud-init seed path: %w", err)
+		return "", created, fmt.Errorf("cloud-init seed path: %w", err)
 	}
-	return path, nil
+	return path, created, nil
+}
+
+// createOrAdoptVol creates a storage volume, treating ERR_STORAGE_VOL_EXIST (a
+// volume of the same name already present — e.g. a concurrent retried Create
+// under the same idempotency token) as the idempotent already-there case: it
+// looks the existing volume up and reports created=false so the caller's
+// rollback won't delete a volume another in-flight attempt is still using.
+func (r *libvirtReal) createOrAdoptVol(c *hostConnection, pool libvirt.StoragePool, name, xml string) (libvirt.StorageVol, bool, error) {
+	vol, err := c.lv.StorageVolCreateXML(pool, xml, 0)
+	if err == nil {
+		return vol, true, nil
+	}
+	if !isStorageVolExist(err) {
+		return libvirt.StorageVol{}, false, err
+	}
+	existing, lerr := c.lv.StorageVolLookupByName(pool, name)
+	if lerr != nil {
+		return libvirt.StorageVol{}, false, fmt.Errorf("look up pre-existing volume %q: %w", name, lerr)
+	}
+	return existing, false, nil
 }
 
 func (r *libvirtReal) DeleteDomain(ctx context.Context, zone, name string) error {
@@ -381,7 +417,20 @@ func (r *libvirtReal) findByMachineID(c *hostConnection, machineID string) (libv
 	return libvirt.Domain{}, false, nil
 }
 
+// deleteVolumes removes the overlay + seed volumes for a committed domain (Delete
+// cleanup). It deletes both by name unconditionally because a committed domain
+// owns them; the golden base image is left untouched.
 func (r *libvirtReal) deleteVolumes(c *hostConnection, name string) {
+	r.deleteNamedVolumes(c, []string{name + "-overlay.qcow2", name + "-cidata.iso"})
+}
+
+// deleteNamedVolumes best-effort deletes exactly the named volumes from the
+// storage pool. Create rollback passes only volumes the failed attempt created,
+// so a concurrent retried Create's volumes are never deleted out from under it.
+func (r *libvirtReal) deleteNamedVolumes(c *hostConnection, names []string) {
+	if len(names) == 0 {
+		return
+	}
 	pool, err := c.lv.StoragePoolLookupByName(r.cfg.StoragePool)
 	if err != nil {
 		if r.logger != nil {
@@ -389,7 +438,7 @@ func (r *libvirtReal) deleteVolumes(c *hostConnection, name string) {
 		}
 		return
 	}
-	for _, vol := range []string{name + "-overlay.qcow2", name + "-cidata.iso"} {
+	for _, vol := range names {
 		v, err := c.lv.StorageVolLookupByName(pool, vol)
 		if err != nil {
 			// An already-gone volume (ERR_NO_STORAGE_VOL) is the expected nothing-
@@ -611,8 +660,26 @@ func (r *libvirtReal) guestExec(ctx context.Context, c *hostConnection, dom libv
 	if err := r.waitGuestAgentReady(ctx, c, dom); err != nil {
 		return err
 	}
-	cmd := fmt.Sprintf(`{"execute":"guest-exec","arguments":{"path":"/bin/sh","arg":["-c",%q],"capture-output":true}}`, script)
-	raw, err := c.lv.QEMUDomainAgentCommand(dom, cmd, 60, 0)
+	// Build the guest-exec request with encoding/json, not fmt %q: the script
+	// embeds a shard-supplied clusterID, and %q is Go quoting (e.g. a control byte
+	// becomes \a), which is not valid JSON and would make QEMUDomainAgentCommand
+	// reject the command. json.Marshal emits proper \uXXXX escapes.
+	cmdReq := struct {
+		Execute   string `json:"execute"`
+		Arguments struct {
+			Path          string   `json:"path"`
+			Arg           []string `json:"arg"`
+			CaptureOutput bool     `json:"capture-output"`
+		} `json:"arguments"`
+	}{Execute: "guest-exec"}
+	cmdReq.Arguments.Path = "/bin/sh"
+	cmdReq.Arguments.Arg = []string{"-c", script}
+	cmdReq.Arguments.CaptureOutput = true
+	cmd, err := json.Marshal(cmdReq)
+	if err != nil {
+		return fmt.Errorf("marshal guest-exec command: %w", err)
+	}
+	raw, err := c.lv.QEMUDomainAgentCommand(dom, string(cmd), 60, 0)
 	if err != nil {
 		return fmt.Errorf("guest agent exec: %w", err)
 	}
@@ -770,6 +837,16 @@ func isStorageVolNotFound(err error) bool {
 	var lerr libvirt.Error
 	if errors.As(err, &lerr) {
 		return lerr.Code == uint32(libvirt.ErrNoStorageVol)
+	}
+	return false
+}
+
+// isStorageVolExist reports whether err is libvirt's ERR_STORAGE_VOL_EXIST
+// (a volume of that name already exists).
+func isStorageVolExist(err error) bool {
+	var lerr libvirt.Error
+	if errors.As(err, &lerr) {
+		return lerr.Code == uint32(libvirt.ErrStorageVolExist)
 	}
 	return false
 }

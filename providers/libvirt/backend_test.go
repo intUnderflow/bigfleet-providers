@@ -202,6 +202,46 @@ func TestDescribe_ReconcilesRunningDomain(t *testing.T) {
 	}
 }
 
+// Describe must NOT advertise a tagged-but-shut-off managed domain as a
+// schedulable Idle node: the domain owns its slot (so Create recovers it rather
+// than defining a duplicate), but until it is powered back on the slot stays
+// Speculative. This is the dominant cross-provider reconcile invariant.
+func TestDescribe_ShutOffDomainNotIdle(t *testing.T) {
+	b, fake := newTestBackend(t, 4)
+	ctx := context.Background()
+
+	slots := b.speculativeSlots()
+	slot := slots[0]
+	dom, err := fake.CreateDomain(ctx, domainSpec{MachineID: slot.ID, InstanceType: slot.InstanceType, Zone: slot.Zone})
+	if err != nil {
+		t.Fatalf("seed domain: %v", err)
+	}
+	if !fake.setRunning(dom.Zone, dom.DomainName, false) {
+		t.Fatalf("setRunning: domain %s/%s not found", dom.Zone, dom.DomainName)
+	}
+
+	got, err := b.Describe(ctx)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	var found *providerkit.Instance
+	for i := range got {
+		if got[i].ID == slot.ID {
+			found = &got[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("Describe dropped slot %s entirely; want it present but Speculative", slot.ID)
+	}
+	if found.State != providerkit.StateSpeculative {
+		t.Errorf("shut-off tagged domain slot state = %v, want Speculative", found.State)
+	}
+	if found.Host.Ref != "" {
+		t.Errorf("shut-off slot advertised a host %q, want none", found.Host.Ref)
+	}
+}
+
 // Create must be idempotent at the substrate level: a retried CreateDomain with
 // the same operation id returns the same domain, never a duplicate.
 func TestCreateDomain_IdempotentOnToken(t *testing.T) {
@@ -465,6 +505,11 @@ func TestValidateConnectURI(t *testing.T) {
 		"qemu+ssh://h/system?no_verify=1",
 		"qemu+tls://h/system?no_verify=1", // TLS InsecureSkipVerify must not be silently enabled
 		"qemu+tcp://h/system",             // plaintext, unauthenticated
+		// keyfile/known_hosts on the plain ssh transport are rejected by go-libvirt
+		// at dial time, so refuse the undiallable URI up front (use qemu+libssh://).
+		"qemu+ssh://h/system?known_hosts_verify=normal",
+		"qemu+ssh://h/system?keyfile=/k",
+		"qemu+ssh://h/system?known_hosts=/kh",
 	} {
 		if err := validateConnectURI(bad); err == nil {
 			t.Errorf("expected %q to be rejected", bad)
@@ -477,6 +522,7 @@ func TestValidateConnectURI(t *testing.T) {
 		"qemu:///system",
 		"qemu+tls://h/system?pkipath=/etc/bigfleet/libvirt-tls",
 		"qemu+tls://h/system?no_verify=0",
+		"qemu+ssh://h/system", // plain ssh with no explicit params verifies against system known_hosts
 	} {
 		if err := validateConnectURI(ok); err != nil {
 			t.Errorf("expected %q to be accepted, got %v", ok, err)

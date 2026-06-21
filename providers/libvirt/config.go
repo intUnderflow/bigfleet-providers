@@ -134,9 +134,11 @@ func isBareURI(s string) bool {
 // cluster-join secret without authenticated encryption, or with peer
 // verification turned off. The bootstrap blob is delivered over this same
 // connection (qemu guest-exec), so:
-//   - ssh/libssh/libssh2: require strict host-key verification
+//   - libssh/libssh2: require strict host-key verification
 //     (known_hosts_verify=normal, the default); 'auto' (trust-on-first-use) and
 //     'ignore' are refused, as is no_verify.
+//   - ssh: refuse the keyfile/known_hosts params the pinned go-libvirt rejects on
+//     this transport at dial time (point at qemu+libssh:// instead), and no_verify.
 //   - tls: refuse no_verify (which sets InsecureSkipVerify).
 //   - tcp: refuse outright — plaintext, no authentication.
 //
@@ -156,7 +158,22 @@ func validateConnectURI(uri string) error {
 	}
 	q := u.Query()
 	switch transport {
-	case "ssh", "libssh", "libssh2":
+	case "ssh":
+		// The pinned go-libvirt's plain ssh transport rejects the explicit
+		// keyfile/known_hosts params at dial time ("option invalid with ssh
+		// transport, use libssh transport instead"). Green-lighting such a URI here
+		// would only defer the failure to first connect, so reject it now and point
+		// at qemu+libssh:// (which honours them) — that is also the documented
+		// scheme for the provider's host-key-pinned SSH model.
+		for _, f := range []string{"known_hosts", "known_hosts_verify", "sshauth", "keyfile"} {
+			if q.Get(f) != "" {
+				return fmt.Errorf("--connect URI %q sets %s on the ssh transport, which the provider's go-libvirt rejects at dial time; use the qemu+libssh:// scheme (which honours keyfile/known_hosts)", uri, f)
+			}
+		}
+		if noVerifyTruthy(q.Get("no_verify")) {
+			return fmt.Errorf("--connect URI %q sets no_verify, disabling SSH host-key verification; remove it", uri)
+		}
+	case "libssh", "libssh2":
 		switch q.Get("known_hosts_verify") {
 		case "", "normal":
 		default:
