@@ -15,3 +15,6 @@ src/content/docs/conformance/
 # Provider logos copied to public/ by scripts/sync-providers.mjs from each
 # provider's docs/logo.svg. Canonical copies live with the providers.
 public/providers/
+
+# Provider list emitted by scripts/sync-providers.mjs for the homepage strip.
+src/data/providers.json

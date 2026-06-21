@@ -1,0 +1,54 @@
+---
+title: BigFleet Providers
+description: Capacity providers you deploy alongside BigFleet to provision and reclaim the machines that run your fleet — one per substrate, each conformance-certified.
+template: splash
+hero:
+  tagline: Capacity providers you deploy alongside BigFleet to provision and reclaim the machines your fleet runs on — one per substrate, each conformance-certified.
+  actions:
+    - text: Browse all providers
+      link: /providers/
+      icon: right-arrow
+      variant: primary
+    - text: How it's certified
+      link: /conformance/
+      icon: document
+      variant: secondary
+    - text: GitHub
+      link: https://github.com/intUnderflow/bigfleet-providers
+      icon: external
+      variant: minimal
+---
+
+import ProviderStrip from "../../components/ProviderStrip.astro";
+
+## What you get
+
+You already run [BigFleet](https://bigfleet.lucy.sh) to autoscale your fleet. BigFleet decides *which machines* your Kubernetes clusters need — but it doesn't touch your cloud account. A **capacity provider** is the piece that does: you deploy it next to BigFleet, point it at your substrate, and it provisions, configures, drains, and reclaims real machines automatically as your fleet's demand moves.
+
+You run it as a container, ship it with a Helm chart, give it scoped credentials, and BigFleet dials it. From then on, machines appear and disappear to match your fleet — no glue scripts, no manual capacity ops.
+
+## Providers
+
+One provider per substrate — a container image and a Helm chart you deploy one process per region (or location, or zone), pointed at your account and a base image. Pick yours:
+
+<ProviderStrip />
+
+Each provider's pages cover install, configuration, credentials, observability, security, and how it's certified. See the full **[providers directory](/providers/)**.
+
+## How it's certified
+
+Every provider here is certified by *passing the same suite* — no exceptions, no self-attestation. Each clears the upstream authoritative baseline **plus** an extension suite, against **92 conformance behaviors across 11 areas**, credential-free on every change. That covers the things you'd otherwise have to take on faith: a failed bootstrap or drain surfaces as a visible failure rather than a silent false "ready"; launches are idempotent; inventory stays consistent.
+
+See the **[conformance program](/conformance/)** for what's checked, and each provider's certification page for how to reproduce the verdict yourself.
+
+## How it works (in one line)
+
+BigFleet is the client; each provider is a gRPC server it dials to create, configure, drain, and delete machines. You don't write any of that — you deploy a provider and configure it.
+
+## Building a provider?
+
+If you're adding support for a new substrate rather than operating one, the authoring path lives a layer down — every provider is built on a shared library that gets fencing, idempotency, and the machine contract right once, so you only write substrate-specific logic.
+
+- The [provider author guide](https://bigfleet.lucy.sh/provider-author-guide/) — the spine for new providers.
+- [CONTRIBUTING.md](https://github.com/intUnderflow/bigfleet-providers/blob/main/CONTRIBUTING.md) — the step-by-step recipe.
+- The [conformance program](/conformance/) — the behavior registry your provider must pass.

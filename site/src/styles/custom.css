@@ -95,3 +95,49 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* Compact provider strip on the homepage (ProviderStrip.astro): a wrap of
+   logo + short-name chips. Centred to suit the splash layout. */
+.provider-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem;
+  margin: 1.75rem 0;
+}
+.provider-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.5rem;
+  text-decoration: none;
+  color: var(--sl-color-white);
+  font-weight: 600;
+  font-size: 0.95rem;
+  line-height: 1.2;
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+}
+.provider-chip:hover {
+  border-color: var(--sl-color-accent);
+  background-color: var(--sl-color-gray-6);
+}
+.provider-chip-logo {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  object-fit: contain;
+}
+.provider-chip-logo--fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.3rem;
+  background-color: var(--sl-color-gray-5);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}

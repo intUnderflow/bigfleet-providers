@@ -166,6 +166,29 @@ console.log(
   `sync-providers: generated /providers/ index listing ${found.length} provider(s), ${logos} with logos`,
 );
 
+// Also emit the provider set as JSON so other pages (e.g. the homepage logo
+// strip via src/components/ProviderStrip.astro) render the same list without
+// re-declaring it — one source of truth, so nothing can drift out of sync.
+const dataDir = join(siteDir, "src", "data");
+await mkdir(dataDir, { recursive: true });
+await writeFile(
+  join(dataDir, "providers.json"),
+  JSON.stringify(
+    found.map((p) => ({
+      name: p.name,
+      title: p.title,
+      description: p.description,
+      href: `/providers/${p.name}/`,
+      logo: p.logo ? `/providers/${p.name}.svg` : null,
+    })),
+    null,
+    2,
+  ) + "\n",
+);
+console.log(
+  `sync-providers: wrote src/data/providers.json (${found.length} provider(s))`,
+);
+
 // Sync the conformance program docs to /conformance. The canonical overview
 // `conformance/docs/conformance.md` is mapped to index.md so it routes to
 // /conformance/ (its source name is kept for the GitHub links that reference it).
