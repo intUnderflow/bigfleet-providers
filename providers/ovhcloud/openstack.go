@@ -616,6 +616,12 @@ func (r *ovhReal) resolveNetwork(ctx context.Context) (string, error) {
 	if len(nets) == 0 {
 		return "", fmt.Errorf("network %q not found in region %s", r.cfg.Network, r.cfg.Region)
 	}
+	// OpenStack network names are not unique. If several networks share this name
+	// we cannot tell which one the operator meant, and blindly attaching the first
+	// could wire instances onto the wrong network. Fail and ask for the UUID.
+	if len(nets) > 1 {
+		return "", fmt.Errorf("network %q is ambiguous in region %s (%d matches); pass its UUID via --network instead", r.cfg.Network, r.cfg.Region, len(nets))
+	}
 	r.mu.Lock()
 	r.networkUUID = nets[0].ID
 	r.mu.Unlock()
