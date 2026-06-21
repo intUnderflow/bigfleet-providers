@@ -102,7 +102,7 @@ Pass a JSON file with `--offerings`. The file is a JSON array of objects:
 | `capacity_type` | string | no | `on_demand` (default) is the only accepted value. OVH Public Cloud is on-demand only, so `spot`, `reserved`, and `bare_metal` are all rejected at startup (bare metal is the separate Dedicated Servers substrate, not this provider). |
 | `count` | int | yes | Number of Speculative slots this offering provides. |
 | `resources` | map[string]string | no | The per-replica request shape the offering serves (the `Machine.resources`). Distinct from `allocatable`, which is derived from the flavor. |
-| `labels` | map[string]string | no | Extra labels carried on the slot. GPU families (`t1`/`t2`/`a10`/`l4`) also get an automatic `bigfleet.io/accelerator` label. |
+| `labels` | map[string]string | no | Extra labels carried on the slot. GPU families (`t1`/`t2`/`a10`/`l4`/`l40s`) also get an automatic `bigfleet.io/accelerator` label. |
 
 Example `offerings.json`:
 
@@ -203,7 +203,18 @@ Your base image must satisfy two things:
   bootstrap blob to `<hook>.blob` and runs `sudo <hook> <cluster-id>`; the hook
   joins the node to the cluster and must exit non-zero on failure (so a broken
   join becomes `FAILED`, not a falsely-Idle node). The blob is opaque — the hook
-  consumes it verbatim.
+  consumes it verbatim. The blob carries the cluster **join secrets**, so the
+  provider **removes `<hook>.blob` from the node** as soon as the hook returns
+  (via a shell `trap` that fires on any exit, success or failure) — the secret
+  never lingers on disk. Your hook should consume the blob synchronously (read it
+  during its run), not assume it persists afterward.
+
+> **Reachability for SSH delivery.** Configure/Drain SSH to the instance's
+> reachable IPv4 — a floating address if the instance has one, else its fixed
+> (private) address. With the default public `Ext-Net` that's a public IP; with a
+> private-only network the provider's pod must be able to **route to the fixed
+> IP**, or Configure/Drain fail with "no reachable IPv4". See
+> [Security → network exposure](/providers/ovhcloud/security/#network-exposure).
 
 If you run without `--ssh-key`, Configure cannot deliver the blob and the machine
 ends up `FAILED`; Drain degrades to clearing the binding metadata only. For a real

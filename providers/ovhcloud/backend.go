@@ -52,6 +52,16 @@ func newOVHBackend(providerName, region, image string, client ovhClient, offerin
 		if off.Region == "" {
 			return nil, fmt.Errorf("ovh backend: offering %s with empty region", off.Flavor)
 		}
+		// Price comes from a pinned EUR table (OVH has no price API). A flavor
+		// absent from the table (and with no override) would publish
+		// price_per_hour=0 — i.e. effectively free — and always win the shard's
+		// cost ranking. Warn loudly so the operator adds a table entry or an
+		// override; not fatal, since price is a relative ranking signal and the
+		// override path exists.
+		if pr != nil && logger != nil && !pr.known(off.Flavor) {
+			logger.Warn("offering flavor has no pinned price and no override; price_per_hour will be 0 (add it to the pinned table or set a price override)",
+				"flavor", off.Flavor, "region", off.Region)
+		}
 	}
 	return &ovhBackend{
 		providerName: providerName,
@@ -88,7 +98,7 @@ func (b *ovhBackend) speculativeSlots() []providerkit.Instance {
 				InstanceType: off.Flavor,
 				Zone:         off.Region,
 				CapacityType: capacity,
-				PricePerHour: b.pricing.price(off.Flavor, capacity),
+				PricePerHour: b.pricing.price(off.Flavor),
 				// OVH Public Cloud is on-demand only: no spot market, so the
 				// genuine, provider-declared interruption probability is exactly 0.
 				InterruptionProbability: 0,
@@ -181,7 +191,7 @@ func (b *ovhBackend) serverToIdle(machineID string, srv serverInstance) provider
 		InstanceType:            srv.Flavor,
 		Zone:                    region,
 		CapacityType:            providerkit.CapacityOnDemand,
-		PricePerHour:            b.pricing.price(srv.Flavor, providerkit.CapacityOnDemand),
+		PricePerHour:            b.pricing.price(srv.Flavor),
 		InterruptionProbability: 0,
 		// Recover the per-replica request shape from a still-configured offering
 		// for this flavor, so an orphan / offering-shrank machine that re-binds

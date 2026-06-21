@@ -1,10 +1,6 @@
 package main
 
-import (
-	"sync"
-
-	"github.com/intUnderflow/bigfleet-providers/providerkit"
-)
+import "sync"
 
 // pricing supplies Machine.price_per_hour (USD/hour). OVH Public Cloud is
 // on-demand only — there is no spot market — so every price is the published
@@ -70,12 +66,12 @@ func (p *pricing) setOverride(flavor string, usd float64) {
 	p.mu.Unlock()
 }
 
-// price returns USD/hour for a machine of the given flavor. Reads only in-memory
-// state (never blocks on the network), so it is safe on the List/seed path.
-func (p *pricing) price(flavor string, capacity providerkit.CapacityType) float64 {
-	if capacity == providerkit.CapacityBareMetal {
-		return 0 // owned hardware, already paid for
-	}
+// price returns USD/hour for a flavor: an operator override if set, else the
+// pinned EUR table converted to USD. Reads only in-memory state (never blocks on
+// the network), so it is safe on the List/seed path. This provider only ever
+// produces ON_DEMAND machines (bare-metal/spot/reserved offerings are rejected at
+// construction), so there is no capacity-type branch here.
+func (p *pricing) price(flavor string) float64 {
 	p.mu.RLock()
 	v, ok := p.overrides[flavor]
 	p.mu.RUnlock()
@@ -83,4 +79,18 @@ func (p *pricing) price(flavor string, capacity providerkit.CapacityType) float6
 		return v
 	}
 	return onDemandEURHourly[flavor] * p.eurToUSD
+}
+
+// known reports whether a flavor has a price (override or pinned-table entry), so
+// startup can warn about an offering that would otherwise publish price_per_hour=0
+// (effectively free) and skew the shard's cost ranking.
+func (p *pricing) known(flavor string) bool {
+	p.mu.RLock()
+	_, ov := p.overrides[flavor]
+	p.mu.RUnlock()
+	if ov {
+		return true
+	}
+	_, ok := onDemandEURHourly[flavor]
+	return ok
 }

@@ -156,25 +156,26 @@ func (r *ovhReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 
 	// Idempotency PRE-CHECK (before any create). gophercloud's servers.CreateOpts
 	// carries no idempotency token, and Nova's unique_server_name policy is OFF by
-	// default, so a lost-response retry of the SAME operation (Nova created the
-	// server but the HTTP reply was lost → the kit re-dispatches with the same
-	// OperationID) would otherwise launch a SECOND paid instance. The server name
-	// is deterministic from the OperationID (serverName), so look it up first and
-	// recover the existing server instead of double-provisioning — this is the
-	// OpenStack analogue of EC2's RunInstances ClientToken. The post-Create error
-	// branch below is only a backstop for the narrower create-races-create case.
-	name := serverName(spec)
-	existing, err := r.serverByName(ctx, name)
-	if err != nil {
+	// default, so without a guard a re-dispatched Create would launch a SECOND
+	// paid instance for the same slot. We key the check on the BigFleet machine id
+	// (stamped in metadata), which is stable across operations — so it covers both
+	// a lost-response retry of the SAME OperationID AND a Failed-then-reset re-Create
+	// that gets a FRESH OperationID (different name): if a live instance already
+	// backs this machine, recover it instead of double-provisioning. This is the
+	// OpenStack analogue of EC2's RunInstances ClientToken, widened to the slot.
+	// A re-Create after a real Delete launches fresh (the deleted server is gone,
+	// so nothing matches). The post-Create serverByName branch is a backstop for
+	// the narrow create-races-create same-name case.
+	if existingID, err := r.serverByMachineID(ctx, spec.MachineID); err != nil {
 		// The lookup is the idempotency guard, so a failed lookup must ABORT the
 		// Create — proceeding on a transient list error could double-provision a
-		// paid instance. The kit re-dispatches with the same OperationID (same
-		// name), so a later retry re-runs this pre-check cleanly.
-		return serverInstance{}, fmt.Errorf("create idempotency pre-check for %s: %w", name, err)
+		// paid instance. The kit re-dispatches the operation, so a later retry
+		// re-runs this pre-check cleanly.
+		return serverInstance{}, fmt.Errorf("create idempotency pre-check for machine %s: %w", spec.MachineID, err)
+	} else if existingID != "" {
+		return r.waitActive(ctx, existingID)
 	}
-	if existing != nil {
-		return r.waitActive(ctx, existing.ID)
-	}
+	name := serverName(spec)
 
 	// Mint an SSH host key for the server and inject it via cloud-init, so the
 	// host boots presenting a key we already know. Its fingerprint is pinned in
@@ -297,13 +298,18 @@ func (r *ovhReal) ApplyBootstrap(ctx context.Context, srv serverInstance, cluste
 	// Deliver the opaque bootstrap blob to the node and run the base image's
 	// hook. The image must ship the hook at BootstrapHookPath; it receives the
 	// blob at <hook>.blob and joins the cluster. We wait for it to SUCCEED, so a
-	// failed bootstrap surfaces as FAILED.
+	// failed bootstrap surfaces as FAILED. The blob carries the cluster JOIN
+	// SECRETS, so the provider removes it from disk as soon as the hook returns
+	// (a trap fires on any exit, success or failure) rather than trusting the hook
+	// to clean up — the secret never lingers on the node.
 	blob := base64.StdEncoding.EncodeToString(bootstrap) // base64 -d is universally available
 	hook := shellQuote(r.cfg.BootstrapHookPath)
 	blobPath := shellQuote(r.cfg.BootstrapHookPath + ".blob")
 	script := fmt.Sprintf(
-		"set -euo pipefail; umask 077; sudo mkdir -p \"$(dirname %s)\"; echo %s | base64 -d | sudo tee %s >/dev/null; sudo %s %s",
-		blobPath, shellQuote(blob), blobPath, hook, shellQuote(clusterID))
+		"set -euo pipefail; umask 077; sudo mkdir -p \"$(dirname %s)\"; "+
+			"trap 'sudo rm -f %s' EXIT; "+
+			"echo %s | base64 -d | sudo tee %s >/dev/null; sudo %s %s",
+		blobPath, blobPath, shellQuote(blob), blobPath, hook, shellQuote(clusterID))
 	if err := r.runSSH(ctx, srv, script); err != nil {
 		return err
 	}
@@ -472,10 +478,35 @@ func (r *ovhReal) serverByName(ctx context.Context, name string) (*servers.Serve
 	return nil, nil
 }
 
-// ensureIPv4 returns srv with a populated PublicIPv4, re-fetching the server by
-// id when the cached view lacks one — e.g. the minimal fallback view the
-// backend's resolveHost builds when a transient DescribeManaged missed the
-// server. SSH-based Configure/Drain need the address.
+// serverByMachineID returns the id of a LIVE managed server (ACTIVE/BUILD)
+// tagged with the given BigFleet machine id, or "" when none exists. It is the
+// Create idempotency guard: a non-nil error means the lookup itself failed and
+// the caller MUST NOT create (treat as "unknown", not "absent"). Only running
+// servers count — a dead remnant (ERROR/SHUTOFF) is surfaced by Describe as an
+// orphan for cleanup rather than recovered as a usable host.
+func (r *ovhReal) serverByMachineID(ctx context.Context, machineID string) (string, error) {
+	if machineID == "" {
+		return "", nil
+	}
+	managed, err := r.DescribeManaged(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, s := range managed {
+		if s.MachineID == machineID && s.Running {
+			return s.ServerID, nil
+		}
+	}
+	return "", nil
+}
+
+// ensureIPv4 returns srv with a populated reachable IPv4 (PublicIPv4 holds the
+// SSH target — a floating address when present, else the fixed address), re-
+// fetching the server by id when the cached view lacks one — e.g. the minimal
+// fallback view the backend's resolveHost builds when a transient DescribeManaged
+// missed the server. SSH-based Configure/Drain need the address; for a
+// private-only network this is the fixed IP the provider's pod must be able to
+// route to (see docs Security → network exposure).
 func (r *ovhReal) ensureIPv4(ctx context.Context, srv serverInstance) (serverInstance, error) {
 	if srv.PublicIPv4 != "" {
 		return srv, nil
@@ -486,7 +517,7 @@ func (r *ovhReal) ensureIPv4(ctx context.Context, srv serverInstance) (serverIns
 	}
 	full := r.toServerInstance(fresh)
 	if full.PublicIPv4 == "" {
-		return srv, fmt.Errorf("server %s has no public IPv4 for SSH delivery", srv.ServerID)
+		return srv, fmt.Errorf("server %s has no reachable IPv4 for SSH delivery (no floating or fixed IPv4 on its networks)", srv.ServerID)
 	}
 	return full, nil
 }
@@ -519,7 +550,7 @@ func (r *ovhReal) clearMetadatum(ctx context.Context, serverID, key string) erro
 func (r *ovhReal) runSSH(ctx context.Context, srv serverInstance, script string) error {
 	host := srv.PublicIPv4
 	if host == "" {
-		return fmt.Errorf("ssh: no public IPv4 for server %s", srv.ServerID)
+		return fmt.Errorf("ssh: no reachable IPv4 for server %s", srv.ServerID)
 	}
 	var tofuFP string
 	cfg := &ssh.ClientConfig{

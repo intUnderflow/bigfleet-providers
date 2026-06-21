@@ -73,7 +73,7 @@ type serverInstance struct {
 	MachineID  string // bigfleet-machine-id metadata
 	Flavor     string
 	Region     string
-	PublicIPv4 string // for SSH-based Configure/Drain
+	PublicIPv4 string // SSH target for Configure/Drain: floating address if present, else the fixed (private) address
 	ClusterID  string // bigfleet-cluster metadata, empty when unbound
 	HostKeyFP  string // pinned SSH host-key fingerprint (bigfleet-host-key-fp metadata)
 	// Running reports whether the server is in a live state (ACTIVE / BUILD),

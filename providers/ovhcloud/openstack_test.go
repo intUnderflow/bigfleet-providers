@@ -3,8 +3,6 @@ package main
 import (
 	"strings"
 	"testing"
-
-	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
 
 func TestFirstIPv4_PrefersFloating(t *testing.T) {
@@ -64,17 +62,24 @@ func TestShellQuote_EscapesSingleQuote(t *testing.T) {
 	}
 }
 
-// Bare metal prices at 0 (already paid for); on-demand uses the pinned table.
-func TestPricing_BareMetalZero(t *testing.T) {
+// price uses the pinned table (EUR→USD), an override when set, and reports 0 +
+// not-known for an unpriced flavor (which startup warns about).
+func TestPricing_TableOverrideAndUnknown(t *testing.T) {
 	p := newPricing(1.10)
-	if v := p.price("b2-7", providerkit.CapacityBareMetal); v != 0 {
-		t.Errorf("bare-metal price = %v, want 0", v)
-	}
-	if v := p.price("b2-7", providerkit.CapacityOnDemand); v <= 0 {
+	if v := p.price("b2-7"); v <= 0 {
 		t.Errorf("on-demand b2-7 price = %v, want > 0", v)
 	}
+	if !p.known("b2-7") {
+		t.Error("b2-7 should be known (pinned table)")
+	}
+	if v := p.price("zz-custom"); v != 0 || p.known("zz-custom") {
+		t.Errorf("unpriced flavor: price=%v known=%v, want 0/false", v, p.known("zz-custom"))
+	}
 	p.setOverride("zz-custom", 9.99)
-	if v := p.price("zz-custom", providerkit.CapacityOnDemand); v != 9.99 {
+	if v := p.price("zz-custom"); v != 9.99 {
 		t.Errorf("override price = %v, want 9.99", v)
+	}
+	if !p.known("zz-custom") {
+		t.Error("zz-custom should be known after override")
 	}
 }
