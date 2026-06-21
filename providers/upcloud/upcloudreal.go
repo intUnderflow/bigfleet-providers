@@ -117,6 +117,16 @@ func newUpcloudReal(cfg upcloudRealConfig, logger *slog.Logger) (*upcloudReal, e
 }
 
 func (r *upcloudReal) CreateServer(ctx context.Context, spec serverSpec) (serverInstance, error) {
+	// Pre-create idempotency check (§4.5). UpCloud has NO client idempotency token
+	// and enforces NO title/hostname uniqueness, so the substrate offers nothing to
+	// dedup on — a retried or restart-re-driven Create would otherwise launch a
+	// SECOND server under the same bigfleet-machine-id label, leaking a billed,
+	// Delete-unreachable orphan. So look up a managed server for this machine id
+	// FIRST and adopt it if one already exists, instead of provisioning a duplicate.
+	if existing := r.serverByMachineID(ctx, spec.MachineID); existing != nil {
+		return r.waitStarted(ctx, existing.UUID)
+	}
+
 	// Mint an SSH host key for the server and inject it via cloud-init, so the host
 	// boots presenting a key we already know. Its fingerprint is pinned in a label
 	// and verified on every later Configure/Drain SSH connection — closing the MITM
@@ -180,8 +190,9 @@ func (r *upcloudReal) CreateServer(ctx context.Context, spec serverSpec) (server
 
 	details, err := r.svc.CreateServer(ctx, req)
 	if err != nil {
-		// A retried Create whose title already exists is the idempotent case:
-		// recover the existing server instead of double-provisioning.
+		// CreateServer returned an error, but the server may have been created
+		// before the response was lost (a transport blip after creation). Recover an
+		// already-created server for this machine id instead of failing/duplicating.
 		if existing := r.serverByMachineID(ctx, spec.MachineID); existing != nil {
 			return r.waitStarted(ctx, existing.UUID)
 		}
@@ -193,14 +204,23 @@ func (r *upcloudReal) CreateServer(ctx context.Context, spec serverSpec) (server
 	return r.waitStarted(ctx, details.UUID)
 }
 
+// waitForState blocks until the server reaches desired, bounded by
+// StateWaitTimeout (the backend's worst-case cap) layered under the caller's ctx
+// (the kit's per-transition timeout). WaitForServerState honours ctx cancellation.
+func (r *upcloudReal) waitForState(ctx context.Context, uuid, desired string) (*upcloud.ServerDetails, error) {
+	if r.cfg.StateWaitTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.cfg.StateWaitTimeout)
+		defer cancel()
+	}
+	return r.svc.WaitForServerState(ctx, &request.WaitForServerStateRequest{UUID: uuid, DesiredState: desired})
+}
+
 // waitStarted blocks until the server reaches 'started' (so the kit's IDLE means
 // "reachable host" and the immediately-following Configure does not race a
-// still-initializing server). ctx (the kit's Create timeout) cancels it.
+// still-initializing server).
 func (r *upcloudReal) waitStarted(ctx context.Context, uuid string) (serverInstance, error) {
-	details, err := r.svc.WaitForServerState(ctx, &request.WaitForServerStateRequest{
-		UUID:         uuid,
-		DesiredState: stateStarted,
-	})
+	details, err := r.waitForState(ctx, uuid, stateStarted)
 	if err != nil {
 		return serverInstance{}, fmt.Errorf("wait for server %s to start: %w", uuid, err)
 	}
@@ -226,10 +246,7 @@ func (r *upcloudReal) DeleteServer(ctx context.Context, uuid string) error {
 		}); err != nil && !isNotFound(err) {
 			return fmt.Errorf("delete: stop server %s: %w", uuid, err)
 		}
-		if _, err := r.svc.WaitForServerState(ctx, &request.WaitForServerStateRequest{
-			UUID:         uuid,
-			DesiredState: stateStopped,
-		}); err != nil && !isNotFound(err) {
+		if _, err := r.waitForState(ctx, uuid, stateStopped); err != nil && !isNotFound(err) {
 			return fmt.Errorf("delete: wait for server %s to stop: %w", uuid, err)
 		}
 	}

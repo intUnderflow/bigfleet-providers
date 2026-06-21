@@ -81,7 +81,7 @@ provider: upcloud-fi-hel1
 # The server settings.
 upcloud:
   template: 01000000-0000-4000-8000-000030240200   # OS template storage UUID to clone
-  eurUsd: 1.08                                      # EUR->USD conversion for the pinned price table
+  eurUSD: 1.08                                      # EUR->USD conversion for the pinned price table
 
 # The API sub-account Secret (keys: username, password) -> UPCLOUD_USERNAME / UPCLOUD_PASSWORD.
 credentials:

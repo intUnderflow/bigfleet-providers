@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/intUnderflow/bigfleet-providers/providerkit"
@@ -29,6 +30,25 @@ func TestPricing_UnknownPlanIsZero(t *testing.T) {
 	if got := p.price(off, providerkit.CapacityOnDemand); got != 0 {
 		t.Errorf("unknown plan price = %v, want 0", got)
 	}
+}
+
+// The unknown-plan warn dedup map is touched concurrently from the gRPC serving
+// goroutines and the background reconciler; run it under -race to prove the
+// guard holds.
+func TestPricing_ConcurrentUnknownPlan(t *testing.T) {
+	p := newPricing(defaultEURtoUSD, quietLogger())
+	off := offering{Plan: "no-such-plan", Zone: "fi-hel1"}
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				_ = p.price(off, providerkit.CapacityOnDemand)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestPlanResolver_AllocatableDistinctFromMemoryUnits(t *testing.T) {

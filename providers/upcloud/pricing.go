@@ -2,6 +2,7 @@ package main
 
 import (
 	"log/slog"
+	"sync"
 
 	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
@@ -21,6 +22,12 @@ import (
 type pricing struct {
 	eurToUSD float64
 	logger   *slog.Logger
+
+	// warned dedups the "no pinned price" warning per plan. It is read+written
+	// from price lookups that run concurrently on the gRPC serving goroutines and
+	// the background reconciler, so guard it with mu.
+	mu     sync.Mutex
+	warned map[string]struct{}
 }
 
 // defaultEURtoUSD is a reasonable fallback FX rate; operators should pin a
@@ -58,7 +65,7 @@ func newPricing(eurToUSD float64, logger *slog.Logger) *pricing {
 	if eurToUSD <= 0 {
 		eurToUSD = defaultEURtoUSD
 	}
-	return &pricing{eurToUSD: eurToUSD, logger: logger}
+	return &pricing{eurToUSD: eurToUSD, logger: logger, warned: map[string]struct{}{}}
 }
 
 // price returns USD/hour for an offering: the operator override if set, else the
@@ -90,13 +97,14 @@ func (p *pricing) priceFor(plan, _ string, capacity providerkit.CapacityType) fl
 	return eur * p.eurToUSD
 }
 
-var warnedPlans = map[string]struct{}{}
-
 func (p *pricing) warnUnknown(plan string) {
-	if _, seen := warnedPlans[plan]; seen {
+	p.mu.Lock()
+	if _, seen := p.warned[plan]; seen {
+		p.mu.Unlock()
 		return
 	}
-	warnedPlans[plan] = struct{}{}
+	p.warned[plan] = struct{}{}
+	p.mu.Unlock()
 	if p.logger != nil {
 		p.logger.Warn("pricing: no pinned price for plan; reporting 0 (skews cost ranking — add it to the pinned table or set price_usd_per_hour on the offering)", "plan", plan)
 	}
