@@ -29,7 +29,7 @@ sourced see [Pricing](/providers/ovhcloud/pricing-and-interruption/).
 | `--offerings` | _(built-in)_ | Path to a JSON offerings file. Omit to use a built-in mix sized by `--seed-count`. |
 | `--seed-count` | `32` | Number of Speculative slots in the default offerings (ignored when `--offerings` is set). |
 | `--region-a` | `<region>`/`GRA` | First region for the default offerings. |
-| `--region-b` | `SBG` | Second region for the default offerings. |
+| `--region-b` | `<region>`/`SBG` | Second region for the default offerings. Defaults to `--region` when set, else `SBG`. The real backend rejects offerings outside `--region`, so this only spreads regions on the fake backend. |
 | `--state` | _(empty)_ | Durable state file. Empty = in-memory only (state is lost on restart). |
 | `--image` | _(empty)_ | Base image **id (UUID)** for server create. **Required** for the `ovh` backend. |
 | `--key-name` | _(empty)_ | OpenStack keypair name injected at create, so the provider can SSH in. |

@@ -335,6 +335,36 @@ func TestGPULabel(t *testing.T) {
 	}
 }
 
+// A machine the kit already tracks as Idle whose backing server was stopped out
+// of band (or after a persisted-store restart) must be HEALED on Configure: the
+// provider powers the host on before SSH rather than dialing a powered-off node.
+// (The real client does this via ensureRunning; the fake models the same heal.)
+func TestConfigure_HealsStoppedHost(t *testing.T) {
+	b, fake := newTestBackend(t, 8)
+	s := newTestServer(t, b)
+	ctx := context.Background()
+
+	resp, _ := s.List(ctx, &pb.ListFilter{States: []pb.MachineState{pb.MachineState_MACHINE_STATE_SPECULATIVE}, MaxResults: 1})
+	id := resp.GetMachines()[0].GetId()
+	if _, err := s.Create(ctx, &pb.CreateRequest{MachineId: id}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m := waitState(t, s, id, pb.MachineState_MACHINE_STATE_IDLE)
+	ref := m.GetHost().GetRef()
+
+	// Simulate an out-of-band stop of the backing server while the kit holds the
+	// machine Idle.
+	fake.servers[ref].Running = false
+
+	if _, err := s.Configure(ctx, &pb.ConfigureRequest{MachineId: id, ClusterId: "c1", BootstrapBlob: []byte("join")}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	waitState(t, s, id, pb.MachineState_MACHINE_STATE_CONFIGURED)
+	if !fake.servers[ref].Running {
+		t.Error("Configure must power the stopped backing server back on before SSH")
+	}
+}
+
 func TestOffering_CapacityType(t *testing.T) {
 	// Only on-demand is a real OVH Public Cloud substrate; everything else is
 	// rejected so the provider can never mis-declare capacity_type.

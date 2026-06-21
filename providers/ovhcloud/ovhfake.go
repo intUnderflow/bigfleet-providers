@@ -95,6 +95,7 @@ func (f *ovhFake) ApplyBootstrap(_ context.Context, srv serverInstance, clusterI
 	if !ok {
 		return fmt.Errorf("ovhfake: configure unknown server %q", srv.ServerID)
 	}
+	s.Running = true // model the real client healing a stopped host before SSH
 	s.ClusterID = clusterID
 	return nil
 }
@@ -106,6 +107,7 @@ func (f *ovhFake) DrainNode(_ context.Context, srv serverInstance, _ int64) erro
 	if !ok {
 		return fmt.Errorf("ovhfake: drain unknown server %q", srv.ServerID)
 	}
+	s.Running = true // model the real client healing a stopped host before SSH
 	s.ClusterID = ""
 	return nil
 }

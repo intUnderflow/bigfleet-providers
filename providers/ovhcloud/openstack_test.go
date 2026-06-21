@@ -55,6 +55,21 @@ func TestServerName_StableOnToken(t *testing.T) {
 	}
 }
 
+func TestPowerActionFor(t *testing.T) {
+	cases := map[string]powerAction{
+		"ACTIVE": powerReady, "active": powerReady,
+		"BUILD": powerWait, " build ": powerWait,
+		"ERROR":   powerError,
+		"SHUTOFF": powerStart, "STOPPED": powerStart, "PAUSED": powerStart,
+		"SUSPENDED": powerStart, "anything-else": powerStart,
+	}
+	for status, want := range cases {
+		if got := powerActionFor(status); got != want {
+			t.Errorf("powerActionFor(%q) = %v, want %v", status, got, want)
+		}
+	}
+}
+
 func TestApplyPriceOverrides(t *testing.T) {
 	p := newPricing(1.0)
 	if err := applyPriceOverrides(p, "custom-1=0.5, b2-7=0.03"); err != nil {

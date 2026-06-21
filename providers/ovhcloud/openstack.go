@@ -235,10 +235,14 @@ func (r *ovhReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 	srv, err := servers.Create(ctx, r.compute, createOpts, nil).Extract()
 	if err != nil {
 		// A retried Create whose name already exists is the idempotent case:
-		// recover the existing server instead of failing. (A lookup error here
-		// just falls through to surfacing the original create error.)
+		// recover the existing server instead of failing — through ensureActive, so
+		// a recovered SHUTOFF server is powered on (not spun to the create timeout)
+		// and an ERROR remnant is deleted. (A lookup or errRecreate result just
+		// falls through to surfacing the original create error; the kit retries.)
 		if recovered, lerr := r.serverByName(ctx, base.Name); lerr == nil && recovered != nil {
-			return r.waitActive(ctx, recovered.ID)
+			if inst, aerr := r.ensureActive(ctx, recovered.ID); aerr == nil {
+				return inst, nil
+			}
 		}
 		return serverInstance{}, fmt.Errorf("create server %s: %w", spec.Flavor, err)
 	}
@@ -308,6 +312,32 @@ func (r *ovhReal) StartServer(ctx context.Context, serverID string) error {
 // caller should launch a fresh server instead of recovering.
 var errRecreate = fmt.Errorf("recovered server is unusable; recreate")
 
+// powerAction is the next step to bring a server to a usable ACTIVE state,
+// decided purely from its Nova status (case-insensitive). It is the single
+// source of truth shared by the Create-recovery path (ensureActive) and the
+// Configure/Drain heal path (ensureRunning), and is table-tested.
+type powerAction int
+
+const (
+	powerReady powerAction = iota // ACTIVE — usable now
+	powerWait                     // BUILD — await ACTIVE
+	powerStart                    // SHUTOFF/STOPPED/PAUSED/SUSPENDED — start, then await
+	powerError                    // ERROR — unusable
+)
+
+func powerActionFor(status string) powerAction {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "ACTIVE":
+		return powerReady
+	case "BUILD":
+		return powerWait
+	case "ERROR":
+		return powerError
+	default:
+		return powerStart
+	}
+}
+
 // ensureActive brings a recovered server (matched by machine id during Create)
 // to a usable ACTIVE state: ACTIVE/BUILD is awaited; a stopped server is started;
 // an ERROR remnant is deleted and errRecreate is returned so Create launches a
@@ -319,26 +349,65 @@ func (r *ovhReal) ensureActive(ctx context.Context, id string) (serverInstance, 
 	if err != nil {
 		return serverInstance{}, fmt.Errorf("get server %s: %w", id, err)
 	}
-	switch strings.ToUpper(srv.Status) {
-	case "ACTIVE":
+	switch powerActionFor(srv.Status) {
+	case powerReady:
 		return r.toServerInstance(srv), nil
-	case "BUILD":
+	case powerWait:
 		return r.waitActive(ctx, id)
-	case "ERROR":
+	case powerError:
+		// Delete the unusable remnant so a fresh create can replace it (the kit
+		// does not yet track this id — it's a Create recovery).
 		if derr := servers.Delete(ctx, r.compute, id).ExtractErr(); derr != nil && r.logger != nil {
 			r.logger.Warn("failed to delete ERROR remnant during recovery", "server", id, "err", derr)
 		}
 		return serverInstance{}, errRecreate
-	default: // SHUTOFF / STOPPED / PAUSED / SUSPENDED — power it back on.
-		if err := r.StartServer(ctx, id); err != nil {
-			return serverInstance{}, err
-		}
-		fresh, err := servers.Get(ctx, r.compute, id).Extract()
-		if err != nil {
-			return serverInstance{}, fmt.Errorf("get server %s after start: %w", id, err)
-		}
-		return r.toServerInstance(fresh), nil
+	default: // powerStart
+		return r.startAndGet(ctx, id)
 	}
+}
+
+// ensureRunning powers on the backing server of a machine the kit ALREADY tracks
+// (Configure/Drain), so an out-of-band stop or a post-restart SHUTOFF is healed
+// before we SSH it — never dialing a powered-off host. Unlike ensureActive (the
+// Create path) it NEVER deletes: the kit owns the binding for this id, so an
+// ERROR server is surfaced as an error (the transition fails) rather than
+// recreated. It returns the server with its reachable IP populated.
+func (r *ovhReal) ensureRunning(ctx context.Context, srv serverInstance) (serverInstance, error) {
+	fresh, err := servers.Get(ctx, r.compute, srv.ServerID).Extract()
+	if err != nil {
+		return serverInstance{}, fmt.Errorf("get server %s: %w", srv.ServerID, err)
+	}
+	switch powerActionFor(fresh.Status) {
+	case powerReady:
+		return r.ensureIPv4(ctx, r.toServerInstance(fresh))
+	case powerWait:
+		inst, werr := r.waitActive(ctx, srv.ServerID)
+		if werr != nil {
+			return serverInstance{}, werr
+		}
+		return r.ensureIPv4(ctx, inst)
+	case powerError:
+		return serverInstance{}, fmt.Errorf("server %s is in ERROR state; cannot reach it for configure/drain", srv.ServerID)
+	default: // powerStart
+		inst, serr := r.startAndGet(ctx, srv.ServerID)
+		if serr != nil {
+			return serverInstance{}, serr
+		}
+		return r.ensureIPv4(ctx, inst)
+	}
+}
+
+// startAndGet powers a stopped server on, waits for ACTIVE, and returns its fresh
+// substrate view.
+func (r *ovhReal) startAndGet(ctx context.Context, id string) (serverInstance, error) {
+	if err := r.StartServer(ctx, id); err != nil {
+		return serverInstance{}, err
+	}
+	fresh, err := servers.Get(ctx, r.compute, id).Extract()
+	if err != nil {
+		return serverInstance{}, fmt.Errorf("get server %s after start: %w", id, err)
+	}
+	return r.toServerInstance(fresh), nil
 }
 
 func (r *ovhReal) DescribeManaged(ctx context.Context) ([]serverInstance, error) {
@@ -366,7 +435,10 @@ func (r *ovhReal) ApplyBootstrap(ctx context.Context, srv serverInstance, cluste
 	if r.cfg.SSHSigner == nil {
 		return fmt.Errorf("configure: SSH delivery disabled (set --ssh-key); cannot deliver bootstrap to %s", srv.ServerID)
 	}
-	srv, err := r.ensureIPv4(ctx, srv)
+	// Power the host on first — the kit may hold this machine Idle from the
+	// persisted store while the backing instance was stopped out of band, so we
+	// must heal it before SSH rather than dial a powered-off host.
+	srv, err := r.ensureRunning(ctx, srv)
 	if err != nil {
 		return fmt.Errorf("configure: %w", err)
 	}
@@ -406,7 +478,8 @@ func (r *ovhReal) DrainNode(ctx context.Context, srv serverInstance, gracePeriod
 		// to an unbound state in inventory.
 		return r.clearMetadatum(ctx, srv.ServerID, metaCluster)
 	}
-	srv, err := r.ensureIPv4(ctx, srv)
+	// Heal a stopped backing server before SSH (same reason as Configure).
+	srv, err := r.ensureRunning(ctx, srv)
 	if err != nil {
 		return fmt.Errorf("drain: %w", err)
 	}
