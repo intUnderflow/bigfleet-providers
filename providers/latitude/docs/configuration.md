@@ -31,7 +31,8 @@ how price is sourced see [Pricing](/providers/latitude/pricing-and-interruption/
 | `--seed-count` | `32` | Number of Speculative slots in the default offerings (ignored when `--offerings` is set). |
 | `--site-a` | `ASH` | First site for the default offerings. |
 | `--site-b` | `NYC` | Second site for the default offerings. |
-| `--state` | _(empty)_ | Durable state file. Empty = in-memory only (state is lost on restart). |
+| `--state` | _(empty)_ | Durable kit state file (fence marks, idempotency, inventory, bindings). Empty = in-memory only (state is lost on restart). |
+| `--substrate-state` | _(empty)_ | Durable provider-owned substrate index (machine_id → server / host-key / user-data map). Empty derives a sibling of `--state`, else in-memory. Put it on the same volume as `--state`. |
 | `--operating-system` | `ubuntu_22_04_x64_lts` | OS slug deployed at `Server` create (latitude backend). |
 | `--ssh-key` | _(empty)_ | SSH private key path for Configure/Drain delivery. Without it, Configure cannot deliver the bootstrap blob. |
 | `--ssh-user` | `root` | SSH user for Configure/Drain delivery. |
@@ -194,7 +195,8 @@ binds it. The lifecycle:
 1. **Create → `POST /servers`.** Deploys the server on `--operating-system` in the
    chosen site, with the generic `--base-user-data` (plus an injected host key —
    see [Security](/providers/latitude/security/)) as first-boot cloud-init. The
-   server's hostname carries the machine id, so a retried Create adopts the
+   provider keys identity on the machine id via a small persisted index (and a
+   collision-free deploy hostname as a backstop), so a retried Create adopts the
    existing server instead of deploying a second one. **Create blocks until the
    server is actually powered on** before returning Idle, so the immediately
    following Configure never races a still-deploying box. A bare-metal deploy is

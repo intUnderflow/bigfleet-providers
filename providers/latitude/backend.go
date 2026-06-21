@@ -310,7 +310,7 @@ func (b *latitudeBackend) DeleteInstance(ctx context.Context, req providerkit.De
 	if req.Machine.Host.Ref == "" {
 		return fmt.Errorf("delete: machine %s has no host", req.Machine.ID)
 	}
-	return b.client.DeleteServer(ctx, req.Machine.Host.Ref)
+	return b.client.DeleteServer(ctx, req.Machine.Host.Ref, req.Machine.ID)
 }
 
 // ensureRunning powers a server on and waits for it to be reachable before

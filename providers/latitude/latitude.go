@@ -31,8 +31,11 @@ type latitudeClient interface {
 
 	// DeleteServer deprovisions the server with the given Latitude server id, and
 	// any resources this provider attached to it (idempotent: an already-gone
-	// server is success). The slot returns to Speculative.
-	DeleteServer(ctx context.Context, serverID string) error
+	// server is success). The machineID (the kit's req.Machine.ID) lets the real
+	// client recover the per-server UserData id by its machine-id-keyed
+	// description when its persisted index is unavailable, so teardown never leaks.
+	// The slot returns to Speculative.
+	DeleteServer(ctx context.Context, serverID, machineID string) error
 
 	// DescribeManaged returns every BigFleet-managed server in the project
 	// (servers carrying the bigfleet-managed tag), so a provider with no

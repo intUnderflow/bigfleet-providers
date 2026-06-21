@@ -16,21 +16,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// machineIDEncoding encodes a machine id / token into a tag-safe value
-// (lowercase base32 without padding → only [a-z2-7]). Round-trips on read.
+// machineIDEncoding renders binary (a hash) as a DNS/tag-safe value (lowercase
+// base32 without padding → only [a-z2-7]). Used for the host-key fingerprint and
+// the collision-free deploy hostname.
 var machineIDEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
-
-func encodeMachineID(id string) string {
-	return strings.ToLower(machineIDEncoding.EncodeToString([]byte(id)))
-}
-
-func decodeMachineID(label string) string {
-	b, err := machineIDEncoding.DecodeString(strings.ToUpper(label))
-	if err != nil {
-		return ""
-	}
-	return string(b)
-}
 
 // hostKeyMaterial is a generated ed25519 SSH host keypair for one server. The
 // private key is injected into the server via first-boot user_data (cloud-init)

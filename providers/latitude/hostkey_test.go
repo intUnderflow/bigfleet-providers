@@ -103,26 +103,41 @@ func TestBuildUserData(t *testing.T) {
 	}
 }
 
-// The machine id must round-trip through the hostname carrier, so DescribeManaged
-// can recover inventory from a deployed server's hostname.
-func TestDeployHostname_RoundTrip(t *testing.T) {
-	for _, id := range []string{"latitude-ash/on_demand/c2-small-x86/ASH/000", "m1", "x"} {
+// The deploy hostname must be DNS-safe, ≤63 chars, deterministic, and — the
+// crucial property — COLLISION-FREE across distinct machine ids. The three slot
+// ids below are the ones the round-2 review proved collided under the old
+// truncating encoding (…/000, …/001, …/017); they must now map to distinct
+// hostnames so adoption can never deliver one machine's join secret to another.
+func TestDeployHostname_CollisionFree(t *testing.T) {
+	ids := []string{
+		"latitude-ash/on_demand/c2-small-x86/ASH/000",
+		"latitude-ash/on_demand/c2-small-x86/ASH/001",
+		"latitude-ash/on_demand/c2-small-x86/ASH/017",
+		"latitude-ash/on_demand/c3-large-x86/NYC/000",
+		"m1", "x",
+	}
+	seen := map[string]string{}
+	for _, id := range ids {
 		h := deployHostname(id)
 		if !strings.HasPrefix(h, hostnamePrefix) {
 			t.Errorf("hostname %q missing prefix", h)
 		}
 		if len(h) > 63 {
-			t.Errorf("hostname %q exceeds 63 chars", h)
+			t.Errorf("hostname %q exceeds 63 chars (%d)", h, len(h))
 		}
-		got := decodeHostname(h)
-		// Only ids short enough to fit round-trip exactly; longer ones truncate and
-		// rely on the FileStore (documented).
-		if len(hostnamePrefix+encodeMachineID(id)) <= 63 && got != id {
-			t.Errorf("decodeHostname(%q) = %q, want %q", h, got, id)
+		// DNS-safe: lowercase [a-z2-7] plus the prefix's hyphen.
+		for _, c := range strings.TrimPrefix(h, hostnamePrefix) {
+			if !((c >= 'a' && c <= 'z') || (c >= '2' && c <= '7')) {
+				t.Errorf("hostname %q has non-DNS-safe char %q", h, c)
+			}
 		}
-	}
-	// A non-BigFleet hostname decodes to empty (not ours).
-	if got := decodeHostname("some-random-host"); got != "" {
-		t.Errorf("decodeHostname(non-bigfleet) = %q, want empty", got)
+		if other, dup := seen[h]; dup {
+			t.Fatalf("hostname collision: %q and %q both map to %q", other, id, h)
+		}
+		seen[h] = id
+		// Deterministic: same id -> same hostname.
+		if h2 := deployHostname(id); h2 != h {
+			t.Errorf("deployHostname not deterministic for %q: %q vs %q", id, h, h2)
+		}
 	}
 }

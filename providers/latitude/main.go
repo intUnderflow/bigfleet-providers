@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -52,9 +53,10 @@ func run() error {
 		seedCount   = flag.Int("seed-count", 32, "number of Speculative slots when using the default offerings")
 		siteA       = flag.String("site-a", "ASH", "first site for default offerings")
 		siteB       = flag.String("site-b", "NYC", "second site for default offerings")
-		statePath   = flag.String("state", "", "durable state file (empty = in-memory only)")
+		statePath   = flag.String("state", "", "durable kit state file (fence marks, idempotency, inventory, bindings; empty = in-memory only)")
 
 		operatingSystem = flag.String("operating-system", "ubuntu_22_04_x64_lts", "OS slug deployed at Server create (latitude backend)")
+		substrateState  = flag.String("substrate-state", "", "durable provider-owned substrate index (machine_id->server/host-key/user-data map); empty derives a sibling of --state, else in-memory")
 		sshKey          = flag.String("ssh-key", "", "path to the SSH private key used for Configure/Drain delivery (latitude backend)")
 		sshUser         = flag.String("ssh-user", "root", "SSH user for Configure/Drain delivery (latitude backend)")
 		bootstrapHk     = flag.String("bootstrap-hook", "/opt/bigfleet/bootstrap", "image path that applies the delivered bootstrap blob")
@@ -108,6 +110,7 @@ func run() error {
 		real, err := newLatitudeReal(latitudeRealConfig{
 			Token:             latToken,
 			Project:           latProject,
+			StatePath:         substrateStatePath(*substrateState, *statePath),
 			SSHSigner:         signer,
 			SSHUser:           *sshUser,
 			BootstrapHookPath: *bootstrapHk,
@@ -304,6 +307,21 @@ func resolveBackendMode(flagVal, token, project string) string {
 	default:
 		return strings.ToLower(flagVal)
 	}
+}
+
+// substrateStatePath resolves where the provider-owned substrate index is
+// persisted. An explicit --substrate-state wins; otherwise, when --state is set,
+// it derives a sibling file (so the index lives on the same durable volume as the
+// kit FileStore and they are lost together only on catastrophic volume loss); an
+// empty result keeps the index in-memory (dev / the credential-free fake path).
+func substrateStatePath(explicit, kitState string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if kitState == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(kitState), "latitude-substrate.json")
 }
 
 func buildStore(path string) (providerkit.Store, error) {

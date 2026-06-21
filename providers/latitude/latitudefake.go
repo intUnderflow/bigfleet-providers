@@ -68,7 +68,7 @@ func (f *latitudeFake) CreateServer(_ context.Context, spec serverSpec) (serverI
 	return *srv, nil
 }
 
-func (f *latitudeFake) DeleteServer(_ context.Context, serverID string) error {
+func (f *latitudeFake) DeleteServer(_ context.Context, serverID, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// Idempotent, matching the real client (404 → nil): deprovisioning an unknown

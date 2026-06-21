@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"log/slog"
@@ -16,13 +17,14 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// hostnamePrefix marks a server as BigFleet-managed and carries the machine id.
-// Latitude's API exposes no settable+readable tag/label at create time — only
-// the hostname is set at create AND returned on Get/List — so the hostname is
-// the machine-id carrier (base32, lowercased: only [a-z2-7], DNS-safe). This
-// mirrors Hetzner's encoded-label approach. Machine ids whose encoding would
-// exceed the 63-char hostname limit fall back to the FileStore for restart
-// recovery (the documented primary path) and a TOFU host-key pin.
+// hostnamePrefix marks a server as BigFleet-managed. The hostname is a
+// collision-free HASH of the machine id (see deployHostname), not a reversible
+// encoding — Latitude exposes no settable+readable tag/label on the server
+// object, and a ≤63-char hostname cannot losslessly carry an arbitrary machine
+// id. Identity is therefore keyed on the machine id via the provider-owned
+// substrateIndex, never decoded from the hostname; the hostname is only a
+// deterministic, human-readable deploy name and a collision-free idempotency
+// backstop.
 const hostnamePrefix = "bigfleet-"
 
 // latitudeRealConfig is the launch configuration for the production Latitude.sh
@@ -30,6 +32,10 @@ const hostnamePrefix = "bigfleet-"
 type latitudeRealConfig struct {
 	Token   string
 	Project string // project id or slug; every server op is scoped to it
+
+	// StatePath persists the substrateIndex (machine_id -> {serverID, host-key
+	// fingerprint, UserData id, cluster binding}). Empty = in-memory only.
+	StatePath string
 
 	// SSHSigner authenticates the SSH session used by ApplyBootstrap / DrainNode
 	// (Latitude has no in-guest command API). Nil disables SSH delivery.
@@ -61,32 +67,23 @@ func (c *latitudeRealConfig) withDefaults() {
 	}
 }
 
-// serverRecord is the per-server substrate state this provider legitimately owns
-// (the kit owns everything else, in the FileStore): the pinned SSH host-key
-// fingerprint and the per-server UserData resource id, so Configure/Drain can
-// verify the host and DeleteInstance can tear down without leaking. It is
-// in-memory; after a restart a server with no record TOFU-pins its host key on
-// the next SSH connection (documented in security.md).
-type serverRecord struct {
-	hostKeyFP  string
-	userDataID string
-	clusterID  string
-}
-
 // latitudeReal is the production latitudeClient, backed by latitudesh-go-sdk.
-// Inventory is recovered from server hostnames; the cluster-specific bootstrap
-// and the drain are delivered over SSH on the pinned host key (Latitude exposes
-// no in-guest command API).
+// Identity (machine_id <-> serverID) and the per-machine substrate state (pinned
+// host-key fingerprint, per-server UserData id, cluster binding) live in the
+// provider-owned, persisted substrateIndex; the cluster-specific bootstrap and
+// the drain are delivered over SSH on the pinned host key (Latitude exposes no
+// in-guest command API).
 type latitudeReal struct {
 	cfg     latitudeRealConfig
 	sdk     *latitudeshgosdk.Latitudesh
+	ud      userDataAPI
 	ssh     *sshDelivery
 	logger  *slog.Logger
 	project string
+	index   *substrateIndex
 
 	mu       sync.Mutex
-	records  map[string]*serverRecord // serverID -> owned substrate state
-	sshKeyID string                   // cached id of the registered SSH key
+	sshKeyID string // cached id of the registered SSH key
 }
 
 func newLatitudeReal(cfg latitudeRealConfig, logger *slog.Logger) (*latitudeReal, error) {
@@ -97,24 +94,35 @@ func newLatitudeReal(cfg latitudeRealConfig, logger *slog.Logger) (*latitudeReal
 		return nil, fmt.Errorf("latitude: --project (or LATITUDESH_PROJECT) is required for the latitude backend")
 	}
 	cfg.withDefaults()
+	index, err := newSubstrateIndex(cfg.StatePath)
+	if err != nil {
+		return nil, err
+	}
+	sdk := latitudeshgosdk.New(latitudeshgosdk.WithSecurity(cfg.Token))
 	r := &latitudeReal{
 		cfg:     cfg,
-		sdk:     latitudeshgosdk.New(latitudeshgosdk.WithSecurity(cfg.Token)),
+		sdk:     sdk,
+		ud:      &sdkUserData{sdk: sdk},
 		logger:  logger,
 		project: cfg.Project,
-		records: make(map[string]*serverRecord),
+		index:   index,
 	}
 	if cfg.SSHSigner != nil {
 		r.ssh = &sshDelivery{
 			signer: cfg.SSHSigner,
 			user:   cfg.SSHUser,
 			onTOFU: func(serverID, fp string) {
-				r.mu.Lock()
-				rec := r.recordLocked(serverID)
-				rec.hostKeyFP = fp
-				r.mu.Unlock()
+				// Persist the observed host key only for a server we own (in the
+				// index); an orphan has no machine id to key it on (TOFU each time,
+				// documented in security.md).
+				if st, ok := r.index.machineByServer(serverID); ok {
+					st.HostKeyFP = fp
+					if err := r.index.upsert(st); err != nil && logger != nil {
+						logger.Warn("failed to persist TOFU host-key pin", "server", serverID, "err", err)
+					}
+				}
 				if logger != nil {
-					logger.Warn("pinned SSH host key on first use (no in-process pin)", "server", serverID)
+					logger.Warn("pinned SSH host key on first use (no prior pin)", "server", serverID)
 				}
 			},
 		}
@@ -122,24 +130,26 @@ func newLatitudeReal(cfg latitudeRealConfig, logger *slog.Logger) (*latitudeReal
 	return r, nil
 }
 
-func (r *latitudeReal) recordLocked(serverID string) *serverRecord {
-	rec, ok := r.records[serverID]
-	if !ok {
-		rec = &serverRecord{}
-		r.records[serverID] = rec
-	}
-	return rec
-}
-
 // CreateServer deploys one bare-metal server and waits for it to power on. It is
-// substrate-idempotent: a server already carrying this machine id's hostname is
-// adopted rather than deployed again.
+// substrate-idempotent: if a server already backs this machine id — found via the
+// persisted index, or via the collision-free deploy hostname as a backstop — it
+// is adopted rather than deployed again.
 func (r *latitudeReal) CreateServer(ctx context.Context, spec serverSpec) (serverInstance, error) {
 	hostname := deployHostname(spec.MachineID)
 
-	// Idempotency pre-check: a retried Create whose hostname already exists adopts
-	// that server instead of deploying a duplicate.
+	// Idempotency pre-check 1: the index already maps this machine id to a server.
+	if st, ok := r.index.machineByID(spec.MachineID); ok && st.ServerID != "" {
+		if srv, err := r.GetServer(ctx, st.ServerID); err == nil && srv.ServerID != "" {
+			return r.waitPoweredOn(ctx, srv.ServerID)
+		}
+	}
+	// Idempotency pre-check 2 (backstop after an index loss / a crash between
+	// Servers.Create and the index write): a server already carrying this machine
+	// id's collision-free deploy hostname. An exact hostname match means the same
+	// machine id (the hostname is a sha256 hash), so this never adopts the wrong
+	// server.
 	if existing, ok, err := r.serverByHostname(ctx, hostname); err == nil && ok {
+		r.recordServer(spec.MachineID, existing.ServerID, "", "")
 		return r.waitPoweredOn(ctx, existing.ServerID)
 	}
 
@@ -160,7 +170,7 @@ func (r *latitudeReal) CreateServer(ctx context.Context, spec serverSpec) (serve
 	if err != nil {
 		return serverInstance{}, fmt.Errorf("assemble user-data: %w", err)
 	}
-	userDataID, err := r.createUserData(ctx, hostname, cloudInit)
+	userDataID, err := r.createUserData(ctx, spec.MachineID, cloudInit)
 	if err != nil {
 		return serverInstance{}, fmt.Errorf("create user-data: %w", err)
 	}
@@ -188,25 +198,43 @@ func (r *latitudeReal) CreateServer(ctx context.Context, spec serverSpec) (serve
 	resp, err := r.sdk.Servers.Create(ctx, req)
 	if err != nil {
 		// A retried Create that raced an earlier success may now find the server by
-		// hostname — adopt it instead of failing. Either way the UserData we just
-		// created is not attached to a server we own, so tear it down rather than
-		// leak it (the adopted server carries its own).
+		// hostname — adopt it instead of failing. The UserData we just created is not
+		// attached to a server we own (the adopted server carries its own), so tear
+		// it down rather than leak it.
 		r.deleteUserData(ctx, userDataID)
 		if existing, ok, lerr := r.serverByHostname(ctx, hostname); lerr == nil && ok {
+			r.recordServer(spec.MachineID, existing.ServerID, "", "")
 			return r.waitPoweredOn(ctx, existing.ServerID)
 		}
 		return serverInstance{}, fmt.Errorf("create server %s: %w", spec.Plan, err)
 	}
 	id := serverID(resp.GetServer())
 	if id == "" {
+		// The deploy did not return an id we can own, so the just-created UserData
+		// would leak — tear it down.
+		r.deleteUserData(ctx, userDataID)
 		return serverInstance{}, fmt.Errorf("create server %s: empty server id", spec.Plan)
 	}
-	r.mu.Lock()
-	rec := r.recordLocked(id)
-	rec.hostKeyFP = hostKey.fingerprint
-	rec.userDataID = userDataID
-	r.mu.Unlock()
+	r.recordServer(spec.MachineID, id, hostKey.fingerprint, userDataID)
 	return r.waitPoweredOn(ctx, id)
+}
+
+// recordServer upserts the machine's substrate state into the persisted index,
+// preserving any existing host-key/UserData when the new values are empty.
+func (r *latitudeReal) recordServer(machineID, serverIDStr, hostKeyFP, userDataID string) {
+	st := machineState{MachineID: machineID, ServerID: serverIDStr, HostKeyFP: hostKeyFP, UserDataID: userDataID}
+	if prev, ok := r.index.machineByID(machineID); ok {
+		if st.HostKeyFP == "" {
+			st.HostKeyFP = prev.HostKeyFP
+		}
+		if st.UserDataID == "" {
+			st.UserDataID = prev.UserDataID
+		}
+		st.ClusterID = prev.ClusterID
+	}
+	if err := r.index.upsert(st); err != nil && r.logger != nil {
+		r.logger.Warn("failed to persist substrate index", "machine", machineID, "server", serverIDStr, "err", err)
+	}
 }
 
 // waitPoweredOn polls until the server reports status `on`, so the kit's IDLE
@@ -233,44 +261,40 @@ func (r *latitudeReal) waitPoweredOn(ctx context.Context, id string) (serverInst
 }
 
 // DeleteServer deprovisions the server AND the per-server UserData resource it
-// created, idempotently (an already-gone server / resource is success).
-func (r *latitudeReal) DeleteServer(ctx context.Context, serverIDStr string) error {
-	// Resolve the per-server UserData id to tear down. The in-memory record is the
-	// fast path; after a provider restart (records empty, kit inventory restored
-	// from the FileStore) recover it by its hostname-derived description so the
-	// orphan resource is not leaked. Read the server's hostname BEFORE deleting it,
-	// while it is still resolvable.
-	userDataID := r.recordedUserDataID(serverIDStr)
-	if userDataID == "" {
-		if srv, gerr := r.GetServer(ctx, serverIDStr); gerr == nil && srv.MachineID != "" {
-			userDataID = r.findUserDataID(ctx, userDataDescription(deployHostname(srv.MachineID)))
+// created, idempotently (an already-gone server / resource is success). The
+// machine id is passed by the caller (from req.Machine.ID) so the UserData id can
+// be recovered by its machine-id-keyed description even when the persisted index
+// is unavailable — never derived from the lossy hostname.
+func (r *latitudeReal) DeleteServer(ctx context.Context, serverIDStr, machineID string) error {
+	// Resolve the per-server UserData id to tear down: the persisted index is the
+	// fast path; if it lacks the entry (e.g. a lost state file) recover it by its
+	// machine-id-keyed description so the orphan resource — which holds a cleartext
+	// host private key — is not leaked.
+	userDataID := ""
+	if st, ok := r.index.machineByServer(serverIDStr); ok {
+		userDataID = st.UserDataID
+		if machineID == "" {
+			machineID = st.MachineID
 		}
+	}
+	if userDataID == "" && machineID != "" {
+		userDataID = r.findUserDataID(ctx, userDataDescription(machineID))
 	}
 
 	_, err := r.sdk.Servers.Delete(ctx, serverIDStr, latitudeshgosdk.String("bigfleet-reclaim"))
 	if err != nil && !isNotFound(err) {
 		return fmt.Errorf("delete server %s: %w", serverIDStr, err)
 	}
-	// Tear down the per-server UserData resource so it does not leak.
-	r.mu.Lock()
-	delete(r.records, serverIDStr)
-	r.mu.Unlock()
+	if rerr := r.index.removeByServer(serverIDStr); rerr != nil && r.logger != nil {
+		r.logger.Warn("failed to persist substrate index on delete", "server", serverIDStr, "err", rerr)
+	}
 	r.deleteUserData(ctx, userDataID)
 	return nil
 }
 
-// recordedUserDataID returns the in-memory UserData id for a server, or "".
-func (r *latitudeReal) recordedUserDataID(serverIDStr string) string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if rec, ok := r.records[serverIDStr]; ok {
-		return rec.userDataID
-	}
-	return ""
-}
-
 // DescribeManaged lists the project's servers and returns the BigFleet-managed
-// ones (hostname carries the bigfleet- prefix + machine id).
+// ones (hostname carries the bigfleet- prefix), mapping each back to its machine
+// id via the persisted index.
 func (r *latitudeReal) DescribeManaged(ctx context.Context) ([]serverInstance, error) {
 	var out []serverInstance
 	page := int64(1)
@@ -353,19 +377,17 @@ func (r *latitudeReal) ApplyBootstrap(ctx context.Context, srv serverInstance, c
 	if err := r.ssh.run(ctx, srv, script); err != nil {
 		return err
 	}
-	r.mu.Lock()
-	r.recordLocked(srv.ServerID).clusterID = clusterID
-	r.mu.Unlock()
+	if err := r.index.setCluster(srv.ServerID, clusterID); err != nil && r.logger != nil {
+		r.logger.Warn("failed to persist cluster binding", "server", srv.ServerID, "err", err)
+	}
 	return nil
 }
 
 // DrainNode cordons + drains the kubelet over SSH and clears the binding.
 func (r *latitudeReal) DrainNode(ctx context.Context, srv serverInstance, gracePeriodSeconds int64) error {
 	if r.ssh == nil {
-		// No SSH path: at least clear the in-memory binding.
-		r.mu.Lock()
-		r.recordLocked(srv.ServerID).clusterID = ""
-		r.mu.Unlock()
+		// No SSH path: at least clear the binding.
+		_ = r.index.setCluster(srv.ServerID, "")
 		return nil
 	}
 	srv = r.withPin(srv)
@@ -389,9 +411,9 @@ func (r *latitudeReal) DrainNode(ctx context.Context, srv serverInstance, graceP
 	if err := r.ssh.run(ctx, srv, script); err != nil {
 		return err
 	}
-	r.mu.Lock()
-	r.recordLocked(srv.ServerID).clusterID = ""
-	r.mu.Unlock()
+	if err := r.index.setCluster(srv.ServerID, ""); err != nil && r.logger != nil {
+		r.logger.Warn("failed to persist cluster unbind", "server", srv.ServerID, "err", err)
+	}
 	return nil
 }
 
@@ -452,13 +474,12 @@ func (r *latitudeReal) DescribePlanCapacities(ctx context.Context, plans []strin
 
 // --- helpers --------------------------------------------------------------
 
-// withPin attaches the in-process pinned host-key fingerprint to a server view.
+// withPin attaches the pinned host-key fingerprint (from the index) to a server
+// view, so SSH verifies the host against the key pinned at deploy.
 func (r *latitudeReal) withPin(srv serverInstance) serverInstance {
-	r.mu.Lock()
-	if rec, ok := r.records[srv.ServerID]; ok && rec.hostKeyFP != "" {
-		srv.HostKeyFP = rec.hostKeyFP
+	if st, ok := r.index.machineByServer(srv.ServerID); ok && st.HostKeyFP != "" {
+		srv.HostKeyFP = st.HostKeyFP
 	}
-	r.mu.Unlock()
 	return srv
 }
 
@@ -472,9 +493,6 @@ func (r *latitudeReal) dataToServerInstance(d *components.ServerData) serverInst
 	}
 	a := d.Attributes
 	if a != nil {
-		if a.Hostname != nil {
-			out.MachineID = decodeHostname(*a.Hostname)
-		}
 		if a.Site != nil {
 			out.Site = *a.Site
 		}
@@ -493,12 +511,15 @@ func (r *latitudeReal) dataToServerInstance(d *components.ServerData) serverInst
 			out.Site = *a.Region.Site.Slug
 		}
 	}
-	out = r.withPin(out)
-	r.mu.Lock()
-	if rec, ok := r.records[out.ServerID]; ok {
-		out.ClusterID = rec.clusterID
+	// Identity + owned substrate state come from the persisted index, keyed on the
+	// server id — never decoded from the (lossy) hostname.
+	if st, ok := r.index.machineByServer(out.ServerID); ok {
+		out.MachineID = st.MachineID
+		out.ClusterID = st.ClusterID
+		if st.HostKeyFP != "" {
+			out.HostKeyFP = st.HostKeyFP
+		}
 	}
-	r.mu.Unlock()
 	return out
 }
 
@@ -575,52 +596,32 @@ func (r *latitudeReal) ensureSSHKey(ctx context.Context) (string, error) {
 	return *resp.Object.Data.ID, nil
 }
 
-// userDataDescription is the stable, hostname-derived description stamped on a
-// server's UserData resource, so its id can be recovered (via UserData.List)
-// when the in-memory record is gone — e.g. after a restart — and the resource
-// torn down rather than leaked.
-func userDataDescription(hostname string) string {
-	return "bigfleet host-key bootstrap for " + hostname
+// userDataDescription is the stable, machine-id-keyed description stamped on a
+// server's UserData resource, so its id can be recovered (via UserData.List) when
+// the persisted index is unavailable and the resource torn down rather than
+// leaked. Keyed on the machine id directly (not the lossy hostname), so recovery
+// from the real machine id is exact.
+func userDataDescription(machineID string) string {
+	return "bigfleet host-key for machine " + machineID
 }
 
 // createUserData stores a UserData resource holding the host-key cloud-init and
 // returns its id, for reference in the server deploy.
-func (r *latitudeReal) createUserData(ctx context.Context, hostname, content string) (string, error) {
-	resp, err := r.sdk.UserData.CreateNew(ctx, operations.PostUserDataUserDataRequestBody{
-		Data: operations.PostUserDataUserDataData{
-			Type: operations.PostUserDataUserDataTypeUserData,
-			Attributes: &operations.PostUserDataUserDataAttributes{
-				Description: userDataDescription(hostname),
-				Project:     latitudeshgosdk.String(r.project),
-				Content:     base64.StdEncoding.EncodeToString([]byte(content)),
-			},
-		},
-	})
-	if err != nil {
-		return "", err
-	}
-	if resp.UserDataObject == nil || resp.UserDataObject.Data == nil || resp.UserDataObject.Data.ID == nil {
-		return "", fmt.Errorf("user-data create returned no id")
-	}
-	return *resp.UserDataObject.Data.ID, nil
+func (r *latitudeReal) createUserData(ctx context.Context, machineID, content string) (string, error) {
+	return r.ud.create(ctx, r.project, userDataDescription(machineID), base64.StdEncoding.EncodeToString([]byte(content)))
 }
 
-// findUserDataID recovers a UserData resource id by its (hostname-derived)
-// description, so a teardown after a provider restart — when the in-memory
-// record is empty — does not leak the orphan resource. Returns "" if none
-// matches or the listing fails.
+// findUserDataID recovers a UserData resource id by its machine-id-keyed
+// description — a best-effort fallback for when the persisted index lacks the
+// entry. Returns "" if none matches or the listing fails.
 func (r *latitudeReal) findUserDataID(ctx context.Context, description string) string {
-	resp, err := r.sdk.UserData.List(ctx, latitudeshgosdk.String(r.project), nil, nil)
-	if err != nil || resp.UserData == nil {
+	items, err := r.ud.list(ctx, r.project)
+	if err != nil {
 		return ""
 	}
-	for i := range resp.UserData.Data {
-		ud := resp.UserData.Data[i].Data
-		if ud == nil || ud.ID == nil || ud.Attributes == nil || ud.Attributes.Description == nil {
-			continue
-		}
-		if *ud.Attributes.Description == description {
-			return *ud.ID
+	for _, it := range items {
+		if it.Description == description {
+			return it.ID
 		}
 	}
 	return ""
@@ -631,7 +632,7 @@ func (r *latitudeReal) deleteUserData(ctx context.Context, userDataID string) {
 	if userDataID == "" {
 		return
 	}
-	if _, err := r.sdk.UserData.Delete(ctx, userDataID); err != nil && !isNotFound(err) {
+	if err := r.ud.delete(ctx, userDataID); err != nil && !isNotFound(err) {
 		if r.logger != nil {
 			r.logger.Warn("failed to delete per-server user-data", "user_data", userDataID, "err", err)
 		}
@@ -653,25 +654,14 @@ func hostnameOf(d *components.ServerData) string {
 	return *d.Attributes.Hostname
 }
 
-// deployHostname derives a stable, DNS-safe, BigFleet-prefixed hostname carrying
-// the machine id. Stable across a retried Create, so the substrate-idempotency
-// pre-check can adopt the existing server.
+// deployHostname derives a stable, DNS-safe, BigFleet-prefixed deploy name from a
+// COLLISION-FREE hash of the machine id: base32(sha256(machine_id)). It is not
+// reversible (identity is keyed on the machine id via the index), but an exact
+// hostname match is a reliable same-machine-id signal for the idempotency
+// backstop, and distinct machine ids never collide (unlike a truncated encoding).
 func deployHostname(machineID string) string {
-	name := hostnamePrefix + encodeMachineID(machineID)
-	if len(name) > 63 {
-		name = name[:63]
-	}
-	return strings.TrimRight(name, "-")
-}
-
-// decodeHostname recovers the machine id from a BigFleet-managed hostname, or ""
-// if the hostname is not ours or was truncated (recovery falls back to the
-// FileStore).
-func decodeHostname(hostname string) string {
-	if !strings.HasPrefix(hostname, hostnamePrefix) {
-		return ""
-	}
-	return decodeMachineID(strings.TrimPrefix(hostname, hostnamePrefix))
+	sum := sha256.Sum256([]byte(machineID))
+	return hostnamePrefix + strings.ToLower(machineIDEncoding.EncodeToString(sum[:]))
 }
 
 func regionMatchesSite(reg *components.PlanDataRegions, site string) bool {

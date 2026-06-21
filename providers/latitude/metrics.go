@@ -95,9 +95,9 @@ func (c *metricsLatitudeClient) CreateServer(ctx context.Context, spec serverSpe
 	c.m.observeAPI("CreateServer", start, err)
 	return srv, err
 }
-func (c *metricsLatitudeClient) DeleteServer(ctx context.Context, id string) error {
+func (c *metricsLatitudeClient) DeleteServer(ctx context.Context, id, machineID string) error {
 	start := time.Now()
-	err := c.inner.DeleteServer(ctx, id)
+	err := c.inner.DeleteServer(ctx, id, machineID)
 	c.m.observeAPI("DeleteServer", start, err)
 	return err
 }

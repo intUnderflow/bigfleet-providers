@@ -101,18 +101,18 @@ verification — a host whose key does not match the pin fails closed. The model
   the provider mints a fresh ed25519 **host** keypair, injects the private key
   into the server via first-boot `user_data` cloud-init (`ssh_keys:` — merged with
   your `--base-user-data` as a MIME multipart archive), and pins the public key's
-  SHA-256 fingerprint. Every later Configure/Drain connection checks the presented
-  host key against that pin and **aborts on mismatch** (a possible MITM). Because
-  the key is known before the first connection, there is no trust-on-first-use
-  window for servers the provider deployed.
+  SHA-256 fingerprint in the provider-owned substrate index (`--substrate-state`).
+  Every later Configure/Drain connection checks the presented host key against
+  that pin and **aborts on mismatch** (a possible MITM). Because the key is known
+  before the first connection — and the pin is persisted, so it survives a restart
+  — there is no trust-on-first-use window for servers the provider deployed.
 - **Trust-on-first-use (fallback, only for servers with no pin).** A server the
-  provider did not deploy (an orphan it adopted) or one provisioned before
-  host-key pinning has no pinned fingerprint. The first connection records the
+  provider did not deploy (an orphan it adopted), or one whose pin was lost with
+  the substrate index, has no pinned fingerprint. The first connection records the
   observed host key and pins it; all later connections are verified against it.
   The residual risk is confined to that single first connection, and it is logged
-  at `WARN`. (Because the pin lives in process memory, a restart re-TOFUs on the
-  next connection — the FileStore is the recovery path for the rest of the
-  machine state.)
+  at `WARN`. Persist `--substrate-state` (on the same volume as `--state`) so this
+  fallback is not re-entered on every restart.
 
 For defence in depth, run the SSH path over a **private/management network** the
 control plane trusts. If your `--base-user-data` sets its own `ssh_keys` host-key
