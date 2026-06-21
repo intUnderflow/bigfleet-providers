@@ -1,0 +1,47 @@
+name: Re-kick stale PRs
+
+# GitHub occasionally fails to dispatch CI on a push (the pull_request / push run
+# never starts), which leaves an open PR's head SHA untested — no `ci-ok`, so it
+# can't merge until someone close/reopens it. This periodically finds open PRs
+# whose head has NO CI run and dispatches one via workflow_dispatch, which fires
+# even from GITHUB_TOKEN (a reopen would not). A no-op when every head has a run.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write # dispatch ci.yml
+  pull-requests: read
+  contents: read
+
+concurrency:
+  group: rekick-stale-prs
+  cancel-in-progress: true
+
+jobs:
+  rekick:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Dispatch CI for any open PR head with no run
+        run: |
+          set -euo pipefail
+          gh pr list --repo "$REPO" --state open \
+            --json number,headRefName,headRefOid \
+            --jq '.[] | [.number, .headRefName, .headRefOid] | @tsv' |
+          while IFS=$'\t' read -r num branch sha; do
+            [ -z "${sha:-}" ] && continue
+            runs=$(gh api \
+              "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$sha&per_page=1" \
+              --jq '.total_count' 2>/dev/null || echo 0)
+            if [ "${runs:-0}" -eq 0 ]; then
+              echo "::warning::PR #$num ($branch @ ${sha:0:9}) has no CI run — dispatching ci.yml"
+              gh workflow run ci.yml --repo "$REPO" --ref "$branch" \
+                || echo "  dispatch failed for #$num (fork branch?)"
+            else
+              echo "PR #$num ($branch @ ${sha:0:9}) ok — $runs run(s)"
+            fi
+          done

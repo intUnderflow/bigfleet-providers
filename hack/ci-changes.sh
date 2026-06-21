@@ -35,6 +35,15 @@ resolve_changed() {
       [ -z "$mb" ] && return 1
       git diff --name-only "$mb" HEAD
       ;;
+    workflow_dispatch)
+      # Manual / scheduled re-kick of a branch (the CI-trigger-miss backstop):
+      # scope it like the PR would — diff the whole branch against main.
+      git fetch --quiet origin main 2>/dev/null || true
+      local mbd
+      mbd="$(git merge-base origin/main HEAD 2>/dev/null || true)"
+      [ -z "$mbd" ] && return 1
+      git diff --name-only "$mbd" HEAD
+      ;;
     push)
       # A push to a NON-main branch is the backstop for a missed pull_request
       # run, so scope it like the PR would: diff the whole branch against main,

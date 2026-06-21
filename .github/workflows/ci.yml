@@ -11,6 +11,10 @@ on:
   push:
     branches: ['**']
   pull_request:
+  # Manual / scheduled re-kick (.github/workflows/rekick-stale-prs.yml) for the
+  # rare case GitHub fails to dispatch CI on a push. workflow_dispatch fires even
+  # from GITHUB_TOKEN, unlike reopening a PR.
+  workflow_dispatch:
 
 permissions:
   contents: read
