@@ -19,6 +19,7 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+      {{- if or .Values.offerings.content .Values.instanceTypes.content .Values.baseUserData.content .Values.podAnnotations }}
       annotations:
         {{- if .Values.offerings.content }}
         checksum/offerings: {{ .Values.offerings.content | sha256sum }}
@@ -32,6 +33,7 @@ spec:
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "bigfleet-libvirt.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
@@ -162,13 +164,16 @@ spec:
         - name: libvirt-ssh
           secret:
             secretName: {{ .Values.credentials.ssh.secretName }}
-            defaultMode: 0400
+            # 0440 (not 0400): Secret files are owned root:fsGroup, and the pod
+            # runs non-root (uid 65532), so the key must be group-readable for the
+            # process to read it via the fsGroup supplementary group.
+            defaultMode: 0440
         {{- end }}
         {{- if .Values.credentials.tls.secretName }}
         - name: libvirt-tls
           secret:
             secretName: {{ .Values.credentials.tls.secretName }}
-            defaultMode: 0400
+            defaultMode: 0440
         {{- end }}
         {{- if .Values.credentials.hostSocket.enabled }}
         - name: libvirt-sock

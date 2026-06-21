@@ -4,6 +4,7 @@ metadata:
   name: {{ include "bigfleet-libvirt.fullname" . }}
   labels:
     {{- include "bigfleet-libvirt.labels" . | nindent 4 }}
+  {{- if or .Values.metrics.prometheusScrape .Values.service.annotations }}
   annotations:
     {{- if .Values.metrics.prometheusScrape }}
     prometheus.io/scrape: "true"
@@ -13,6 +14,7 @@ metadata:
     {{- with .Values.service.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
+  {{- end }}
 spec:
   type: {{ .Values.service.type }}
   selector:

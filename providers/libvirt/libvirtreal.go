@@ -500,8 +500,8 @@ func (r *libvirtReal) setMetadata(c *hostConnection, dom libvirt.Domain, machine
 // in-image bootstrap hook with the cluster id, via the qemu guest agent. The
 // blob is opaque, so it is delivered base64-encoded (never parsed) and the
 // in-image hook decodes + applies it. The blob file is the cluster-join secret,
-// so an EXIT trap shreds/removes it whether the hook succeeds or fails — it is
-// never left cleartext-at-rest in the guest.
+// so an EXIT trap removes it (best-effort `rm -f`, not a secure wipe) whether the
+// hook succeeds or fails, so it is not left lying around in the guest afterward.
 func (r *libvirtReal) guestWriteAndRun(ctx context.Context, c *hostConnection, dom libvirt.Domain, blob []byte, clusterID string) error {
 	script := fmt.Sprintf(
 		"set -e; umask 077; mkdir -p /opt/bigfleet; "+
