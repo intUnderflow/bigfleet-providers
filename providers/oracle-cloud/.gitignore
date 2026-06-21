@@ -1,0 +1,3 @@
+# Local build artifact (the bare binary built by `go build .` in this dir).
+# Real builds go to the repo-root bin/ via `make build-oracle-cloud`.
+/oracle-cloud

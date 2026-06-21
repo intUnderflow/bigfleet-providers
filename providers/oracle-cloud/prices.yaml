@@ -1,0 +1,53 @@
+# Pinned OCI Compute price table for the BigFleet oracle-cloud provider.
+#
+# OCI does not expose a clean per-shape hourly price via a simple Compute API
+# call, so prices come from this versioned table (deterministic, no runtime
+# pricing dependency on the List hot path). Refresh it out-of-band from Oracle's
+# published Compute price list; pin priced_at + source on every edit.
+#
+# price_per_hour is a RELATIVE ranking signal for the shard's cost formula
+# (effective_cost = price + interruption_probability × penalty), so approximate
+# rates are acceptable, but keep them roughly accurate.
+#
+#   - FLEXIBLE shapes are priced per-OCPU-hour + per-GB-hour (× the shape's
+#     launch OCPU/memory), keyed by shape family in flex_rates.
+#   - FIXED shapes (e.g. GPU VM shapes) are priced as a whole-instance hourly
+#     rate in fixed_hourly.
+#   - BARE METAL (BM.*) shapes are reported at price 0 by the provider (already
+#     paid for), regardless of any entry here.
+#   - PREEMPTIBLE (spot) instances apply spot_discount to the on-demand price
+#     (OCI Preemptible Instances are ~50% off on-demand).
+
+priced_at: "2026-06-01"
+source: "https://www.oracle.com/cloud/price-list/#compute"
+currency: USD
+
+# Per-OCPU-hour and per-GB-RAM-hour rates (USD), keyed by flexible-shape family.
+flex_rates:
+  VM.Standard.E5.Flex: { ocpu: 0.025, memory_gb: 0.0015 }
+  VM.Standard.E4.Flex: { ocpu: 0.025, memory_gb: 0.0015 }
+  VM.Standard3.Flex:   { ocpu: 0.040, memory_gb: 0.0024 }
+  VM.Optimized3.Flex:  { ocpu: 0.050, memory_gb: 0.0015 }
+  VM.Standard.A1.Flex: { ocpu: 0.010, memory_gb: 0.0015 }
+  VM.Standard.A2.Flex: { ocpu: 0.013, memory_gb: 0.0018 }
+
+# Fallback per-OCPU/per-GB rate for a flexible shape with no family entry above.
+default_flex_rate: { ocpu: 0.030, memory_gb: 0.0020 }
+
+# Whole-instance hourly USD for fixed (non-flex, non-bare-metal) shapes.
+# Whole-instance hourly USD for fixed (non-flex) shapes — both GPU VM shapes and
+# bare-metal shapes. Bare-metal entries matter when a BM.* shape is offered as
+# capacity_type=on_demand (hourly-billed): without an entry it would price at 0
+# and rank as free. A BM.* shape offered as capacity_type=bare_metal always
+# reports 0 (held, already-paid-for) regardless of any entry here.
+fixed_hourly:
+  VM.GPU.A10.1: 2.00
+  VM.GPU.A10.2: 4.00
+  # Bare-metal (approximate on-demand hourly; refresh from Oracle's price list).
+  BM.Standard.E5.192: 4.80
+  BM.Standard3.64: 2.60
+  BM.Standard.A1.160: 1.60
+  BM.GPU.A100-v2.8: 32.00
+
+# Discount multiplier applied to the on-demand price for preemptible instances.
+spot_discount: 0.5

@@ -1,0 +1,19 @@
+# BigFleet OCI capacity provider — least-privilege IAM policy statements.
+#
+# OCI policy statements are plain text (not JSON like AWS). These mirror the
+# Terraform in main.tf; paste them into an IAM policy (Console: Identity & Security
+# → Policies → Create Policy) if you provision IAM by hand instead of with Tofu.
+#
+# Replace:
+#   <DG>          the dynamic group matching the provider principal (see main.tf)
+#   <COMPARTMENT> the compartment NAME (not OCID) the provider operates in
+#
+# The dynamic group is what makes this least-privilege: it matches ONLY the
+# provider's instance (instance_principal) or the provider's OKE pod
+# (workload_identity), so no other workload inherits these grants.
+
+Allow dynamic-group <DG> to manage instance-family in compartment <COMPARTMENT>
+Allow dynamic-group <DG> to use volume-family in compartment <COMPARTMENT>
+Allow dynamic-group <DG> to use virtual-network-family in compartment <COMPARTMENT>
+Allow dynamic-group <DG> to read instance-images in compartment <COMPARTMENT>
+Allow dynamic-group <DG> to use instance-agent-command-family in compartment <COMPARTMENT>

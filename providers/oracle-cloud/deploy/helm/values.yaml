@@ -1,0 +1,154 @@
+# Values for the bigfleet-oracle-cloud chart.
+#
+# One release per OCI region. To run several regions, install the chart once per
+# region with a distinct release name, region, compartment, and offerings file,
+# e.g.:
+#
+#   helm install oci-eu-frankfurt-1 ./helm \
+#     --set region=eu-frankfurt-1 \
+#     --set provider=oci-eu-frankfurt-1 \
+#     --set oci.compartment=ocid1.compartment.oc1..aaaa \
+#     --set oci.subnet=ocid1.subnet.oc1..bbbb \
+#     --set oci.image=ocid1.image.oc1..cccc \
+#     --set-file offerings.content=offerings.eu-frankfurt-1.json
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-oracle-cloud
+  tag: ""            # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Number of replicas. Keep at 1 per region: the provider holds region-scoped
+# state and is the single CapacityProvider process for its region.
+replicaCount: 1
+
+# --- core provider config ---------------------------------------------------
+# OCI region identifier (required for the real backend; sets --region), e.g.
+# eu-frankfurt-1.
+region: ""
+# HostRef provider label (--provider), e.g. oci-eu-frankfurt-1.
+provider: ""
+# OCI backend mode: auto | oci | fake (--oci-backend). auto = oci when both region
+# and compartment are set, else fake.
+ociBackend: auto
+
+ports:
+  # gRPC CapacityProvider (--addr).
+  grpc: 9000
+  # /metrics, /healthz, /readyz (--metrics-addr).
+  metrics: 9090
+
+# --- OCI launch parameters (oci backend) ------------------------------------
+oci:
+  compartment: ""               # --compartment (compartment OCID), REQUIRED for the real backend
+  subnet: ""                    # --subnet (subnet OCID for LaunchInstance)
+  image: ""                     # --image (base image OCID for LaunchInstance)
+  # Auth: instance_principal | workload_identity | config_file | auto.
+  # Production on OKE/OCI uses instance_principal or workload_identity (no key
+  # files). config_file uses a mounted ~/.oci/config Secret (see credentials.useConfigFile).
+  auth: auto
+  bootstrapHook: /opt/bigfleet/bootstrap   # --bootstrap-hook
+  adA: ""                       # --ad-a (first availability domain for default offerings)
+  adB: ""                       # --ad-b (second availability domain for default offerings)
+  seedCount: 32                 # --seed-count (default offerings size)
+
+# --- offerings --------------------------------------------------------------
+# When content is set, it is rendered into a ConfigMap, mounted, and passed via
+# --offerings. Use --set-file offerings.content=offerings.json on install.
+offerings:
+  content: ""
+
+# Optional generic pre-binding cloud-init baked into LaunchInstance user_data
+# (--base-user-data). Same mechanism as offerings: set content to enable.
+baseUserData:
+  content: ""
+
+# Optional override of the embedded price table. When content is set it is mounted
+# and passed via --prices-file; otherwise the binary's embedded prices.yaml is used.
+prices:
+  content: ""
+
+# --- credentials (config-file / API-key path) -------------------------------
+# Production on OKE uses Instance Principals or Workload Identity — no Secret. For
+# non-OKE clusters that cannot use those, mount a ~/.oci/config + signing key as a
+# Secret and set oci.auth=config_file. The Secret must contain a 'config' key (and
+# the referenced key file). It is mounted read-only at /home/nonroot/.oci.
+credentials:
+  useConfigFile: false
+  secretName: ""                # Secret holding the OCI config + signing key
+
+# --- background loops -------------------------------------------------------
+reconcileInterval: 2m           # --reconcile-interval
+
+# --- durable state ----------------------------------------------------------
+# When enabled, --state points at a file on a PersistentVolume so fence marks,
+# the idempotency map, inventory, and bindings survive restarts.
+state:
+  enabled: false
+  path: /var/lib/bigfleet-oracle-cloud/state.json
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+
+# --- TLS / mTLS -------------------------------------------------------------
+# Provide a Secret with tls.crt + tls.key (and optionally ca.crt for mTLS).
+# When ca.crt is present the provider requires + verifies client certs (mTLS).
+tls:
+  enabled: false
+  secretName: ""                 # Secret holding tls.crt, tls.key, [ca.crt]
+  mtls: false                   # mount ca.crt and pass --tls-ca
+
+# --- gRPC reflection (--reflection) -----------------------------------------
+reflection: true
+
+# Extra raw flags appended verbatim to the args.
+extraArgs: []
+
+# --- ServiceAccount ---------------------------------------------------------
+# For OKE Workload Identity, no annotation is needed beyond running the pod under
+# this ServiceAccount and granting the dynamic group access (see deploy/iam).
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# --- Service ----------------------------------------------------------------
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Scrape annotations added to the Service for the metrics port.
+metrics:
+  prometheusScrape: true
+
+# --- pod scheduling / resources ---------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# Hardened defaults to match the distroless/static:nonroot image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
