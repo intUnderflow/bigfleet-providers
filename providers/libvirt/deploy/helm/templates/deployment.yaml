@@ -127,8 +127,12 @@ spec:
               readOnly: true
             {{- end }}
             {{- if .Values.credentials.tls.secretName }}
+            # The TLS Secret carries clientcert.pem, clientkey.pem, cacert.pem in
+            # one flat dir; reference it from each qemu+tls:// URI with
+            # ?pkipath=/etc/bigfleet/libvirt-tls (go-libvirt's TLS dialer reads all
+            # three from the pkipath dir).
             - name: libvirt-tls
-              mountPath: /etc/pki/libvirt
+              mountPath: /etc/bigfleet/libvirt-tls
               readOnly: true
             {{- end }}
             {{- if .Values.credentials.hostSocket.enabled }}

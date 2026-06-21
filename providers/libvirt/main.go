@@ -156,7 +156,9 @@ func run() error {
 	}
 	defer func() { _ = store.Close() }()
 
-	srv, err := providerkit.New(backend, store, providerkit.Options{
+	// A pure bare-metal pool registers without Deleter (Delete -> Unimplemented);
+	// any on-demand capacity keeps Delete.
+	srv, err := providerkit.New(selectBackend(backend), store, providerkit.Options{
 		// Multi-host provider: require a zone (libvirt host) on every machine.
 		RequireZone: true,
 		Logger:      logger,

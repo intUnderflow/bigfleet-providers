@@ -309,3 +309,47 @@ var (
 	_ providerkit.Backend = (*libvirtBackend)(nil)
 	_ providerkit.Deleter = (*libvirtBackend)(nil)
 )
+
+// allBareMetal reports whether every configured offering is bare_metal — a fixed
+// free pool of owned hardware that is never torn down.
+func (b *libvirtBackend) allBareMetal() bool {
+	for _, off := range b.offerings {
+		c, _ := off.capacityType() // validated in newLibvirtBackend
+		if c != providerkit.CapacityBareMetal {
+			return false
+		}
+	}
+	return len(b.offerings) > 0
+}
+
+// selectBackend returns the backend to register with the kit. A pure bare-metal
+// pool (every offering bare_metal) is wrapped so it does NOT advertise Deleter —
+// the kit then answers Delete with codes.Unimplemented, the free-pool semantics
+// the bare-metal conformance profile requires and the docs promise (owned VMs
+// are never destroyed). Any on-demand capacity keeps the real Deleter.
+func selectBackend(b *libvirtBackend) providerkit.Backend {
+	if b.allBareMetal() {
+		return freePoolBackend{inner: b}
+	}
+	return b
+}
+
+// freePoolBackend wraps libvirtBackend but deliberately does NOT expose
+// DeleteInstance (inner is a named field, so the method is not promoted), so it
+// is a providerkit.Backend but not a providerkit.Deleter.
+type freePoolBackend struct{ inner *libvirtBackend }
+
+func (m freePoolBackend) Describe(ctx context.Context) ([]providerkit.Instance, error) {
+	return m.inner.Describe(ctx)
+}
+func (m freePoolBackend) CreateInstance(ctx context.Context, req providerkit.CreateInstanceRequest) (providerkit.CreateInstanceResult, error) {
+	return m.inner.CreateInstance(ctx, req)
+}
+func (m freePoolBackend) ConfigureInstance(ctx context.Context, req providerkit.ConfigureInstanceRequest) error {
+	return m.inner.ConfigureInstance(ctx, req)
+}
+func (m freePoolBackend) DrainInstance(ctx context.Context, req providerkit.DrainInstanceRequest) error {
+	return m.inner.DrainInstance(ctx, req)
+}
+
+var _ providerkit.Backend = freePoolBackend{}

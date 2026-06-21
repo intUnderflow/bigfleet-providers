@@ -97,10 +97,15 @@ kubectl -n bigfleet create secret generic bigfleet-libvirt-tls \
 ```yaml
 credentials:
   tls:
-    secretName: bigfleet-libvirt-tls   # mounted where libvirt looks: /etc/pki/libvirt
+    secretName: bigfleet-libvirt-tls   # mounted flat at /etc/bigfleet/libvirt-tls
 ```
 
-`--connect` URIs are then `rack1=qemu+tls://host-a/system`. The host-side
+`--connect` URIs are then
+`rack1=qemu+tls://host-a/system?pkipath=/etc/bigfleet/libvirt-tls`. The
+`?pkipath=` points go-libvirt's TLS dialer at the directory holding
+`clientcert.pem`, `clientkey.pem`, and `cacert.pem` — required because the Secret
+is mounted flat there rather than at libvirt's default split locations
+(`/etc/pki/libvirt/`, `/etc/pki/libvirt/private/`, `/etc/pki/CA/`). The host-side
 `tls_allowed_dn_list` and the polkit rule together scope what the client may do.
 See [`deploy/host-setup/`](https://github.com/intUnderflow/bigfleet-providers/tree/main/providers/libvirt/deploy/host-setup)
 for the `certtool` and `libvirtd.conf` steps.

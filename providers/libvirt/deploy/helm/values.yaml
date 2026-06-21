@@ -82,8 +82,9 @@ credentials:
   ssh:
     secretName: ""              # Secret holding the SSH private key (and optional known_hosts)
     secretKey: id_ed25519
-  # libvirt client TLS for qemu+tls:// connections. Mounted at /etc/pki/libvirt
-  # and /etc/pki/CA where libvirt looks for them.
+  # libvirt client TLS for qemu+tls:// connections. Mounted flat at
+  # /etc/bigfleet/libvirt-tls; point each qemu+tls:// URI at it with
+  # ?pkipath=/etc/bigfleet/libvirt-tls.
   tls:
     secretName: ""              # Secret holding clientcert.pem, clientkey.pem, cacert.pem
   # Local socket access for qemu:///system: bind-mount the host libvirt socket.

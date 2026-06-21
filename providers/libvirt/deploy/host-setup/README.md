@@ -72,6 +72,11 @@ client certificate DN:
 3. As in Model A, pre-create the `--storage-pool` and `--network` and stage the
    golden base image.
 
+The provider mounts the client cert/key + CA flat in the
+`bigfleet-libvirt-tls` Secret and references it from each `--connect` URI with
+`?pkipath=/etc/bigfleet/libvirt-tls`, e.g.
+`rack1=qemu+tls://host-a/system?pkipath=/etc/bigfleet/libvirt-tls`.
+
 The client DN allow-list is the least-privilege boundary: only a client
 presenting that exact certificate may connect, and polkit (Model A's rule applies
 to the resulting session too) scopes what it can do.

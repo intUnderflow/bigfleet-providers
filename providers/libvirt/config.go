@@ -130,13 +130,13 @@ func isBareURI(s string) bool {
 	return strings.Contains(s[:eq], ":")
 }
 
-// validateConnectURI rejects an SSH (libssh/ssh) connect URI that would silently
-// turn OFF host-key verification — so a misconfiguration can't quietly open a
-// MITM window on the cluster-join material delivered over the connection.
-// Non-SSH transports (local socket, tcp, tls) carry no SSH host key, so they
-// pass. Strict verification (known_hosts_verify=normal, the default) and
-// trust-on-first-use (auto) are allowed; only the verification-disabling
-// settings are refused.
+// validateConnectURI rejects a connect URI that would silently turn OFF the
+// transport's peer verification — so a misconfiguration can't quietly open a
+// MITM window on the cluster-join material delivered over the connection. For
+// SSH (libssh/ssh) that means rejecting known_hosts_verify=ignore and no_verify;
+// for TLS it means rejecting no_verify (which sets InsecureSkipVerify). Strict
+// verification and SSH trust-on-first-use (auto) are allowed; the local socket
+// and tcp transports carry no peer identity, so they pass.
 func validateConnectURI(uri string) error {
 	u, err := url.Parse(uri)
 	if err != nil {
@@ -146,20 +146,26 @@ func validateConnectURI(uri string) error {
 	if parts := strings.SplitN(u.Scheme, "+", 2); len(parts) == 2 {
 		transport = parts[1]
 	}
+	q := u.Query()
 	switch transport {
 	case "ssh", "libssh", "libssh2":
-	default:
-		return nil // not an SSH transport — no host key to verify
-	}
-	q := u.Query()
-	if v := q.Get("known_hosts_verify"); v == "ignore" {
-		return fmt.Errorf("--connect URI %q disables SSH host-key verification (known_hosts_verify=ignore); use 'normal' (the default, strict against known_hosts) or 'auto'", uri)
-	}
-	if v := q.Get("no_verify"); v != "" && v != "0" {
-		return fmt.Errorf("--connect URI %q sets no_verify, disabling SSH host-key verification; remove it", uri)
+		if q.Get("known_hosts_verify") == "ignore" {
+			return fmt.Errorf("--connect URI %q disables SSH host-key verification (known_hosts_verify=ignore); use 'normal' (the default, strict against known_hosts) or 'auto'", uri)
+		}
+		if noVerifyTruthy(q.Get("no_verify")) {
+			return fmt.Errorf("--connect URI %q sets no_verify, disabling SSH host-key verification; remove it", uri)
+		}
+	case "tls":
+		if noVerifyTruthy(q.Get("no_verify")) {
+			return fmt.Errorf("--connect URI %q sets no_verify, disabling TLS server-certificate verification; remove it", uri)
+		}
 	}
 	return nil
 }
+
+// noVerifyTruthy reports whether a libvirt "no_verify" query value is enabled
+// (go-libvirt treats any non-zero integer as on).
+func noVerifyTruthy(v string) bool { return v != "" && v != "0" }
 
 // zones returns the sorted zone names across a set of host connections.
 func zonesOf(conns []hostConn) []string {

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
@@ -336,6 +338,53 @@ func TestNewLibvirtBackend_RejectsNonPositiveCount(t *testing.T) {
 	}
 }
 
+// A pure bare-metal pool must answer Delete with Unimplemented (free-pool: owned
+// VMs are never destroyed), while the default on-demand pool implements Delete.
+func TestBareMetalPool_DeleteUnimplemented(t *testing.T) {
+	catalog := newInstanceCatalog(nil)
+	pr := newPricing(catalog, 0, 0, nil)
+	bm := []offering{{InstanceType: "kvm.small", Zone: "rack1", Capacity: "bare_metal", Count: 2, Resources: map[string]string{"cpu": "1"}}}
+	b, err := newLibvirtBackend("libvirt-bm", "img", newLibvirtFake(), bm, catalog, pr, nil, quietLogger())
+	if err != nil {
+		t.Fatalf("newLibvirtBackend(bare_metal): %v", err)
+	}
+	if !b.allBareMetal() {
+		t.Fatal("allBareMetal() = false for an all-bare_metal pool")
+	}
+	if _, ok := selectBackend(b).(providerkit.Deleter); ok {
+		t.Fatal("bare-metal backend must not advertise Deleter")
+	}
+	s, err := providerkit.New(selectBackend(b), providerkit.NewMemStore(), providerkit.Options{RequireZone: true, Logger: quietLogger()})
+	if err != nil {
+		t.Fatalf("providerkit.New: %v", err)
+	}
+	resp, _ := s.List(context.Background(), &pb.ListFilter{MaxResults: 1})
+	id := resp.GetMachines()[0].GetId()
+	if _, err := s.Delete(context.Background(), &pb.DeleteRequest{MachineId: id}); status.Code(err) != codes.Unimplemented {
+		t.Errorf("bare-metal Delete code = %v, want Unimplemented", status.Code(err))
+	}
+
+	// The default on-demand backend keeps Delete.
+	on := []offering{{InstanceType: "kvm.small", Zone: "rack1", Capacity: "on_demand", Count: 1, Resources: map[string]string{"cpu": "1"}}}
+	ob, _ := newLibvirtBackend("libvirt-od", "img", newLibvirtFake(), on, catalog, pr, nil, quietLogger())
+	if _, ok := selectBackend(ob).(providerkit.Deleter); !ok {
+		t.Error("on-demand backend must advertise Deleter")
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"abc", "'abc'"},
+		{"a b", "'a b'"},
+		{"a'b", `'a'\''b'`},
+		{"$(rm -rf /)", "'$(rm -rf /)'"},
+	} {
+		if got := shellQuote(c.in); got != c.want {
+			t.Errorf("shellQuote(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestCallCtx(t *testing.T) {
 	// fn completes before ctx is cancelled -> its result is returned.
 	v, err := callCtx(context.Background(), func() (int, error) { return 7, nil })
@@ -378,22 +427,24 @@ func TestSplitHostRef(t *testing.T) {
 }
 
 func TestValidateConnectURI(t *testing.T) {
-	// Disabling host-key verification is rejected for SSH transports.
+	// Disabling peer verification is rejected for SSH and TLS transports.
 	for _, bad := range []string{
 		"qemu+libssh://h/system?known_hosts_verify=ignore",
 		"qemu+libssh://h/system?no_verify=1",
 		"qemu+ssh://h/system?no_verify=1",
+		"qemu+tls://h/system?no_verify=1", // TLS InsecureSkipVerify must not be silently enabled
 	} {
 		if err := validateConnectURI(bad); err == nil {
-			t.Errorf("expected %q to be rejected (host-key verification disabled)", bad)
+			t.Errorf("expected %q to be rejected (peer verification disabled)", bad)
 		}
 	}
-	// Strict / TOFU / explicit-normal and non-SSH transports are accepted.
+	// Strict / TOFU / explicit-normal and verifying transports are accepted.
 	for _, ok := range []string{
 		"qemu+libssh://h/system?keyfile=/k&known_hosts=/kh&known_hosts_verify=normal",
 		"qemu+libssh://h/system?known_hosts_verify=auto",
 		"qemu:///system",
-		"qemu+tls://h/system",
+		"qemu+tls://h/system?pkipath=/etc/bigfleet/libvirt-tls",
+		"qemu+tls://h/system?no_verify=0",
 	} {
 		if err := validateConnectURI(ok); err != nil {
 			t.Errorf("expected %q to be accepted, got %v", ok, err)

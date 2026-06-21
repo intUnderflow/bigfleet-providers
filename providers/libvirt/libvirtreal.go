@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -342,13 +343,25 @@ func (r *libvirtReal) findByMachineID(c *hostConnection, machineID string) (libv
 func (r *libvirtReal) deleteVolumes(c *hostConnection, name string) {
 	pool, err := c.lv.StoragePoolLookupByName(r.cfg.StoragePool)
 	if err != nil {
+		if r.logger != nil {
+			r.logger.Warn("volume cleanup: storage pool lookup failed", "pool", r.cfg.StoragePool, "err", err)
+		}
 		return
 	}
 	for _, vol := range []string{name + "-overlay.qcow2", name + "-cidata.iso"} {
-		if v, err := c.lv.StorageVolLookupByName(pool, vol); err == nil {
-			if derr := c.lv.StorageVolDelete(v, 0); derr != nil && r.logger != nil {
-				r.logger.Warn("delete volume", "volume", vol, "err", derr)
+		v, err := c.lv.StorageVolLookupByName(pool, vol)
+		if err != nil {
+			// An already-gone volume (ERR_NO_STORAGE_VOL) is the expected nothing-
+			// to-do case; any other lookup error is logged so a transient failure
+			// leaving an orphaned volume is at least visible (cleanup is
+			// best-effort and must not fail the surrounding operation).
+			if !isStorageVolNotFound(err) && r.logger != nil {
+				r.logger.Warn("volume cleanup: lookup failed (possible orphan)", "volume", vol, "err", err)
 			}
+			continue
+		}
+		if derr := c.lv.StorageVolDelete(v, 0); derr != nil && r.logger != nil {
+			r.logger.Warn("volume cleanup: delete failed", "volume", vol, "err", derr)
 		}
 	}
 }
@@ -361,12 +374,14 @@ func (r *libvirtReal) DescribeManaged(_ context.Context) ([]domainInstance, erro
 			return nil, fmt.Errorf("list domains in zone %q: %w", zone, err)
 		}
 		for _, dom := range domains {
-			// Skip non-bigfleet domains before probing state, so an unrelated
-			// VM's transient state blip can't fail our reconcile.
-			if mid, _ := r.readMetadata(c, dom); mid == "" {
+			// Read metadata once: skip non-bigfleet domains before probing state
+			// (so an unrelated VM's transient state blip can't fail our reconcile),
+			// and reuse it for the view rather than re-reading it.
+			machineID, clusterID := r.readMetadata(c, dom)
+			if machineID == "" {
 				continue
 			}
-			view, err := r.domainView(c, dom)
+			view, err := r.domainViewMeta(c, dom, machineID, clusterID)
 			if err != nil {
 				return nil, fmt.Errorf("inspect managed domain %s in zone %q: %w", dom.Name, zone, err)
 			}
@@ -449,11 +464,18 @@ func (r *libvirtReal) Close() error {
 // --- helpers --------------------------------------------------------------
 
 // domainView builds the substrate view of a domain from its libvirt identity +
-// bigfleet metadata. A DomainGetState failure is surfaced (not swallowed into
-// running=false), so a transient RPC error never mislabels a live domain as
-// not-running.
+// bigfleet metadata.
 func (r *libvirtReal) domainView(c *hostConnection, dom libvirt.Domain) (domainInstance, error) {
 	machineID, clusterID := r.readMetadata(c, dom)
+	return r.domainViewMeta(c, dom, machineID, clusterID)
+}
+
+// domainViewMeta builds the view from already-read metadata (so callers that
+// have just read it — e.g. DescribeManaged's managed-domain filter — don't pay a
+// second DomainGetMetadata RPC). A DomainGetState failure is surfaced (not
+// swallowed into running=false), so a transient RPC error never mislabels a live
+// domain as not-running.
+func (r *libvirtReal) domainViewMeta(c *hostConnection, dom libvirt.Domain, machineID, clusterID string) (domainInstance, error) {
 	state, _, err := c.lv.DomainGetState(dom, 0)
 	if err != nil {
 		return domainInstance{}, fmt.Errorf("get state of domain %s: %w", dom.Name, err)
@@ -503,12 +525,15 @@ func (r *libvirtReal) setMetadata(c *hostConnection, dom libvirt.Domain, machine
 // so an EXIT trap removes it (best-effort `rm -f`, not a secure wipe) whether the
 // hook succeeds or fails, so it is not left lying around in the guest afterward.
 func (r *libvirtReal) guestWriteAndRun(ctx context.Context, c *hostConnection, dom libvirt.Domain, blob []byte, clusterID string) error {
+	// The cluster id is shard-supplied; single-quote it (and the base64 blob) for
+	// /bin/sh so it can't break out of or inject into the script. (%q is Go
+	// quoting, NOT shell-safe.)
 	script := fmt.Sprintf(
 		"set -e; umask 077; mkdir -p /opt/bigfleet; "+
 			"trap 'rm -f /opt/bigfleet/bootstrap.blob' EXIT; "+
-			"printf '%%s' %q | base64 -d > /opt/bigfleet/bootstrap.blob; "+
-			"/opt/bigfleet/bootstrap %q",
-		base64.StdEncoding.EncodeToString(blob), clusterID)
+			"printf '%%s' %s | base64 -d > /opt/bigfleet/bootstrap.blob; "+
+			"/opt/bigfleet/bootstrap %s",
+		shellQuote(base64.StdEncoding.EncodeToString(blob)), shellQuote(clusterID))
 	return r.guestExec(ctx, c, dom, script)
 }
 
@@ -555,7 +580,8 @@ func (r *libvirtReal) guestExec(ctx context.Context, c *hostConnection, dom libv
 		}
 		if st.Exited {
 			if st.ExitCode != 0 {
-				return fmt.Errorf("guest command exited %d: %s", st.ExitCode, decodeAgentData(st.ErrData))
+				return fmt.Errorf("guest command exited %d (stderr: %s) (stdout: %s)",
+					st.ExitCode, decodeAgentData(st.ErrData), decodeAgentData(st.OutData))
 			}
 			return nil
 		}
@@ -571,6 +597,7 @@ func (r *libvirtReal) guestExec(ctx context.Context, c *hostConnection, dom libv
 type guestExecStatus struct {
 	Exited   bool   `json:"exited"`
 	ExitCode int    `json:"exitcode"`
+	OutData  string `json:"out-data"` // base64, present only when capture-output was set
 	ErrData  string `json:"err-data"` // base64, present only when capture-output was set
 }
 
@@ -682,6 +709,22 @@ func optString(s string) libvirt.OptString {
 
 func uuidString(u libvirt.UUID) string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
+}
+
+// isStorageVolNotFound reports whether err is libvirt's ERR_NO_STORAGE_VOL
+// (go-libvirt's IsNotFound only covers ERR_NO_DOMAIN).
+func isStorageVolNotFound(err error) bool {
+	var lerr libvirt.Error
+	if errors.As(err, &lerr) {
+		return lerr.Code == uint32(libvirt.ErrNoStorageVol)
+	}
+	return false
+}
+
+// shellQuote single-quotes a string for safe interpolation into a /bin/sh
+// command, so an opaque/shard-supplied value can't break out of the script.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 var _ libvirtClient = (*libvirtReal)(nil)
