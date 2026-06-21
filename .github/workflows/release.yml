@@ -2,41 +2,77 @@ name: Release
 
 # Triggered by the ROOT module tag (vX.Y.Z). Submodule tags like
 # providers/aws/vX.Y.Z don't start with "v", so they never trigger this.
+# A release builds + publishes EVERY provider (image + chart) at the tag version
+# and gates on a full conformance certification of each.
 on:
   push:
     tags: ["v*.*.*"]
 
 permissions:
   contents: write # create the GitHub Release
-  packages: write # push image + chart to ghcr.io
+  packages: write # push images + charts to ghcr.io
 
 jobs:
-  # Gate the release on a full conformance certification (all 92 behaviors). The
-  # runner exits non-zero unless the verdict is CERTIFIED, so a regression blocks
-  # the release.
-  certify:
+  # Discover every shippable provider (has a Dockerfile) -> matrix for the jobs
+  # below. Auto-discovered so a new provider is released with no workflow edit.
+  providers:
     runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: list
+        run: |
+          names=$(for d in providers/*/; do
+            n=$(basename "$d")
+            [ "$n" = "_template" ] && continue
+            [ -f "providers/$n/deploy/Dockerfile" ] && echo "$n"
+          done | jq -R . | jq -cs .)
+          echo "list=$names" >> "$GITHUB_OUTPUT"
+          echo "releasing providers: $names"
+
+  # Gate the release on full conformance certification (all 92 behaviors) of
+  # EVERY provider. The runner exits non-zero unless the verdict is CERTIFIED, so
+  # a regression in any provider blocks the whole release.
+  certify:
+    needs: providers
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: ${{ fromJSON(needs.providers.outputs.list) }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
           go-version-file: conformance/go.mod
           cache-dependency-path: conformance/go.sum
-      - name: Full conformance certification (baseline + every lane)
+      - name: Certify ${{ matrix.provider }} (baseline + every lane)
         env:
           BFCONF_SCALE_SEED: "4000"
           BFCONF_SOAK: "5s"
         run: |
-          make report-aws \
-            PROFILE=core,cloud,spot,fault,durable,scale \
-            OUT="$GITHUB_WORKSPACE/release-report"
+          if [ -f "providers/${{ matrix.provider }}/.ci-no-conformance" ]; then
+            echo "providers/${{ matrix.provider }} opts out of credential-free certification"
+            exit 0
+          fi
+          GOWORK=off go -C conformance run ./cmd/bfconformance -provider ${{ matrix.provider }} \
+            -profile core,cloud,spot,fault,durable,scale \
+            -out "$GITHUB_WORKSPACE/release-report/${{ matrix.provider }}"
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
-          name: conformance-report
-          path: release-report
+          name: conformance-report-${{ matrix.provider }}
+          path: release-report/${{ matrix.provider }}
+          if-no-files-found: ignore
 
   image:
+    needs: providers
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: ${{ fromJSON(needs.providers.outputs.list) }}
     steps:
       - uses: actions/checkout@v5
       - uses: docker/login-action@v4
@@ -47,33 +83,40 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/intunderflow/bigfleet-aws
+          images: ghcr.io/intunderflow/bigfleet-${{ matrix.provider }}
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
-      - name: Build + push the AWS provider image
+      - name: Build + push the ${{ matrix.provider }} provider image
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: providers/aws/deploy/Dockerfile
+          file: providers/${{ matrix.provider }}/deploy/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
   helm:
+    needs: providers
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: ${{ fromJSON(needs.providers.outputs.list) }}
     steps:
       - uses: actions/checkout@v5
       - uses: azure/setup-helm@v5
-      - name: Package + push the Helm chart (OCI)
+      - name: Package + push the ${{ matrix.provider }} chart (OCI), versioned by the tag
         run: |
+          ver="${GITHUB_REF_NAME#v}"
           mkdir -p /tmp/charts
-          helm package providers/aws/deploy/helm --destination /tmp/charts
+          helm package "providers/${{ matrix.provider }}/deploy/helm" \
+            --version "$ver" --app-version "$ver" --destination /tmp/charts
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm push /tmp/charts/*.tgz oci://ghcr.io/intunderflow/charts
       - uses: actions/upload-artifact@v7
         with:
-          name: helm-chart
+          name: helm-chart-${{ matrix.provider }}
           path: /tmp/charts/*.tgz
 
   release:
@@ -81,23 +124,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      # Only the conformance report is fetched cross-job (one named artifact,
-      # not "all" — that download is flaky). The chart is re-packaged locally for
-      # the release asset; it is already published to the OCI registry by `helm`.
+      # Gather every provider's packaged chart as release assets (charts are
+      # uniquely named bigfleet-<provider>-<ver>.tgz, so they don't collide).
       - uses: actions/download-artifact@v8
         with:
-          name: conformance-report
-          path: report
-      - uses: azure/setup-helm@v5
-      - run: helm package providers/aws/deploy/helm --destination charts
+          pattern: helm-chart-*
+          path: charts
+          merge-multiple: true
+      - name: Release notes = the latest CHANGELOG section
+        run: awk '/^## /{n++} n==1{print} n==2{exit}' CHANGELOG.md > RELEASE_NOTES.md
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
-          body_path: CHANGELOG.md
+          body_path: RELEASE_NOTES.md
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
-            report/report.json
-            report/junit.xml
-            report/badge.json
             charts/*.tgz

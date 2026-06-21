@@ -9,8 +9,11 @@ convention. A release tags every module at the **same** version.
 | Module | Import path | Tag for version `vX.Y.Z` |
 |---|---|---|
 | providerkit (root) | `github.com/intUnderflow/bigfleet-providers` | `vX.Y.Z` |
-| AWS provider | `github.com/intUnderflow/bigfleet-providers/providers/aws` | `providers/aws/vX.Y.Z` |
+| Each provider | `github.com/intUnderflow/bigfleet-providers/providers/<name>` | `providers/<name>/vX.Y.Z` |
 | Conformance | `github.com/intUnderflow/bigfleet-providers/conformance` | `conformance/vX.Y.Z` |
+
+Providers (`<name>`): `aws`, `azure`, `digitalocean`, `gcp`, `hetzner`,
+`libvirt`, `oracle-cloud`, `ovhcloud`, `scaleway`.
 
 The root module is **providerkit** — the shared correctness library every
 provider builds on. It carries no `replace` directives, so external providers
@@ -26,31 +29,42 @@ ignored by external consumers.
 
 ## Cutting a release
 
-1. Make sure `main` is green (including the `certify-full` job — all 92
-   conformance behaviors).
-2. Update `CHANGELOG.md` with the new version.
-3. Bump `providers/aws/deploy/helm/Chart.yaml` `version` + `appVersion` if the
-   chart or image changed.
-4. Confirm the bigfleet proto pin is identical across modules:
+1. Make sure `main` is green (the `ci-ok` gate — every provider's `certify` lane
+   passes all 92 conformance behaviors credential-free).
+2. Update `CHANGELOG.md` with the new version (its top `## vX.Y.Z` section
+   becomes the GitHub Release notes).
+3. Confirm the bigfleet proto pin is identical across modules:
    `make check-bigfleet-pin`.
-5. Tag every module at the same version and push the tags together:
+4. Tag every module at the same version and push the tags together. Charts and
+   images are versioned by the tag (no `Chart.yaml` bump needed):
 
    ```sh
-   v=v0.1.0
-   git tag "$v" "providers/aws/$v" "conformance/$v"
-   git push origin "$v" "providers/aws/$v" "conformance/$v"
+   v=v0.2.0
+   # root (providerkit) + conformance + every provider module
+   tags=("$v" "conformance/$v")
+   for d in providers/*/; do
+     n=$(basename "$d"); [ "$n" = "_template" ] && continue
+     tags+=("providers/$n/$v")
+   done
+   git tag "${tags[@]}"
+   git push origin "${tags[@]}"
    ```
 
 Pushing the **root** tag (`vX.Y.Z`) triggers `.github/workflows/release.yml`,
-which:
+which builds and publishes **every** provider (auto-discovered) and:
 
-- runs the **full conformance certification** (`make report-aws` over all
-  profiles) and fails the release unless the verdict is `CERTIFIED`;
-- builds and pushes the AWS provider image to
-  `ghcr.io/intunderflow/bigfleet-aws:vX.Y.Z` (+ `:latest`);
-- packages the Helm chart and pushes it to `oci://ghcr.io/intunderflow/charts`;
-- creates the GitHub Release, attaching the conformance `report.json`,
-  `junit.xml`, and the conformance `badge.json`.
+- runs a **full conformance certification** of each provider over all profiles
+  and fails the release unless every verdict is `CERTIFIED`;
+- builds and pushes each provider image to
+  `ghcr.io/intunderflow/bigfleet-<name>:vX.Y.Z` (+ `:latest`);
+- packages each Helm chart at the tag version and pushes it to
+  `oci://ghcr.io/intunderflow/charts` (e.g. `bigfleet-aws`);
+- creates the GitHub Release, attaching every provider's packaged chart and
+  using the latest `CHANGELOG.md` section as the notes.
+
+> Note: every green check certifies against the **credential-free** conformance
+> suite (the fake backend); a provider's real-cloud path is operator-verified,
+> not exercised in CI. Release notes should say so.
 
 ## Versioning policy
 
