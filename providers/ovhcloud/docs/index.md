@@ -1,6 +1,6 @@
 ---
 title: OVHcloud Public Cloud provider
-description: Provision OVHcloud Public Cloud (OpenStack) capacity for your BigFleet fleet. Deploy one process per region with the Helm chart and container image, scaled in and out automatically.
+description: Provision OVHcloud Public Cloud (OpenStack) capacity for your BigFleet fleet. Deploy one process per region with the Helm chart and container image; it grows and shrinks your fleet's capacity automatically.
 sidebar:
   order: 0
   label: OVHcloud overview

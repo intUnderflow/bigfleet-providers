@@ -462,7 +462,12 @@ func (r *ovhReal) toServerInstance(srv *servers.Server) serverInstance {
 // failed — callers relying on it for Create idempotency MUST treat that error as
 // "unknown, do not create" rather than "no server exists".
 func (r *ovhReal) serverByName(ctx context.Context, name string) (*servers.Server, error) {
-	pages, err := servers.List(r.compute, servers.ListOpts{Name: "^" + regexp.QuoteMeta(name) + "$"}).AllPages(ctx)
+	// Nova's `name` filter is a regex in some deployments and a plain
+	// substring/literal match in others, so pass the RAW name (an anchored
+	// `^...$` regex returns zero rows where it isn't treated as a regex) and rely
+	// on the explicit equality check below for exactness. A substring match may
+	// return extra rows; we pick the exact one.
+	pages, err := servers.List(r.compute, servers.ListOpts{Name: name}).AllPages(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list servers by name %s: %w", name, err)
 	}

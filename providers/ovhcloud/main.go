@@ -53,7 +53,7 @@ func run() error {
 		regionB     = flag.String("region-b", "", "second region for default offerings (default: SBG)")
 		statePath   = flag.String("state", "", "durable state file (empty = in-memory only)")
 
-		image        = flag.String("image", "", "base image name/id for server create (ovh backend)")
+		image        = flag.String("image", "", "base image id (UUID) for server create (ovh backend)")
 		keyName      = flag.String("key-name", "", "OpenStack keypair name injected for SSH access (ovh backend)")
 		network      = flag.String("network", "Ext-Net", "OpenStack network name/id to attach (ovh backend; empty = project default)")
 		eurUSD       = flag.Float64("eur-usd", defaultEURtoUSD, "EUR->USD conversion rate applied to OVH prices")
