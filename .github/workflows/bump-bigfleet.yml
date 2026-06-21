@@ -1,0 +1,56 @@
+name: Bump bigfleet pin
+
+# The whole repo pins one bigfleet proto commit (the root module is the source of
+# truth; submodules are kept in lockstep). If the pin drifts far behind and
+# bigfleet force-pushes main, the pinned commit can be orphaned and the build
+# breaks (this happened once). This weekly job bumps the pin to the latest
+# bigfleet main across every module and opens a PR, so the pin stays fresh and
+# the bump is CI-validated before it lands.
+on:
+  schedule:
+    - cron: "0 7 * * 1" # weekly, Monday 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: bump-bigfleet
+  cancel-in-progress: true
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Bump bigfleet to latest main across all modules
+        run: |
+          go get github.com/intUnderflow/bigfleet@main
+          go mod tidy
+          make sync-bigfleet
+          make check-bigfleet-pin
+      - name: Open a PR if the pin moved
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: bump bigfleet pin to latest main"
+          title: "chore: bump bigfleet pin to latest main"
+          body: |
+            Automated weekly bump of the `github.com/intUnderflow/bigfleet` pin to
+            the latest `main`, synced across every module (`make sync-bigfleet`)
+            and checked consistent (`make check-bigfleet-pin`). Keeps the pin fresh
+            so a bigfleet force-push can't orphan a stale commit and break the build.
+
+            CI on this PR is dispatched by the `rekick-stale-prs` workflow (a
+            GITHUB_TOKEN-opened PR doesn't auto-trigger it).
+
+            > 🤖 Opened by the scheduled `bump-bigfleet` workflow.
+          branch: chore/bump-bigfleet
+          base: main
+          author: intUnderflow <12126251+intUnderflow@users.noreply.github.com>
+          committer: intUnderflow <12126251+intUnderflow@users.noreply.github.com>
+          delete-branch: true

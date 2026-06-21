@@ -1,0 +1,64 @@
+name: Nightly conformance
+
+# The per-PR `certify` lane runs a light scale/soak (seed 4000, soak 5s) to keep
+# PRs fast. This runs the full conformance suite for every provider nightly at a
+# heavier scale and longer soak, so slow/flaky regressions that the light lane
+# can miss surface on a schedule rather than in production. Credential-free (the
+# fake backend), like all conformance here.
+on:
+  schedule:
+    - cron: "0 6 * * *" # daily, 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-conformance
+  cancel-in-progress: true
+
+jobs:
+  providers:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: list
+        run: |
+          names=$(for d in providers/*/; do
+            n=$(basename "$d")
+            [ "$n" = "_template" ] && continue
+            [ -f "providers/$n/.ci-no-conformance" ] && continue
+            echo "$n"
+          done | jq -R . | jq -cs .)
+          echo "list=$names" >> "$GITHUB_OUTPUT"
+          echo "nightly conformance for: $names"
+
+  certify:
+    needs: providers
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: ${{ fromJSON(needs.providers.outputs.list) }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: conformance/go.mod
+          cache-dependency-path: conformance/go.sum
+      - name: Certify ${{ matrix.provider }} at nightly scale
+        env:
+          BFCONF_SCALE_SEED: "20000"
+          BFCONF_SOAK: "60s"
+        run: |
+          GOWORK=off go -C conformance run ./cmd/bfconformance -provider ${{ matrix.provider }} \
+            -profile core,cloud,spot,fault,durable,scale \
+            -out "$GITHUB_WORKSPACE/report/${{ matrix.provider }}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: nightly-report-${{ matrix.provider }}
+          path: report/${{ matrix.provider }}
+          if-no-files-found: ignore
