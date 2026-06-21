@@ -17,8 +17,8 @@ jobs:
   certify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: conformance/go.mod
           cache-dependency-path: conformance/go.sum
@@ -30,7 +30,7 @@ jobs:
           make report-aws \
             PROFILE=core,cloud,spot,fault,durable,scale \
             OUT="$GITHUB_WORKSPACE/release-report"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: conformance-report
           path: release-report
@@ -38,21 +38,21 @@ jobs:
   image:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@v5
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/intunderflow/bigfleet-aws
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
       - name: Build + push the AWS provider image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: providers/aws/deploy/Dockerfile
@@ -63,15 +63,15 @@ jobs:
   helm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v5
       - name: Package + push the Helm chart (OCI)
         run: |
           mkdir -p /tmp/charts
           helm package providers/aws/deploy/helm --destination /tmp/charts
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm push /tmp/charts/*.tgz oci://ghcr.io/intunderflow/charts
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: helm-chart
           path: /tmp/charts/*.tgz
@@ -80,18 +80,18 @@ jobs:
     needs: [certify, image, helm]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Only the conformance report is fetched cross-job (one named artifact,
       # not "all" — that download is flaky). The chart is re-packaged locally for
       # the release asset; it is already published to the OCI registry by `helm`.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: conformance-report
           path: report
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - run: helm package providers/aws/deploy/helm --destination charts
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           body_path: CHANGELOG.md

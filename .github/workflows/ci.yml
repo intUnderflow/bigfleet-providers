@@ -39,7 +39,7 @@ jobs:
       run_conformance: ${{ steps.detect.outputs.run_conformance }}
       providers: ${{ steps.detect.outputs.providers }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # full history so diff bases (merge-base / before-SHA) resolve
       - id: detect
@@ -55,8 +55,8 @@ jobs:
   pins:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
       - run: make check-bigfleet-pin
@@ -67,8 +67,8 @@ jobs:
     if: needs.changes.outputs.run_kit == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -79,7 +79,7 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
       - run: go test -race -count=1 ./...
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
           args: ./...
@@ -95,8 +95,8 @@ jobs:
       matrix:
         provider: ${{ fromJSON(needs.changes.outputs.providers) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: providers/${{ matrix.provider }}/go.mod
           cache-dependency-path: providers/${{ matrix.provider }}/go.sum
@@ -111,7 +111,7 @@ jobs:
         run: |
           go -C providers/${{ matrix.provider }} mod tidy
           git diff --exit-code providers/${{ matrix.provider }}/go.mod providers/${{ matrix.provider }}/go.sum
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
           working-directory: providers/${{ matrix.provider }}
@@ -124,13 +124,13 @@ jobs:
     if: needs.changes.outputs.run_conformance == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: conformance/go.mod
           cache-dependency-path: conformance/go.sum
       - run: make build-conformance test-conformance
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
           working-directory: conformance
@@ -155,8 +155,8 @@ jobs:
       matrix:
         provider: ${{ fromJSON(needs.changes.outputs.providers) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: conformance/go.mod
           cache-dependency-path: conformance/go.sum
@@ -177,7 +177,7 @@ jobs:
           GOWORK=off go -C conformance run ./cmd/bfconformance -provider ${{ matrix.provider }} \
             -profile core,cloud,spot,fault,durable,scale \
             -out "$GITHUB_WORKSPACE/conformance-report/${{ matrix.provider }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.gate.outputs.skip != 'true'
         with:
           name: conformance-report-${{ matrix.provider }}
@@ -196,8 +196,8 @@ jobs:
       matrix:
         provider: ${{ fromJSON(needs.changes.outputs.providers) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v5
       - name: helm lint
         run: |
           chart="providers/${{ matrix.provider }}/deploy/helm"
@@ -219,13 +219,13 @@ jobs:
   govulncheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # need base history for the delta worktree
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
       - name: scan (delta-gate on PR, informational on push)
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -242,8 +242,8 @@ jobs:
     if: needs.changes.outputs.run_site == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
