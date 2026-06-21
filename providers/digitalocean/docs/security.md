@@ -100,6 +100,19 @@ the Hetzner provider's SSH host-key-pinned delivery. The model:
   verbatim and acks. A failed apply surfaces as `FAILED`. Drain is delivered over
   the same channel.
 
+> **Hardening note — the per-machine token lives in `user_data`.** Injecting the
+> bearer token via `user_data` means it is readable for the Droplet's lifetime by
+> anyone who can read that Droplet's metadata via the DigitalOcean API (a holder
+> of an account token with Droplet read). The blast radius is deliberately small:
+> the token authorises fetching **only that one Droplet's** blob and nothing else,
+> and the blob is a one-time cluster-join secret. Mitigate by keeping the PAT
+> least-scoped (Droplet read+write only — see [Credentials](credentials.md)),
+> treating account-token access as privileged, and rotating `--bootstrap-secret`
+> (which invalidates every issued per-machine token) on credential events. A
+> future hardening would mint the token out-of-band to the agent instead of via
+> `user_data`; that needs a substrate channel DigitalOcean does not currently
+> offer.
+
 For defence in depth, run the bootstrap channel on a **private/management
 network** the control plane and the Droplets share, and keep the
 `--bootstrap-secret` in a Secret (see [Credentials](credentials.md)).

@@ -192,12 +192,15 @@ func (r *doReal) waitActive(ctx context.Context, id int) (dropletInstance, error
 	defer ticker.Stop()
 	var lastErr error
 	for {
-		drv, _, err := r.client.Droplets.Get(ctx, id)
+		drv, resp, err := r.client.Droplets.Get(ctx, id)
 		switch {
 		case err != nil:
-			// Transient (rate-limit 429, 5xx, or a read-after-write 404 right after
-			// create) — keep polling until the deadline instead of failing the whole
-			// Create on a single blip. ctx cancellation still aborts below.
+			// A confirmed 404 means the Droplet is gone (deleted out-of-band) — fail
+			// fast rather than polling for the full Create timeout. Other errors
+			// (rate-limit 429, 5xx, transient network) are retried until the deadline.
+			if resp != nil && resp.StatusCode == 404 {
+				return dropletInstance{}, fmt.Errorf("droplet %d not found while waiting to become active (deleted out-of-band?): %w", id, err)
+			}
 			lastErr = err
 		case drv == nil:
 			lastErr = fmt.Errorf("droplet %d not visible yet", id)
@@ -293,7 +296,7 @@ func (r *doReal) DrainNode(ctx context.Context, drv dropletInstance, gracePeriod
 	if err := r.cfg.Vault.Enqueue(ctx, drv.MachineID, cmd); err != nil {
 		return err
 	}
-	return r.clearClusterTag(ctx, drv.DropletID, drv.ClusterID)
+	return r.clearClusterTag(ctx, drv.DropletID)
 }
 
 func (r *doReal) PriceUSD(ctx context.Context, sizeSlug string) (float64, error) {
@@ -434,10 +437,13 @@ func hasTag(tags []string, want string) bool {
 // bfcluster:<base32(cluster)> tag.
 func (r *doReal) setClusterTag(ctx context.Context, dropletID, clusterID string) error {
 	tag := tagClusterPrefix + encodeID(clusterID)
-	if _, _, err := r.client.Tags.Create(ctx, &godo.TagCreateRequest{Name: tag}); err != nil {
-		// Create is idempotent in practice; a duplicate is fine. Surface only a
-		// hard failure by attempting the tag-resources step regardless.
-		r.logger.Debug("create cluster tag", "tag", tag, "err", err)
+	if _, resp, err := r.client.Tags.Create(ctx, &godo.TagCreateRequest{Name: tag}); err != nil {
+		// 422 Unprocessable Entity is the idempotent case (the tag already exists);
+		// anything else (auth, network, quota) is a real failure — surface it now
+		// rather than letting it hide until TagResources fails with a vaguer error.
+		if resp == nil || resp.StatusCode != 422 {
+			return fmt.Errorf("create cluster tag %s: %w", tag, err)
+		}
 	}
 	id, err := strconv.Atoi(dropletID)
 	if err != nil {
@@ -452,18 +458,32 @@ func (r *doReal) setClusterTag(ctx context.Context, dropletID, clusterID string)
 	return nil
 }
 
-// clearClusterTag removes the cluster binding tag from the Droplet, returning it
-// to an unbound (Idle) state in inventory.
-func (r *doReal) clearClusterTag(ctx context.Context, dropletID, clusterID string) error {
-	if clusterID == "" {
-		return nil
-	}
-	tag := tagClusterPrefix + encodeID(clusterID)
-	_, err := r.client.Tags.UntagResources(ctx, tag, &godo.UntagResourcesRequest{
-		Resources: []godo.Resource{{ID: dropletID, Type: godo.DropletResourceType}},
-	})
+// clearClusterTag removes every cluster-binding tag from the Droplet, returning
+// it to an unbound (Idle) state in inventory. It re-reads the Droplet's current
+// tags (rather than trusting a possibly-minimal cached view), so a Drain whose
+// caller could not resolve the bound cluster id still removes the binding tag —
+// no leaked bfcluster tag.
+func (r *doReal) clearClusterTag(ctx context.Context, dropletID string) error {
+	id, err := strconv.Atoi(dropletID)
 	if err != nil {
-		return fmt.Errorf("untag cluster binding: %w", err)
+		return fmt.Errorf("bad droplet id %q: %w", dropletID, err)
+	}
+	d, _, err := r.client.Droplets.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("clear cluster binding: look up droplet %d: %w", id, err)
+	}
+	if d == nil {
+		return nil // already gone
+	}
+	for _, tag := range d.Tags {
+		if !strings.HasPrefix(tag, tagClusterPrefix) {
+			continue
+		}
+		if _, err := r.client.Tags.UntagResources(ctx, tag, &godo.UntagResourcesRequest{
+			Resources: []godo.Resource{{ID: dropletID, Type: godo.DropletResourceType}},
+		}); err != nil {
+			return fmt.Errorf("untag cluster binding %s: %w", tag, err)
+		}
 	}
 	return nil
 }

@@ -150,6 +150,25 @@ func TestDOReal_CreateDroplet_RejectsForeignRegion(t *testing.T) {
 	}
 }
 
+// waitActive must fail fast on a confirmed 404 (Droplet deleted out-of-band)
+// rather than polling for the full Create timeout.
+func TestDOReal_WaitActive_FailFastOn404(t *testing.T) {
+	api := newFakeDOAPI()
+	srv := httptest.NewServer(api)
+	defer srv.Close()
+	r := newTestDOReal(t, srv.URL+"/")
+	r.cfg.CreateWaitTimeout = 30 * time.Second // long, to prove we don't wait it out
+
+	start := time.Now()
+	_, err := r.waitActive(t.Context(), 999999) // never created -> 404
+	if err == nil {
+		t.Fatal("waitActive on a missing droplet returned nil, want a fast failure")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("waitActive took %s on a 404; expected a fast fail, not a full-timeout poll", elapsed)
+	}
+}
+
 // DescribeManaged must drop Droplets from other regions (DO tags are
 // account-wide), so a single-region process never adopts a sibling's hosts.
 func TestDOReal_DescribeManaged_FiltersRegion(t *testing.T) {

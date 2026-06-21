@@ -149,7 +149,12 @@ func (b *digitaloceanBackend) Describe(ctx context.Context) ([]providerkit.Insta
 }
 
 func (b *digitaloceanBackend) dropletToIdle(machineID string, drv dropletInstance) providerkit.Instance {
-	return providerkit.Instance{
+	// Recover the per-replica request shape from a still-configured offering for
+	// this size, so an orphan / offering-shrank machine that re-binds via Describe
+	// still matches its demand profile. Nil only for a truly unknown size, where
+	// the FileStore (the primary restart path) restores resources.
+	resources := b.resourcesForSize(drv.Size, drv.Region)
+	inst := providerkit.Instance{
 		ID:                      machineID,
 		State:                   providerkit.StateIdle,
 		Host:                    providerkit.HostRef{Provider: b.providerName, Ref: drv.DropletID},
@@ -158,13 +163,17 @@ func (b *digitaloceanBackend) dropletToIdle(machineID string, drv dropletInstanc
 		CapacityType:            providerkit.CapacityOnDemand,
 		PricePerHour:            b.pricing.price(drv.Size, providerkit.CapacityOnDemand),
 		InterruptionProbability: dropletInterruptionProbability,
-		// Recover the per-replica request shape from a still-configured offering
-		// for this size, so an orphan / offering-shrank machine that re-binds via
-		// Describe still matches its demand profile. Nil only for a truly unknown
-		// size, where the FileStore (the primary restart path) restores resources.
-		Resources:   b.resourcesForSize(drv.Size, drv.Region),
-		Allocatable: b.sizes.allocatable(drv.Size),
+		Resources:               resources,
 	}
+	// Only declare allocatable when we also know the per-replica resources. Setting
+	// allocatable (hardware total) while resources is nil is the inconsistent state
+	// the engine reads as density = allocatable / <unknown> — leaving both nil makes
+	// the kit treat allocatable == resources (a safe density of 1) for an orphan we
+	// cannot size.
+	if resources != nil {
+		inst.Allocatable = b.sizes.allocatable(drv.Size)
+	}
+	return inst
 }
 
 // resourcesForSize returns the per-replica resources of an offering matching the
