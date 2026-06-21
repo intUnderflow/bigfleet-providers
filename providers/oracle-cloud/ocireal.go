@@ -279,16 +279,16 @@ func (r *ociReal) DescribeManaged(ctx context.Context) ([]ociInstance, error) {
 func (r *ociReal) ApplyBootstrap(ctx context.Context, inst ociInstance, clusterID string, bootstrap []byte, operationID string) error {
 	// Deliver the opaque bootstrap blob to the node and run the base image's hook.
 	// The image must ship the hook at BootstrapHookPath; it receives the blob at
-	// <hook>.blob and joins the cluster. We wait for the command to SUCCEED, so a
+	// <hook>.blob and joins the cluster. We wait for each command to SUCCEED, so a
 	// failed bootstrap surfaces as FAILED.
-	blob := base64.StdEncoding.EncodeToString(bootstrap) // base64 -d is universally available
-	hook := shellQuote(r.cfg.BootstrapHookPath)
-	blobPath := shellQuote(r.cfg.BootstrapHookPath + ".blob")
-	script := fmt.Sprintf(
-		"set -euo pipefail; umask 077; mkdir -p \"$(dirname %s)\"; echo %s | base64 -d > %s; %s %s",
-		blobPath, shellQuote(blob), blobPath, hook, shellQuote(clusterID))
-	if err := r.runCommand(ctx, inst.InstanceID, "bigfleet-configure", script, operationID); err != nil {
-		return err
+	steps, err := bootstrapSteps(r.cfg.BootstrapHookPath, clusterID, bootstrap, operationID)
+	if err != nil {
+		return fmt.Errorf("configure: %w", err)
+	}
+	for _, s := range steps {
+		if err := r.runCommand(ctx, inst.InstanceID, s.name, s.script, s.token); err != nil {
+			return err
+		}
 	}
 	// Record the binding tag only AFTER the bootstrap actually succeeded, so a
 	// failed Configure never leaves an instance mistagged as bound to a cluster it
@@ -297,6 +297,83 @@ func (r *ociReal) ApplyBootstrap(ctx context.Context, inst ociInstance, clusterI
 		return fmt.Errorf("tag cluster binding: %w", err)
 	}
 	return nil
+}
+
+// Run Command inline text is capped by OCI (~4 KB). A bootstrap blob that fits is
+// delivered in one command; a larger one is streamed to a staging file in
+// bounded base64 chunks (each command under the cap) and decoded on-host.
+const (
+	maxCommandText = 4096 // conservative ceiling for one Run Command's inline text
+	blobChunkSize  = 3000 // base64 payload per chunk, leaving room for the wrapper
+	maxBlobChunks  = 24   // bound the command count; larger blobs stage out-of-band
+)
+
+// runStep is one Run Command in a bootstrap delivery sequence.
+type runStep struct {
+	name   string
+	script string
+	token  string // per-step idempotency key (OpcRetryToken source)
+}
+
+// bootstrapSteps builds the ordered Run Command(s) that deliver the base64 blob to
+// <hook>.blob and run the hook. Small blobs are a single command; larger ones are
+// streamed to <hook>.blob.b64 in <=maxBlobChunks append commands (chunk 0
+// truncates, so a full re-drive starts clean) then decoded + run. Each step has a
+// distinct token so a transport retry dedupes onto the same command. Pure (no
+// SDK) so the chunking is unit-tested.
+func bootstrapSteps(hookPath, clusterID string, bootstrap []byte, operationID string) ([]runStep, error) {
+	b64 := base64.StdEncoding.EncodeToString(bootstrap) // base64 -d is universally available
+	hook := shellQuote(hookPath)
+	blobPath := shellQuote(hookPath + ".blob")
+	cluster := shellQuote(clusterID)
+
+	single := fmt.Sprintf(
+		"set -euo pipefail; umask 077; mkdir -p \"$(dirname %s)\"; printf '%%s' %s | base64 -d > %s; %s %s",
+		blobPath, shellQuote(b64), blobPath, hook, cluster)
+	if len(single) <= maxCommandText {
+		return []runStep{{name: "bigfleet-configure", script: single, token: operationID}}, nil
+	}
+
+	stage := shellQuote(hookPath + ".blob.b64")
+	chunks := chunkString(b64, blobChunkSize)
+	if len(chunks) > maxBlobChunks {
+		return nil, fmt.Errorf("bootstrap blob too large (%d chunks > %d max); stage it out-of-band (see the credentials/security docs)", len(chunks), maxBlobChunks)
+	}
+	steps := make([]runStep, 0, len(chunks)+1)
+	for i, c := range chunks {
+		var script string
+		if i == 0 {
+			// Truncate (>) on the first chunk so a full re-drive overwrites any
+			// partial staging file from a prior attempt.
+			script = fmt.Sprintf("set -euo pipefail; umask 077; mkdir -p \"$(dirname %s)\"; printf '%%s' %s > %s", stage, shellQuote(c), stage)
+		} else {
+			script = fmt.Sprintf("set -euo pipefail; printf '%%s' %s >> %s", shellQuote(c), stage)
+		}
+		steps = append(steps, runStep{
+			name:   fmt.Sprintf("bigfleet-configure-%d", i),
+			script: script,
+			token:  fmt.Sprintf("%s-c%d", operationID, i),
+		})
+	}
+	final := fmt.Sprintf(
+		"set -euo pipefail; umask 077; base64 -d %s > %s; rm -f %s; %s %s",
+		stage, blobPath, stage, hook, cluster)
+	steps = append(steps, runStep{name: "bigfleet-configure-run", script: final, token: operationID + "-run"})
+	return steps, nil
+}
+
+// chunkString splits s into pieces of at most n bytes (base64 is ASCII, so byte
+// and rune boundaries coincide). Always returns at least one element.
+func chunkString(s string, n int) []string {
+	if n <= 0 {
+		n = 1
+	}
+	var out []string
+	for len(s) > n {
+		out = append(out, s[:n])
+		s = s[n:]
+	}
+	return append(out, s)
 }
 
 func (r *ociReal) DrainNode(ctx context.Context, inst ociInstance, gracePeriodSeconds int64, operationID string) error {
@@ -377,6 +454,7 @@ func (r *ociReal) waitCommand(ctx context.Context, commandID, instanceID, name s
 			// keep polling and only surface the error if it persists to the deadline.
 			lastErr = err
 		} else {
+			lastErr = nil // a successful read clears an earlier transient error
 			switch resp.LifecycleState {
 			case computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateSucceeded:
 				return nil

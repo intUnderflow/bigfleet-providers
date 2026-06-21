@@ -112,6 +112,13 @@ blob (opaque kubelet-join data — never parsed by the provider). `Drain` runs a
 `kubectl cordon`/`drain` via the same Run Command channel, bounded by the grace
 period.
 
+> **Blob size.** A Run Command's inline text is capped (~4 KB), so a bootstrap
+> blob that fits is delivered in one command; a larger one is streamed to
+> `<bootstrap-hook>.blob.b64` in bounded base64 chunks and decoded on-host before
+> the hook runs. Very large blobs (beyond a couple dozen chunks) are rejected with
+> a clear error — stage those out-of-band and have the hook fetch them. Keep the
+> join blob small where you can.
+
 > **Node-name assumption.** The drain script resolves the Kubernetes node to
 > cordon/drain from the host's own `hostname -f` (falling back to `hostname`).
 > This is correct when the kubelet registers the node under that name (the OKE /

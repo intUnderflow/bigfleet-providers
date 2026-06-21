@@ -18,6 +18,21 @@ func TestAllocatable_OCPUtoVCPU(t *testing.T) {
 	}
 }
 
+// fmtCPU renders whole cores as integers and fractional vCPU as millicores
+// (a single-threaded Ampere shape with a fractional OCPU yields fractional vCPU).
+func TestFmtCPU(t *testing.T) {
+	cases := map[float64]string{8: "8", 4: "4", 1.5: "1500m", 0.5: "500m", 3: "3"}
+	for in, want := range cases {
+		if got := fmtCPU(in); got != want {
+			t.Errorf("fmtCPU(%v) = %q, want %q", in, got, want)
+		}
+	}
+	// A fractional OCPU on a single-threaded (Ampere) shape must not truncate.
+	if got := allocatable("VM.Standard.A1.Flex", 1.5, 6)["cpu"]; got != "1500m" {
+		t.Errorf("A1.Flex 1.5 OCPU cpu = %q, want 1500m (no truncation)", got)
+	}
+}
+
 // A GPU shape advertises its accelerators in allocatable.
 func TestAllocatable_GPU(t *testing.T) {
 	a := allocatable("VM.GPU.A10.1", 0, 0)

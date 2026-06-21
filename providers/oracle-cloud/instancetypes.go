@@ -81,15 +81,28 @@ func allocatable(shape string, ocpus, memGiB float64) map[string]string {
 	if ocpus <= 0 || memGiB <= 0 {
 		return nil
 	}
-	vcpu := int(ocpus * float64(spec.threads()))
+	vcpu := ocpus * float64(spec.threads())
 	out := map[string]string{
-		"cpu":    strconv.Itoa(vcpu),
+		"cpu":    fmtCPU(vcpu),
 		"memory": fmtGiB(memGiB),
 	}
 	if spec.GPUCount > 0 && spec.GPUResource != "" {
 		out[spec.GPUResource] = strconv.Itoa(spec.GPUCount)
 	}
 	return out
+}
+
+// fmtCPU renders a vCPU count as a Kubernetes cpu quantity without truncation:
+// a whole number of cores as an integer, otherwise as millicores ("Nm"). OCI Flex
+// shapes allow fractional OCPU, and on single-threaded Ampere a fractional OCPU
+// yields a fractional vCPU — truncating to an int would silently under-report it
+// and skew the shard's density math.
+func fmtCPU(vcpu float64) string {
+	milli := int64(math.Round(vcpu * 1000))
+	if milli%1000 == 0 {
+		return strconv.FormatInt(milli/1000, 10)
+	}
+	return strconv.FormatInt(milli, 10) + "m"
 }
 
 // fmtGiB renders a GiB quantity as a Kubernetes memory string, preferring a whole
