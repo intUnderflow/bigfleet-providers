@@ -82,8 +82,8 @@ func (hk hostKeyMaterial) cloudConfig() string {
 // When expectedFP is non-empty it requires an exact match and rejects anything
 // else (a possible MITM). When expectedFP is empty — an instance we did not
 // create (orphan), or one whose image did not honour the injected key — it
-// trust-on-first-uses: it records the key via onTOFU and accepts, so all later
-// connections are verified against it. The residual risk is confined to that
+// applies trust-on-first-use: it records the key via onTOFU and accepts, so all
+// later connections are verified against it. The residual risk is confined to that
 // first connection and is documented in security.md.
 func hostKeyCallback(expectedFP string, onTOFU func(fp string)) ssh.HostKeyCallback {
 	return func(_ string, _ net.Addr, key ssh.PublicKey) error {

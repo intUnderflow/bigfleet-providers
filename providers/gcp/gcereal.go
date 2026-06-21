@@ -337,16 +337,21 @@ func (r *gceReal) ApplyBootstrap(ctx context.Context, inst gceInstance, clusterI
 	if err != nil {
 		return fmt.Errorf("configure: %w", err)
 	}
-	// Deliver the opaque blob to <hook>.blob (umask 077) and run the image's hook,
+	// Deliver the opaque blob to <hook>.blob (mode 0600) and run the image's hook,
 	// which joins the cluster. The blob is base64'd for safe transport and never
 	// persisted (control-plane metadata is not used for the secret). We wait for
 	// the hook to SUCCEED, so a failed bootstrap surfaces as FAILED.
+	//
+	// The script is POSIX sh (no `pipefail`, which dash lacks): base64 is the LAST
+	// command in its pipeline, so `set -e` still catches a decode failure, and we
+	// decode into a temp file + `install` rather than piping into `tee`.
 	blob := base64.StdEncoding.EncodeToString(bootstrap)
 	hook := shellQuote(r.cfg.BootstrapHookPath)
 	blobPath := shellQuote(r.cfg.BootstrapHookPath + ".blob")
 	script := fmt.Sprintf(
-		"set -euo pipefail; umask 077; sudo mkdir -p \"$(dirname %s)\"; echo %s | base64 -d | sudo tee %s >/dev/null; sudo %s %s",
-		blobPath, shellQuote(blob), blobPath, hook, shellQuote(clusterID))
+		"set -eu; umask 077; tmp=$(mktemp); printf '%%s' %s | base64 -d > \"$tmp\"; "+
+			"sudo mkdir -p \"$(dirname %s)\"; sudo install -m 600 \"$tmp\" %s; rm -f \"$tmp\"; sudo %s %s",
+		shellQuote(blob), blobPath, blobPath, hook, shellQuote(clusterID))
 	if err := r.runSSH(ctx, live, script); err != nil {
 		return err
 	}
@@ -384,7 +389,7 @@ func (r *gceReal) DrainNode(ctx context.Context, inst gceInstance, gracePeriodSe
 	// cordon tolerates a re-run (|| true); the DRAIN must NOT swallow its failure —
 	// an incomplete drain has to surface as FAILED rather than a false Idle.
 	script := fmt.Sprintf(
-		"set -euo pipefail; node=$(hostname -f 2>/dev/null || hostname); "+
+		"set -eu; node=$(hostname -f 2>/dev/null || hostname); "+
 			"sudo kubectl cordon \"$node\" || true; "+
 			"sudo kubectl drain \"$node\" --ignore-daemonsets --delete-emptydir-data "+
 			"--grace-period=%d --timeout=%ds",
@@ -518,8 +523,8 @@ func (r *gceReal) ensureReachable(ctx context.Context, inst gceInstance) (gceIns
 // runSSH dials the instance, runs script over one session, and returns an error
 // unless it exits 0. The host key is verified against the fingerprint pinned at
 // Insert (inst.HostKeyFP); a mismatch aborts as a possible MITM. An instance with
-// no pin (an orphan, or an image that did not honour the injected key) is
-// trust-on-first-used and its observed key persisted, so all later connections
+// no pin (an orphan, or an image that did not honour the injected key) gets
+// trust-on-first-use and its observed key persisted, so all later connections
 // are verified.
 func (r *gceReal) runSSH(ctx context.Context, inst gceInstance, script string) error {
 	host := inst.IP
