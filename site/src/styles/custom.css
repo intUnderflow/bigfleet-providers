@@ -141,3 +141,21 @@
   font-weight: 700;
   text-transform: uppercase;
 }
+
+/* Dark-theme logo variants. A provider may ship docs/logo-dark.svg for a mark
+   whose default form is low-contrast on the dark card (e.g. AWS's navy wordmark,
+   OVH's navy, Scaleway's dark purple). Show the dark variant only in dark mode;
+   the default (light) variant otherwise. Providers without a dark variant just
+   render the default in both themes. */
+.provider-logo--dark,
+.provider-chip-logo--dark {
+  display: none;
+}
+:root[data-theme="dark"] .provider-logo--light,
+:root[data-theme="dark"] .provider-chip-logo--light {
+  display: none;
+}
+:root[data-theme="dark"] .provider-logo--dark,
+:root[data-theme="dark"] .provider-chip-logo--dark {
+  display: block;
+}

@@ -86,16 +86,20 @@ for (const entry of await readdir(providersDir, { withFileTypes: true })) {
   const overview = join(docs, "index.md");
   const meta = (await exists(overview)) ? await frontmatter(overview) : {};
   const logoSrc = join(docs, "logo.svg");
+  const logoDarkSrc = join(docs, "logo-dark.svg");
   found.push({
     name: entry.name,
     title: meta.title || entry.name,
     description: meta.description || "",
     logo: (await exists(logoSrc)) ? logoSrc : null,
+    // Optional dark-theme variant, shown only when the site is in dark mode
+    // (for logos whose default form is low-contrast on the dark card).
+    logoDark: (await exists(logoDarkSrc)) ? logoDarkSrc : null,
   });
   for await (const file of walk(docs)) {
     const rel = file.slice(docs.length + 1);
-    // logo.svg is served from public/ (see below), not as content.
-    if (rel === "logo.svg") continue;
+    // logo.svg / logo-dark.svg are served from public/ (below), not as content.
+    if (rel === "logo.svg" || rel === "logo-dark.svg") continue;
     const dest = join(destBase, entry.name, rel);
     await mkdir(dirname(dest), { recursive: true });
     await copyFile(file, dest);
@@ -130,7 +134,11 @@ for (const p of found) {
   if (p.logo) {
     await copyFile(p.logo, join(publicProvidersDir, `${p.name}.svg`));
     logos++;
-    mark = `<img class="provider-logo" src="/providers/${p.name}.svg" alt="" loading="lazy" />`;
+    mark = `<img class="provider-logo provider-logo--light" src="/providers/${p.name}.svg" alt="" loading="lazy" />`;
+    if (p.logoDark) {
+      await copyFile(p.logoDark, join(publicProvidersDir, `${p.name}-dark.svg`));
+      mark += `\n    <img class="provider-logo provider-logo--dark" src="/providers/${p.name}-dark.svg" alt="" loading="lazy" />`;
+    }
   } else {
     mark = `<span class="provider-logo provider-logo--fallback" aria-hidden="true">${esc(p.title.slice(0, 1))}</span>`;
   }
@@ -180,6 +188,7 @@ await writeFile(
       description: p.description,
       href: `/providers/${p.name}/`,
       logo: p.logo ? `/providers/${p.name}.svg` : null,
+      logoDark: p.logoDark ? `/providers/${p.name}-dark.svg` : null,
     })),
     null,
     2,
