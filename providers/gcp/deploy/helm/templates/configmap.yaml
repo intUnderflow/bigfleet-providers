@@ -1,0 +1,23 @@
+{{- if .Values.offerings.content }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bigfleet-gcp.fullname" . }}-offerings
+  labels:
+    {{- include "bigfleet-gcp.labels" . | nindent 4 }}
+data:
+  offerings.json: |
+    {{- .Values.offerings.content | nindent 4 }}
+{{- end }}
+{{- if .Values.baseStartupScript.content }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bigfleet-gcp.fullname" . }}-startup
+  labels:
+    {{- include "bigfleet-gcp.labels" . | nindent 4 }}
+data:
+  base-startup-script: |
+    {{- .Values.baseStartupScript.content | nindent 4 }}
+{{- end }}

@@ -1,0 +1,2 @@
+# Built provider binary (go build / make build-gcp output).
+/gcp
