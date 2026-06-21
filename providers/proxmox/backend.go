@@ -137,14 +137,16 @@ func (b *proxmoxBackend) Describe(ctx context.Context) ([]providerkit.Instance, 
 	for _, slot := range slots {
 		if vm, ok := bySlot[slot.ID]; ok {
 			delete(bySlot, slot.ID)
-			// Only a live VM backs an Idle node. A tagged-but-stopped VM (host
-			// power-cycle, an HA stop, an in-guest poweroff) must NOT be
-			// advertised as schedulable Idle — leave the slot Speculative so a
-			// Create recovers and powers it back on (adopt-in-CloneVM).
-			if vm.Running {
-				slot.State = providerkit.StateIdle
-				slot.Host = providerkit.HostRef{Provider: b.providerName, Ref: vm.hostRef()}
-			}
+			// The VM owns its slot whether or not it is currently running: a
+			// tagged-but-stopped VM (host power-cycle, an HA stop, an in-guest
+			// poweroff) is surfaced Idle WITH its host, so it stays reapable via
+			// Delete (the kit emits no Delete for a Speculative slot) and Create
+			// can't clone a duplicate under the same machine id. The out-of-band
+			// stop is healed by EnsureRunning in Configure/Drain before any guest
+			// work runs. (Only a destroyed VM — gone from DescribeManaged —
+			// releases its slot back to Speculative.)
+			slot.State = providerkit.StateIdle
+			slot.Host = providerkit.HostRef{Provider: b.providerName, Ref: vm.hostRef()}
 		}
 		out = append(out, slot)
 	}

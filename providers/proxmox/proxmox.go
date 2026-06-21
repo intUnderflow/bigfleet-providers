@@ -128,9 +128,18 @@ func machineIDTag(machineID string) string {
 }
 
 const (
-	// tagPrefix marks every VM this provider manages. DescribeManaged filters on
-	// it; CloneVM also stamps a per-machine machineIDTag.
+	// tagPrefix marks every VM this provider manages. It is a human-facing,
+	// cheap-to-filter signal; CloneVM also stamps a per-machine machineIDTag.
+	// NOTE: the pinned go-proxmox clone options cannot set tags atomically (tags
+	// are applied AFTER the clone task completes), so discovery must NOT depend on
+	// the tag alone — it also keys off vmNamePrefix + the Description, both of
+	// which ARE set atomically at clone time. See DescribeManaged.
 	tagPrefix = "bigfleet"
+	// vmNamePrefix prefixes every cloned VM's name. Unlike the tag, the name is
+	// part of the clone request, so it is present the instant the VM exists —
+	// closing the window where a cloned-but-not-yet-tagged VM would be invisible
+	// to retry discovery and get cloned a second time.
+	vmNamePrefix = "bigfleet-"
 )
 
 // sanitizeTag maps an arbitrary string to the Proxmox tag charset ([a-z0-9_-]),

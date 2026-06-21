@@ -261,10 +261,14 @@ func TestDescribe_ReconcilesRunningVM(t *testing.T) {
 	}
 }
 
-// Describe must NOT advertise a tagged-but-stopped managed VM as a schedulable
-// Idle node: the VM owns its slot (so Create adopts it rather than cloning a
-// duplicate), but until it is powered back on the slot stays Speculative.
-func TestDescribe_StoppedVMNotIdle(t *testing.T) {
+// Describe must keep a tagged-but-stopped managed VM that matches a slot as
+// Idle-and-owning-its-slot (host populated), NOT drop it to a bare Speculative
+// slot. A Speculative slot has no host and the kit emits no Delete for it (since
+// M73), so a stopped VM behind a Speculative slot would linger with its disks
+// unmanaged on scale-down. Surfaced Idle-with-host it stays reapable; the
+// out-of-band stop is healed by EnsureRunning in Configure/Drain. This mirrors
+// the certified oracle-cloud/azure cloud providers.
+func TestDescribe_StoppedVMOwnsSlotIdle(t *testing.T) {
 	b, fake := newTestBackend(t, 4)
 	ctx := context.Background()
 
@@ -279,11 +283,11 @@ func TestDescribe_StoppedVMNotIdle(t *testing.T) {
 	}
 
 	got := findInstance(t, b, ctx, slot.ID)
-	if got.State != providerkit.StateSpeculative {
-		t.Errorf("stopped tagged VM slot state = %v, want Speculative", got.State)
+	if got.State != providerkit.StateIdle {
+		t.Errorf("stopped tagged VM slot state = %v, want Idle (owns its slot, reapable)", got.State)
 	}
-	if got.Host.Ref != "" {
-		t.Errorf("stopped slot advertised a host %q, want none", got.Host.Ref)
+	if got.Host.Ref == "" {
+		t.Error("stopped slot surfaced without a host (not reapable via Delete)")
 	}
 }
 
@@ -567,6 +571,34 @@ func TestSanitizeTagAndName(t *testing.T) {
 	name := cloneName("proxmox-test/OnDemand/pve.large/pve-1/007", "pve.large")
 	if len(name) > 63 {
 		t.Errorf("clone name %q exceeds 63 chars", name)
+	}
+}
+
+// Discovery must recognise a cloned-but-not-yet-tagged VM by its deterministic
+// name prefix, not just the marker tag — the pinned SDK applies the tag only
+// after the clone task completes, so a crash in that window would otherwise hide
+// the VM from retry discovery and trigger a duplicate clone (disk leak).
+func TestIsManagedVM_TagOrNamePrefix(t *testing.T) {
+	cases := []struct {
+		tags, name string
+		want       bool
+	}{
+		{tagPrefix, "anything", true},            // tagged
+		{tagPrefix + ";other", "anything", true}, // tag among others
+		{"", "bigfleet-pve-small-m1", true},      // pre-tag: name only
+		{"other", "bigfleet-pve-large-m2", true}, // wrong tag, right name
+		{"", "customer-db", false},               // neither
+		{"production", "web-server-1", false},    // unrelated tag + name
+	}
+	for _, c := range cases {
+		if got := isManagedVM(c.tags, c.name); got != c.want {
+			t.Errorf("isManagedVM(tags=%q, name=%q) = %v, want %v", c.tags, c.name, got, c.want)
+		}
+	}
+	// The deterministic clone name always carries the prefix, so a clone is
+	// discoverable the instant it exists (before the tag is applied).
+	if !isManagedVM("", cloneName("proxmox/OnDemand/pve.small/pve-1/000", "pve.small")) {
+		t.Error("a freshly cloned (untagged) VM must be recognised by its name prefix")
 	}
 }
 

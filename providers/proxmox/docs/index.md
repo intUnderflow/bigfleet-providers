@@ -22,23 +22,25 @@ vCPU/memory.
 
 ## How it behaves
 
-- **Ships as a deployable.** It is a container image and a Helm chart, runs
+- **Hardened and operable.** It ships as a container image and a Helm chart, runs
   non-root on a distroless, read-only root filesystem, and exposes
   liveness/readiness probes, Prometheus metrics, and structured logs. See
   [Observability](/providers/proxmox/observability/).
-- **Certified.** It passes the BigFleet provider conformance program —
-  [92 behaviors across 11 areas](/conformance/) — credential-free on every
-  change, for the **core** and **cloud** profiles. See
+- **Certified.** It passes the full BigFleet provider conformance program —
+  [92 certified behaviors](/conformance/) — credential-free on every change, for
+  the **core** and **cloud** profiles. See
   [Certification](/providers/proxmox/certification/).
+- **Conservative by default.** A `Create` settles to `Idle` only once the VM is
+  cloned, running, and its guest agent answers; the cluster-join secret is
+  delivered over the verified, authenticated Proxmox API (never cloud-init); TLS
+  verification cannot be disabled — anchored on your cluster CA or a pinned
+  certificate fingerprint; and a failed bootstrap or drain surfaces as a hard
+  failure rather than a silently-broken node. Capacity it doesn't own, it never
+  touches.
 - **On-demand only.** Proxmox VMs are not preemptible: every machine is
   `ON_DEMAND` and reports an `interruption_probability` of exactly `0`. There is
   no spot market and no `SPOT` capacity. `Delete` stops and destroys the VM and
   its disks, so the **cloud** profile applies.
-- **Verified TLS, always.** The provider reaches the Proxmox API over HTTPS with
-  TLS verification that cannot be disabled — anchored on your cluster CA or a
-  pinned certificate fingerprint. The cluster-join secret rides that channel, so
-  it must be verified. See [Credentials](/providers/proxmox/credentials/) and
-  [Security](/providers/proxmox/security/).
 
 ## What you need
 

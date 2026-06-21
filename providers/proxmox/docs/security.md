@@ -103,8 +103,14 @@ rationale.
   (`/pool/bigfleet`, via `--proxmox-pool`) so the token can only act on VMs this
   provider clones into that pool — not on other tenants' VMs and not on the
   cluster at large.
-- **Privilege separation on the token.** Create the token with `--privsep 1` so it
-  carries exactly its own ACL, not the user's full rights.
+- **Least-privilege token, scoped to a pool.** The token's authority comes from a
+  dedicated user whose ACL is granted only on the managed resource pool (and
+  audit-only on `/nodes`), so it can act on nothing else. The shipped setup
+  (`deploy/host-setup/setup-token.sh`) creates the token with `--privsep 0`, so
+  it inherits that pool-scoped user ACL. (Do **not** use `--privsep 1` with this
+  setup: a privilege-separated token starts with an empty ACL of its own, so
+  every API call would 403 — grant the role on the token directly if you want
+  privilege separation.)
 - **Deliver the secret from a file.** Use `--proxmox-token-file` (the chart mounts
   a Secret) so the secret never appears in a process arg list. The secret is never
   logged.

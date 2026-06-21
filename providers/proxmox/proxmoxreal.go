@@ -30,9 +30,14 @@ type proxmoxReal struct {
 	bootstrapPath string
 	bootstrapExec []string
 	// agentTimeout bounds the wait for the guest agent to come up after a
-	// start/clone; execTimeout bounds a single guest-agent exec.
+	// start/clone; execTimeout bounds a single guest-agent exec; taskTimeout is a
+	// generous backstop ceiling for a Proxmox task wait (clone/start/stop/delete)
+	// — the real per-operation bound is the kit's transition ctx, which Wait
+	// honours via its per-tick ping, so this only guards against a task that never
+	// terminates and must exceed the longest transition budget (Drain, 15m).
 	agentTimeout time.Duration
 	execTimeout  time.Duration
+	taskTimeout  time.Duration
 	logger       *slog.Logger
 }
 
@@ -43,6 +48,7 @@ type proxmoxRealConfig struct {
 	BootstrapExec []string
 	AgentTimeout  time.Duration
 	ExecTimeout   time.Duration
+	TaskTimeout   time.Duration
 }
 
 func newProxmoxReal(cfg proxmoxRealConfig, logger *slog.Logger) (*proxmoxReal, error) {
@@ -65,6 +71,10 @@ func newProxmoxReal(cfg proxmoxRealConfig, logger *slog.Logger) (*proxmoxReal, e
 	if et <= 0 {
 		et = 5 * time.Minute
 	}
+	tt := cfg.TaskTimeout
+	if tt <= 0 {
+		tt = 30 * time.Minute
+	}
 	return &proxmoxReal{
 		client:        cfg.Client,
 		pool:          cfg.Pool,
@@ -72,6 +82,7 @@ func newProxmoxReal(cfg proxmoxRealConfig, logger *slog.Logger) (*proxmoxReal, e
 		bootstrapExec: exec,
 		agentTimeout:  at,
 		execTimeout:   et,
+		taskTimeout:   tt,
 		logger:        logger,
 	}, nil
 }
@@ -196,7 +207,14 @@ func (r *proxmoxReal) DescribeManaged(ctx context.Context) ([]vmInstance, error)
 		if res.Type != "qemu" || res.Template != 0 {
 			continue
 		}
-		if !hasTag(res.Tags, tagPrefix) {
+		// A VM is ours if it carries the marker tag OR its name has our prefix.
+		// The name matters because the pinned SDK applies the tag only AFTER the
+		// clone task completes, while the name is set in the clone request itself:
+		// keying off the name closes the window where a cloned-but-not-yet-tagged
+		// VM is invisible to retry discovery (which would clone a second VM and
+		// leak the first one's disks). The Description (also atomic at clone)
+		// carries the verbatim machine id.
+		if !isManagedVM(res.Tags, res.Name) {
 			continue
 		}
 		inst := vmInstance{
@@ -206,7 +224,9 @@ func (r *proxmoxReal) DescribeManaged(ctx context.Context) ([]vmInstance, error)
 			Running: res.Status == proxmox.StatusVirtualMachineRunning,
 		}
 		// Recover the verbatim machine id (and cluster binding) from the VM config
-		// Description, which Cluster.Resources does not return.
+		// Description, which Cluster.Resources does not return. A name-prefixed VM
+		// with no machine-id Description is surfaced as an untagged orphan
+		// (MachineID == "") so it is never dropped.
 		if full, err := r.describeVM(ctx, res.Node, int(res.VMID)); err == nil {
 			inst.MachineID = full.MachineID
 			inst.ClusterID = full.ClusterID
@@ -368,13 +388,29 @@ func (r *proxmoxReal) waitTask(ctx context.Context, task *proxmox.Task) error {
 	if task == nil {
 		return nil
 	}
-	if err := task.Wait(ctx, 2*time.Second, r.execTimeout); err != nil {
+	// The kit's transition ctx (e.g. the 8m Create budget) is the real bound:
+	// Wait pings with ctx every tick, so a cancelled ctx aborts the wait promptly.
+	// taskTimeout is only a generous never-terminates backstop and MUST exceed the
+	// longest transition budget so it never fires before ctx — using the short
+	// per-exec timeout here would prematurely fail a slow-storage clone that is
+	// still within the Create budget.
+	if err := task.Wait(ctx, 2*time.Second, r.taskTimeout); err != nil {
 		return err
 	}
 	if task.IsFailed || (task.ExitStatus != "" && task.ExitStatus != "OK") {
 		return fmt.Errorf("task %s failed: %s", task.UPID, task.ExitStatus)
 	}
 	return nil
+}
+
+// isManagedVM reports whether a VM (by its tag list and name) is one this
+// provider manages. It accepts EITHER the marker tag OR the name prefix: the tag
+// is applied only after the clone task completes, so a cloned-but-not-yet-tagged
+// VM is recognised by its name (set atomically in the clone request), which is
+// what stops a retried Create from cloning a duplicate and leaking the first
+// VM's disks.
+func isManagedVM(tags, name string) bool {
+	return hasTag(tags, tagPrefix) || strings.HasPrefix(name, vmNamePrefix)
 }
 
 // hasTag reports whether the Proxmox tag list (a ';'/','-separated string)
@@ -397,7 +433,7 @@ func isNotFound(err error) bool {
 // VM names must match a hostname pattern ([A-Za-z0-9-], dots allowed), so the
 // machine id (which carries '/' and '.') is sanitized.
 func cloneName(machineID, instanceType string) string {
-	raw := "bigfleet-" + sanitizeName(instanceType) + "-" + sanitizeName(machineID)
+	raw := vmNamePrefix + sanitizeName(instanceType) + "-" + sanitizeName(machineID)
 	if len(raw) > 63 {
 		raw = raw[:63]
 	}
