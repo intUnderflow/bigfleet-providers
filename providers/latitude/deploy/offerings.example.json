@@ -1,0 +1,24 @@
+[
+  {
+    "plan": "c2-small-x86",
+    "site": "ASH",
+    "capacity_type": "on_demand",
+    "count": 8,
+    "resources": { "cpu": "1", "memory": "2Gi" }
+  },
+  {
+    "plan": "c3-large-x86",
+    "site": "ASH",
+    "capacity_type": "on_demand",
+    "count": 4,
+    "resources": { "cpu": "2", "memory": "4Gi" }
+  },
+  {
+    "plan": "g3-xlarge-x86",
+    "site": "ASH",
+    "capacity_type": "on_demand",
+    "count": 2,
+    "resources": { "cpu": "4", "memory": "16Gi" },
+    "labels": { "bigfleet.io/workload": "gpu" }
+  }
+]
