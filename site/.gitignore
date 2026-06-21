@@ -11,3 +11,7 @@ src/content/docs/providers/
 
 # Conformance docs synced from ../conformance/docs by scripts/sync-providers.mjs.
 src/content/docs/conformance/
+
+# Provider logos copied to public/ by scripts/sync-providers.mjs from each
+# provider's docs/logo.svg. Canonical copies live with the providers.
+public/providers/
