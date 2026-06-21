@@ -144,6 +144,13 @@ func (b *scalewayBackend) Describe(ctx context.Context) ([]providerkit.Instance,
 	if err != nil {
 		return nil, fmt.Errorf("describe managed servers: %w", err)
 	}
+	// Collapse any create double-provision: Scaleway's Instances API has no
+	// server-side create idempotency token, so a lost CreateServer response + kit
+	// retry can briefly launch a second server under the same machine id. Reap the
+	// extras (cloud/deletable substrate only) so a duplicate stops billing.
+	if b.capacity == providerkit.CapacityOnDemand {
+		managed = b.reapDuplicateServers(ctx, managed)
+	}
 	bySlot := make(map[string]serverInstance, len(managed))
 	var orphans []serverInstance
 	for _, srv := range managed {
@@ -189,6 +196,49 @@ func (b *scalewayBackend) Describe(ctx context.Context) ([]providerkit.Instance,
 		out = append(out, b.serverToIdle(srv.ServerID, srv))
 	}
 	return out, nil
+}
+
+// reapDuplicateServers collapses managed servers that share a machine-id tag down
+// to one — the lowest server id, a stable deterministic choice — terminating the
+// extras (and their volumes, via the substrate Delete). It returns the surviving
+// set (untagged orphans pass through untouched). Best-effort: a termination that
+// fails is logged and retried on the next reconcile. This is the self-healing
+// half of create idempotency; Delete also removes same-tag duplicates so a
+// teardown never leaves one behind.
+func (b *scalewayBackend) reapDuplicateServers(ctx context.Context, managed []serverInstance) []serverInstance {
+	byMachine := make(map[string][]serverInstance)
+	out := make([]serverInstance, 0, len(managed))
+	for _, srv := range managed {
+		if srv.MachineID == "" {
+			out = append(out, srv) // untagged orphan: never a machine-id duplicate
+			continue
+		}
+		byMachine[srv.MachineID] = append(byMachine[srv.MachineID], srv)
+	}
+	for machineID, servers := range byMachine {
+		keep := servers[0]
+		for _, srv := range servers[1:] {
+			if srv.ServerID < keep.ServerID {
+				keep = srv
+			}
+		}
+		out = append(out, keep)
+		if len(servers) == 1 {
+			continue
+		}
+		for _, srv := range servers {
+			if srv.ServerID == keep.ServerID {
+				continue
+			}
+			b.logger.Warn("reaping duplicate server sharing a machine id (create double-provision)",
+				"machine_id", machineID, "keep", keep.ServerID, "reap", srv.ServerID)
+			if err := b.client.DeleteServer(ctx, srv.ServerID); err != nil {
+				b.logger.Warn("reap: delete duplicate failed; will retry next reconcile",
+					"server", srv.ServerID, "err", err)
+			}
+		}
+	}
+	return out
 }
 
 func (b *scalewayBackend) serverToIdle(machineID string, srv serverInstance) providerkit.Instance {
@@ -361,12 +411,35 @@ type cloudBackend struct {
 }
 
 // DeleteInstance tears the Scaleway Instance down; the slot returns to
-// Speculative.
+// Speculative. It deletes the bound host and any other server still carrying the
+// same machine-id tag — a create double-provision the reaper may not have
+// collapsed yet — so a teardown never leaves a duplicate billing.
 func (b *cloudBackend) DeleteInstance(ctx context.Context, req providerkit.DeleteInstanceRequest) error {
 	if req.Machine.Host.Ref == "" {
 		return fmt.Errorf("delete: machine %s has no host", req.Machine.ID)
 	}
-	return b.client.DeleteServer(ctx, req.Machine.Host.Ref)
+	if err := b.client.DeleteServer(ctx, req.Machine.Host.Ref); err != nil {
+		return err
+	}
+	if req.Machine.ID == "" {
+		return nil
+	}
+	managed, err := b.client.DescribeManaged(ctx)
+	if err != nil {
+		// The bound host is gone; a lingering duplicate (if any) is swept by the
+		// Describe reaper. Don't fail the Delete on a transient list error.
+		b.logger.Warn("delete: could not list for duplicate sweep; reaper will catch any", "machine_id", req.Machine.ID, "err", err)
+		return nil
+	}
+	for _, srv := range managed {
+		if srv.MachineID == req.Machine.ID && srv.ServerID != req.Machine.Host.Ref {
+			b.logger.Warn("delete: removing duplicate server sharing the machine id", "machine_id", req.Machine.ID, "server", srv.ServerID)
+			if derr := b.client.DeleteServer(ctx, srv.ServerID); derr != nil {
+				b.logger.Warn("delete: removing duplicate failed; reaper will retry", "server", srv.ServerID, "err", derr)
+			}
+		}
+	}
+	return nil
 }
 
 var (

@@ -277,6 +277,50 @@ func TestServerToIdle_RecoversResources(t *testing.T) {
 	}
 }
 
+// A create double-provision (two servers tagged with the same machine id) is
+// collapsed by Describe to one survivor (the lowest server id), and the extra is
+// terminated — closing the duplicate-billing window.
+func TestDescribe_ReapsDuplicateMachineID(t *testing.T) {
+	b, fake := newInstancesBackend(t, 4)
+	ctx := context.Background()
+
+	slot := b.speculativeSlots()[0]
+	// Two distinct servers carrying the SAME machine id (distinct idempotency
+	// tokens defeat the fake's own create-idempotency, modelling the lost-response
+	// double-provision).
+	a, _ := fake.CreateServer(ctx, serverSpec{MachineID: slot.ID, CommercialType: slot.InstanceType, Zone: slot.Zone, IdempotencyToken: "op-a"})
+	c, _ := fake.CreateServer(ctx, serverSpec{MachineID: slot.ID, CommercialType: slot.InstanceType, Zone: slot.Zone, IdempotencyToken: "op-b"})
+	if len(fake.servers) != 2 {
+		t.Fatalf("seed: have %d servers, want 2", len(fake.servers))
+	}
+
+	got, err := b.Describe(ctx)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	if len(fake.servers) != 1 {
+		t.Fatalf("reaper left %d servers, want 1 (the duplicate must be terminated)", len(fake.servers))
+	}
+	// The survivor is the lowest server id, and the slot is reported Idle on it.
+	want := a.ServerID
+	if c.ServerID < want {
+		want = c.ServerID
+	}
+	if _, ok := fake.servers[want]; !ok {
+		t.Errorf("reaper kept the wrong server; want lowest id %s to survive", want)
+	}
+	var found *providerkit.Instance
+	for i := range got {
+		if got[i].ID == slot.ID {
+			found = &got[i]
+			break
+		}
+	}
+	if found == nil || found.State != providerkit.StateIdle || found.Host.Ref != want {
+		t.Errorf("slot not reported Idle on the surviving server %s: %+v", want, found)
+	}
+}
+
 // capacityType accepts on_demand and bare_metal (the two Scaleway substrates) and
 // rejects spot/reserved/nonsense so the provider can never mis-declare it.
 func TestOffering_CapacityType(t *testing.T) {
