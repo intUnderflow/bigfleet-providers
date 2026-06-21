@@ -377,7 +377,9 @@ func (b *scalewayBackend) CreateInstance(ctx context.Context, req providerkit.Cr
 }
 
 // ConfigureInstance binds the running server to a cluster and delivers the opaque
-// bootstrap blob (real impl: published for the on-host agent to fetch over mTLS).
+// bootstrap blob (real impl: published for the on-host agent to fetch over the
+// bootstrap channel — TLS with a CA pinned by the agent and a per-machine bearer
+// token verifying the agent, not client-certificate mTLS).
 // It first powers the host on if it was recovered stopped — otherwise the agent
 // can never poll and Configure would wedge at FAILED.
 func (b *scalewayBackend) ConfigureInstance(ctx context.Context, req providerkit.ConfigureInstanceRequest) error {
