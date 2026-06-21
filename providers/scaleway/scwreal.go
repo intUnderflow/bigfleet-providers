@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"strings"
+	"sync"
 	"time"
 
 	block "github.com/scaleway/scaleway-sdk-go/api/block/v1alpha1"
@@ -106,7 +107,20 @@ type scwReal struct {
 	block  *block.API
 	vault  *bootstrapVault
 	logger *slog.Logger
+
+	// typesCache memoises the (single-zone) server-type catalogue for a short TTL.
+	// pricing.refresh calls PriceUSD once per (type, zone) pair, so without this a
+	// refresh of N offerings would trigger N full-catalogue scans; the cache
+	// collapses them to one per refresh run.
+	typesMu     sync.Mutex
+	typesCache  map[string]*instance.ServerType
+	typesExpiry time.Time
 }
+
+// serverTypesTTL bounds how long a fetched server-type catalogue is reused.
+// Specs/prices change rarely, and the price refresher already runs on its own
+// interval, so a minute is plenty to collapse a burst of per-pair lookups.
+const serverTypesTTL = time.Minute
 
 // newSCWReal builds the production client for the configured substrate. The
 // Elastic Metal path is reported as unsupported-in-binary here so that a misbuilt
@@ -460,6 +474,29 @@ func (r *scwReal) DrainNode(ctx context.Context, srv serverInstance, gracePeriod
 	return r.clearClusterTag(ctx, srv.ServerID)
 }
 
+// serverTypes returns the zone's server-type catalogue, served from a short-TTL
+// cache so a burst of per-(type,zone) lookups (pricing.refresh calls PriceUSD
+// once per offering pair) collapses to a single catalogue scan per refresh run.
+func (r *scwReal) serverTypes(ctx context.Context) (map[string]*instance.ServerType, error) {
+	r.typesMu.Lock()
+	if r.typesCache != nil && time.Now().Before(r.typesExpiry) {
+		cached := r.typesCache
+		r.typesMu.Unlock()
+		return cached, nil
+	}
+	r.typesMu.Unlock()
+
+	fresh, err := r.listAllServerTypes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	r.typesMu.Lock()
+	r.typesCache = fresh
+	r.typesExpiry = time.Now().Add(serverTypesTTL)
+	r.typesMu.Unlock()
+	return fresh, nil
+}
+
 // listAllServerTypes pages through the zone's server-type catalogue and returns
 // the merged map. ListServersTypes is paginated, so a single call would miss
 // types beyond the first page for a large catalogue.
@@ -489,7 +526,7 @@ func (r *scwReal) listAllServerTypes(ctx context.Context) (map[string]*instance.
 }
 
 func (r *scwReal) PriceUSD(ctx context.Context, commercialType, _ string) (float64, error) {
-	types, err := r.listAllServerTypes(ctx)
+	types, err := r.serverTypes(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -502,7 +539,7 @@ func (r *scwReal) PriceUSD(ctx context.Context, commercialType, _ string) (float
 }
 
 func (r *scwReal) DescribeCommercialTypeCapacities(ctx context.Context, commercialTypes []string) (map[string]commercialCapacity, error) {
-	types, err := r.listAllServerTypes(ctx)
+	types, err := r.serverTypes(ctx)
 	if err != nil {
 		return nil, err
 	}

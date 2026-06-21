@@ -56,9 +56,11 @@ make build-scaleway
 - `scaleway` — the real Scaleway client via `scaleway-sdk-go` (requires an API
   key and `--image`).
 - `fake` — an in-memory simulator (dev + the credential-free certification run).
-- `auto` (default) — `scaleway` when credentials are set (`--access-key`/
-  `--secret-key` or `SCW_ACCESS_KEY`/`SCW_SECRET_KEY`), otherwise `fake` (with a
-  loud warning).
+- `auto` (default) — `scaleway` only when the full credential set is present
+  (`--access-key`/`--secret-key`/`--project-id`, or `SCW_ACCESS_KEY`/
+  `SCW_SECRET_KEY`/`SCW_DEFAULT_PROJECT_ID`); otherwise `fake` (with a loud
+  warning). Note: a missing `SCW_DEFAULT_PROJECT_ID` makes `auto` fall back to
+  `fake`.
 
 So a bare `./bin/scaleway --seed-count 32` (no credentials) comes up on the fake
 backend — exactly how `make certify-scaleway` runs credential-free.

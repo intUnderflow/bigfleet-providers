@@ -128,7 +128,14 @@ func newObservabilityServer(addr string, m *metrics) *observabilityServer {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte("not ready\n"))
 	})
-	o.srv = &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	o.srv = &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second, // generous: /metrics scrape can be larger
+		IdleTimeout:       120 * time.Second,
+	}
 	return o
 }
 
