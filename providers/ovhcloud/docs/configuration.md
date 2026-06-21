@@ -39,6 +39,7 @@ sourced see [Pricing](/providers/ovhcloud/pricing-and-interruption/).
 | `--bootstrap-hook` | `/opt/bigfleet/bootstrap` | Image path that consumes the delivered bootstrap blob and joins the cluster. See [the image contract](#the-image-hook-contract). |
 | `--base-user-data` | _(empty)_ | Path to the generic, pre-binding cloud-init baked into user_data at create. |
 | `--eur-usd` | `1.08` | EUR→USD conversion rate applied to OVH's EUR prices. See [Pricing](/providers/ovhcloud/pricing-and-interruption/). |
+| `--flavor-price` | _(empty)_ | Comma list of `flavor=USD/hour` price overrides for flavors not in the pinned table (e.g. `b2-7=0.03`). The provider refuses to start if an offered flavor has neither a table entry nor an override. |
 | `--reconcile-interval` | `2m` | Background OpenStack→inventory reconcile interval (`0` = off). |
 | `--metrics-addr` | `:9090` | Address for `/metrics`, `/healthz`, `/readyz`. Empty = disabled. |
 | `--reflection` | `true` | Register gRPC server reflection (for `grpcurl`/debugging). |

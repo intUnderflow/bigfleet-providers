@@ -69,7 +69,7 @@ func newOVHBackend(providerName, region, image string, client ovhClient, offerin
 		// Reject it at construction (a real correctness hazard, not cosmetic):
 		// add the flavor to the pinned table or set a price override.
 		if pr != nil && !pr.known(off.Flavor) {
-			return nil, fmt.Errorf("ovh backend: offering flavor %q has no pinned price and no override (price_per_hour would be 0, which always wins cost ranking) — add it to the pinned table or set a price override", off.Flavor)
+			return nil, fmt.Errorf("ovh backend: offering flavor %q has no pinned price (price_per_hour would be 0, which always wins cost ranking) — add it to the pinned table in pricing.go or pass --flavor-price %s=<USD/hour>", off.Flavor, off.Flavor)
 		}
 	}
 	return &ovhBackend{

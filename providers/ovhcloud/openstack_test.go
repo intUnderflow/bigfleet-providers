@@ -55,6 +55,27 @@ func TestServerName_StableOnToken(t *testing.T) {
 	}
 }
 
+func TestApplyPriceOverrides(t *testing.T) {
+	p := newPricing(1.0)
+	if err := applyPriceOverrides(p, "custom-1=0.5, b2-7=0.03"); err != nil {
+		t.Fatalf("applyPriceOverrides: %v", err)
+	}
+	if !p.known("custom-1") || p.price("custom-1") != 0.5 {
+		t.Errorf("custom-1 override not applied: known=%v price=%v", p.known("custom-1"), p.price("custom-1"))
+	}
+	if p.price("b2-7") != 0.03 {
+		t.Errorf("b2-7 override = %v, want 0.03", p.price("b2-7"))
+	}
+	if err := applyPriceOverrides(p, ""); err != nil {
+		t.Errorf("empty spec should be a no-op, got %v", err)
+	}
+	for _, bad := range []string{"noequals", "flav=", "flav=abc", "flav=-1"} {
+		if err := applyPriceOverrides(newPricing(1.0), bad); err == nil {
+			t.Errorf("expected error for %q", bad)
+		}
+	}
+}
+
 func TestShellQuote_EscapesSingleQuote(t *testing.T) {
 	got := shellQuote("a'b")
 	if got != `'a'\''b'` {

@@ -380,9 +380,12 @@ func (r *ovhReal) ApplyBootstrap(ctx context.Context, srv serverInstance, cluste
 	blob := base64.StdEncoding.EncodeToString(bootstrap) // base64 -d is universally available
 	hook := shellQuote(r.cfg.BootstrapHookPath)
 	blobPath := shellQuote(r.cfg.BootstrapHookPath + ".blob")
+	// The trap payload is DOUBLE-quoted so the already-single-quoted blobPath
+	// nests correctly (a single-quoted trap arg would terminate at the path's own
+	// quotes and break cleanup of the secret-bearing blob).
 	script := fmt.Sprintf(
 		"set -euo pipefail; umask 077; sudo mkdir -p \"$(dirname %s)\"; "+
-			"trap 'sudo rm -f %s' EXIT; "+
+			"trap \"sudo rm -f %s\" EXIT; "+
 			"echo %s | base64 -d | sudo tee %s >/dev/null; sudo %s %s",
 		blobPath, blobPath, shellQuote(blob), blobPath, hook, shellQuote(clusterID))
 	if err := r.runSSH(ctx, srv, script); err != nil {

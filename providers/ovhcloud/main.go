@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -57,6 +58,7 @@ func run() error {
 		keyName      = flag.String("key-name", "", "OpenStack keypair name injected for SSH access (ovh backend)")
 		network      = flag.String("network", "Ext-Net", "OpenStack network name/id to attach (ovh backend; empty = project default)")
 		eurUSD       = flag.Float64("eur-usd", defaultEURtoUSD, "EUR->USD conversion rate applied to OVH prices")
+		flavorPrice  = flag.String("flavor-price", "", "comma list of flavor=USD/hour overrides for flavors missing from the pinned price table (e.g. b2-7=0.03,custom=0.5)")
 		sshKey       = flag.String("ssh-key", "", "path to the SSH private key used for Configure/Drain delivery (ovh backend)")
 		sshUser      = flag.String("ssh-user", "ubuntu", "SSH user for Configure/Drain delivery (ovh backend)")
 		bootstrapHk  = flag.String("bootstrap-hook", "/opt/bigfleet/bootstrap", "image path that applies the delivered bootstrap blob")
@@ -139,6 +141,9 @@ func run() error {
 	}
 
 	pr := newPricing(*eurUSD)
+	if err := applyPriceOverrides(pr, *flavorPrice); err != nil {
+		return err
+	}
 	backend, err := newOVHBackend(*providerLbl, *region, *image, client, offs, pr, userData, logger)
 	if err != nil {
 		return err
@@ -251,6 +256,32 @@ func runReconciler(ctx context.Context, srv *providerkit.Server, m *metrics, int
 			m.reconcile.WithLabelValues(outcome).Inc()
 		}
 	}
+}
+
+// applyPriceOverrides parses a comma list of flavor=USD/hour pairs and registers
+// each as a pricing override, so an operator can price a flavor missing from the
+// pinned table without a code change (newOVHBackend otherwise rejects it).
+func applyPriceOverrides(pr *pricing, spec string) error {
+	if strings.TrimSpace(spec) == "" {
+		return nil
+	}
+	for _, pair := range strings.Split(spec, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		flavor, usdStr, ok := strings.Cut(pair, "=")
+		flavor = strings.TrimSpace(flavor)
+		if !ok || flavor == "" {
+			return fmt.Errorf("--flavor-price: expected flavor=USD, got %q", pair)
+		}
+		usd, err := strconv.ParseFloat(strings.TrimSpace(usdStr), 64)
+		if err != nil || usd < 0 {
+			return fmt.Errorf("--flavor-price: bad price for %q: %q", flavor, usdStr)
+		}
+		pr.setOverride(flavor, usd)
+	}
+	return nil
 }
 
 func resolveBackendMode(flagVal, region string) string {

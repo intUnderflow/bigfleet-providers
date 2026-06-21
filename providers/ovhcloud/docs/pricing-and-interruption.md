@@ -35,12 +35,14 @@ price_per_hour (USD) = pinned_hourly_EUR[flavor] × --eur-usd
   accurate. When OVH changes its catalogue, regenerate the table by hand from the
   [public OVH Public Cloud price page](https://www.ovhcloud.com/en/public-cloud/prices/)
   and bump the date in the table comment. An operator can also pin an explicit
-  per-flavor USD via the in-process override (e.g. a negotiated rate) without
-  touching the table.
+  per-flavor USD with **`--flavor-price flavor=USD/hour`** (e.g. a negotiated rate
+  or a flavor missing from the table) without touching the code.
 
-A flavor that is not in the pinned table (and has no override) reports a
-`price_per_hour` of `0`. List the flavors you actually offer in the table (or set
-an override) so cost ranking is meaningful.
+A flavor that is in neither the pinned table nor a `--flavor-price` override would
+publish `price_per_hour = 0` — the global minimum of the cost-ranking signal, so
+it would always win. The provider therefore **refuses to start** if any offering
+references such a flavor: add it to the pinned table in `pricing.go`, or pass
+`--flavor-price <flavor>=<USD/hour>`.
 
 ## `interruption_probability` — a genuine zero
 

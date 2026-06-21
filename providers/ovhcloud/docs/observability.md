@@ -32,7 +32,7 @@ global default), plus the standard Go/process collectors.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `bigfleet_ovh_api_calls_total` | counter | `op`, `outcome` | OpenStack API calls by operation (`CreateServer`, `DeleteServer`, `DescribeManaged`, `Configure`, `Drain`, `Flavors`) and `success`/`error`. |
+| `bigfleet_ovh_api_calls_total` | counter | `op`, `outcome` | OpenStack API calls by operation (`CreateServer`, `DeleteServer`, `StartServer`, `DescribeManaged`, `Configure`, `Drain`, `Flavors`) and `success`/`error`. |
 | `bigfleet_ovh_api_duration_seconds` | histogram | `op` | OpenStack API call latency by operation. |
 | `bigfleet_ovh_grpc_requests_total` | counter | `method`, `code` | CapacityProvider gRPC requests by method and gRPC status code. |
 | `bigfleet_ovh_grpc_request_duration_seconds` | histogram | `method` | gRPC request latency by method. |
