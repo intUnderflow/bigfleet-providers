@@ -422,9 +422,14 @@ func TestDomainName_LongIDsDoNotAlias(t *testing.T) {
 			t.Errorf("domain name %q exceeds 60 chars (%d)", n, len(n))
 		}
 	}
-	// A short id keeps the readable base32 form and is deterministic.
-	if domainName("op-1") != domainName("op-1") {
-		t.Error("domainName not deterministic")
+	// A short id keeps the readable (non-hashed) base32 form, and distinct short
+	// ids map to distinct names.
+	short := domainName("op-1")
+	if !strings.HasPrefix(short, "bigfleet-") || len(short) > 60 {
+		t.Errorf("short id name = %q", short)
+	}
+	if domainName("op-1") == domainName("op-2") {
+		t.Error("distinct short ids aliased to the same domain name")
 	}
 }
 
