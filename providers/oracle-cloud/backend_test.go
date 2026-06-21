@@ -278,27 +278,59 @@ func TestInstanceToIdle_CapacityFromTag(t *testing.T) {
 	}
 }
 
-// Describe must not surface a non-running tagged instance as IDLE: a stopped
-// instance is releasing its slot, which returns to Speculative (IDLE=reachable).
-func TestDescribe_SkipsNonRunningInstance(t *testing.T) {
+// A stopped/migrating tagged instance still OWNS its slot (surfaced Idle with its
+// host), so it stays reapable via Delete and Create can't launch a duplicate —
+// rather than being dropped (leaked) and the slot re-seeded Speculative.
+func TestDescribe_StoppedInstanceOwnsSlot(t *testing.T) {
 	b, fake := newTestBackend(t, 4)
 	slot := b.speculativeSlots()[0]
-	// Inject a managed-but-stopped instance owning the slot.
-	fake.instances["dead"] = &ociInstance{
-		InstanceID: "dead", MachineID: slot.ID, Shape: slot.InstanceType,
-		AvailabilityDomain: slot.Zone, Running: false,
+	fake.instances["stopped"] = &ociInstance{
+		InstanceID: "stopped", MachineID: slot.ID, Shape: slot.InstanceType,
+		AvailabilityDomain: slot.Zone, Capacity: "on_demand", Running: false,
 	}
 	got, err := b.Describe(context.Background())
 	if err != nil {
 		t.Fatalf("Describe: %v", err)
 	}
+	var found *providerkit.Instance
+	for i := range got {
+		if got[i].ID == slot.ID {
+			found = &got[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("slot %s missing from Describe", slot.ID)
+	}
+	if found.State != providerkit.StateIdle || found.Host.Ref != "stopped" {
+		t.Errorf("stopped tagged instance = (%v, host %q), want (Idle, stopped) — owns its slot, reapable", found.State, found.Host.Ref)
+	}
+}
+
+// An orphan/recovered instance with no availability domain is skipped, not fatally
+// crashed through the RequireZone seed validation.
+func TestDescribe_SkipsADlessOrphan(t *testing.T) {
+	b, fake := newTestBackend(t, 4)
+	fake.instances["noad"] = &ociInstance{InstanceID: "noad", Shape: "VM.Standard.E5.Flex", Running: true} // untagged, no AD
+	got, err := b.Describe(context.Background())
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
 	for _, in := range got {
-		if in.ID == slot.ID && in.State != providerkit.StateSpeculative {
-			t.Errorf("slot %s with a stopped instance = %v, want Speculative", slot.ID, in.State)
+		if in.Host.Ref == "noad" {
+			t.Errorf("AD-less orphan should be skipped, but was surfaced: %+v", in)
 		}
-		if in.Host.Ref == "dead" {
-			t.Errorf("non-running instance surfaced as a host: %+v", in)
-		}
+	}
+}
+
+// Duplicate (shape, AD, capacity) offerings are rejected up front (they would
+// otherwise generate colliding slot IDs and crash the kit's seed).
+func TestNewOCIBackend_RejectsDuplicateOfferings(t *testing.T) {
+	dup := []offering{
+		{Shape: "VM.Standard.E5.Flex", AvailabilityDomain: "AD-1", Capacity: "on_demand", Count: 1, OCPUs: 2, MemoryGB: 16},
+		{Shape: "VM.Standard.E5.Flex", AvailabilityDomain: "AD-1", Capacity: "on_demand", Count: 1, OCPUs: 4, MemoryGB: 32},
+	}
+	if _, err := newOCIBackend("oci-test", newOCIFake(), dup, testPricing(t), newInterruption(), nil, quietLogger()); err == nil {
+		t.Fatal("expected duplicate (shape,AD,capacity) offerings to be rejected")
 	}
 }
 

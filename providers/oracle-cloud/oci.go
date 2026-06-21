@@ -26,6 +26,13 @@ type ociClient interface {
 	// returns to Speculative.
 	TerminateInstance(ctx context.Context, instanceID string) error
 
+	// EnsureRunning makes sure the instance is powered on and RUNNING, starting it
+	// if it is stopped and waiting through any transitional state. It is a no-op
+	// for an already-running instance. Used before Configure so a recovered
+	// stopped/migrated instance (which still owns its slot, surfaced Idle) is
+	// powered on before the bootstrap is delivered, rather than leaking unusably.
+	EnsureRunning(ctx context.Context, instanceID string) error
+
 	// DescribeManaged returns every BigFleet-managed instance in the compartment
 	// (instances carrying the bigfleet-managed=true freeform tag), so a provider
 	// with no persisted store can still rebuild inventory.

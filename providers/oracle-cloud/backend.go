@@ -37,11 +37,13 @@ func newOCIBackend(providerName string, client ociClient, offerings []offering, 
 	if len(offerings) == 0 {
 		return nil, fmt.Errorf("oci backend: no offerings configured")
 	}
+	seen := make(map[string]bool, len(offerings))
 	for _, off := range offerings {
 		if off.Shape == "" {
 			return nil, fmt.Errorf("oci backend: offering with empty shape")
 		}
-		if _, err := off.capacityType(); err != nil {
+		capacity, err := off.capacityType()
+		if err != nil {
 			return nil, fmt.Errorf("oci backend: offering %s/%s: %w", off.Shape, off.AvailabilityDomain, err)
 		}
 		// The provider registers multi-AD (RequireZone), so an AD-less offering
@@ -53,6 +55,14 @@ func newOCIBackend(providerName string, client ociClient, offerings []offering, 
 		if isFlexShape(off.Shape) && (off.OCPUs <= 0 || off.MemoryGB <= 0) {
 			return nil, fmt.Errorf("oci backend: flexible shape %s needs ocpus and memory_gb", off.Shape)
 		}
+		// Two offerings sharing (shape, AD, capacity) generate identical slot IDs,
+		// which the kit rejects as duplicate machines and crashes the seed — reject
+		// the collision here with a clear message instead.
+		key := off.Shape + "|" + off.AvailabilityDomain + "|" + capacity.String()
+		if seen[key] {
+			return nil, fmt.Errorf("oci backend: duplicate offering for shape %s in %s (capacity %s); merge them or vary the key", off.Shape, off.AvailabilityDomain, capacity)
+		}
+		seen[key] = true
 	}
 	return &ociBackend{
 		providerName: providerName,
@@ -117,17 +127,15 @@ func (b *ociBackend) Describe(ctx context.Context) ([]providerkit.Instance, erro
 	bySlot := make(map[string]ociInstance, len(managed))
 	var orphans []ociInstance
 	for _, inst := range managed {
-		// Only a LIVE instance backs a slot, so the recovery path never reports a
-		// stopped/terminating host as IDLE (IDLE must mean a reachable host). A
-		// non-running tagged instance is releasing its slot, which returns to
-		// Speculative for re-provisioning.
-		if !inst.Running {
-			continue
-		}
 		switch {
 		case inst.MachineID != "":
+			// Owns its slot whether or not it is currently running: a stopped/
+			// migrating (MOVING) managed instance keeps its slot (surfaced Idle with
+			// its host, so it stays reapable via Delete and Create can't launch a
+			// duplicate under the same machine id). Only a TERMINATED/TERMINATING
+			// instance — excluded by DescribeManaged — releases its slot.
 			bySlot[inst.MachineID] = inst
-		default:
+		case inst.Running:
 			orphans = append(orphans, inst) // managed + running, but untagged
 		}
 	}
@@ -143,11 +151,21 @@ func (b *ociBackend) Describe(ctx context.Context) ([]providerkit.Instance, erro
 		out = append(out, slot)
 	}
 	// Tagged instances matching no current offering slot (offering shrank, or a
-	// manually tagged instance), then untagged-but-running managed instances.
+	// manually tagged instance), then untagged-but-running managed instances. An
+	// instance missing an availability domain can't satisfy RequireZone and would
+	// fail the seed fatally, so skip it (log) rather than crash recovery.
 	for id, inst := range bySlot {
+		if inst.AvailabilityDomain == "" {
+			b.logger.Warn("skipping recovered instance with no availability domain", "machine_id", id, "instance", inst.InstanceID)
+			continue
+		}
 		out = append(out, b.instanceToIdle(id, inst))
 	}
 	for _, inst := range orphans {
+		if inst.AvailabilityDomain == "" {
+			b.logger.Warn("skipping orphan instance with no availability domain", "instance", inst.InstanceID)
+			continue
+		}
 		out = append(out, b.instanceToIdle(inst.InstanceID, inst))
 	}
 	return out, nil
@@ -241,6 +259,12 @@ func (b *ociBackend) CreateInstance(ctx context.Context, req providerkit.CreateI
 func (b *ociBackend) ConfigureInstance(ctx context.Context, req providerkit.ConfigureInstanceRequest) error {
 	inst, err := b.resolveHost(req.Machine)
 	if err != nil {
+		return fmt.Errorf("configure: %w", err)
+	}
+	// A machine recovered as Idle while stopped/migrating still owns its slot; make
+	// sure it is powered on before delivering the bootstrap (a no-op when already
+	// running), so a recovered host is healed rather than failing the Run Command.
+	if err := b.client.EnsureRunning(ctx, inst.InstanceID); err != nil {
 		return fmt.Errorf("configure: %w", err)
 	}
 	return b.client.ApplyBootstrap(ctx, inst, req.ClusterID, req.BootstrapBlob, req.OperationID)

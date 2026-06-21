@@ -89,6 +89,12 @@ func (c *metricsOCIClient) LaunchInstance(ctx context.Context, spec launchSpec) 
 	c.m.observeAPI("LaunchInstance", start, err)
 	return inst, err
 }
+func (c *metricsOCIClient) EnsureRunning(ctx context.Context, id string) error {
+	start := time.Now()
+	err := c.inner.EnsureRunning(ctx, id)
+	c.m.observeAPI("EnsureRunning", start, err)
+	return err
+}
 func (c *metricsOCIClient) TerminateInstance(ctx context.Context, id string) error {
 	start := time.Now()
 	err := c.inner.TerminateInstance(ctx, id)

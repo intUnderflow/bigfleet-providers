@@ -67,7 +67,7 @@ backend, so everything above runs without credentials.
   OCPU→vCPU convention (x86 = 2 vCPU/OCPU, Ampere = 1) feeds `allocatable`.
 - **Preemptible** machines always declare a non-zero `interruption_probability`
   (forecast prior, raised on observed preemption) — never a falsely-cheap zero.
-- **price_per_hour** comes from a pinned, embedded `prices.yaml` (bare metal = 0).
+- **price_per_hour** comes from a pinned, embedded `prices.yaml`; it is `0` only for `capacity_type=bare_metal` (held capacity), while a `BM.*` shape declared `on_demand` is priced at its real hourly rate.
 
 ## Layout
 

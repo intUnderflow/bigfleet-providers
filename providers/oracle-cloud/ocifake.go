@@ -59,6 +59,15 @@ func (f *ociFake) LaunchInstance(_ context.Context, spec launchSpec) (ociInstanc
 	return *inst, nil
 }
 
+func (f *ociFake) EnsureRunning(_ context.Context, instanceID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if inst, ok := f.instances[instanceID]; ok {
+		inst.Running = true
+	}
+	return nil
+}
+
 func (f *ociFake) TerminateInstance(_ context.Context, instanceID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

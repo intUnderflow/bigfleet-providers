@@ -212,6 +212,48 @@ func (r *ociReal) waitRunning(ctx context.Context, id string) (ociInstance, erro
 	}
 }
 
+// EnsureRunning powers the instance on if it is stopped and waits until it is
+// RUNNING, tolerating the transitional states in between (STOPPING, STARTING,
+// PROVISIONING, MOVING — OCI's live-migration transition). A no-op when already
+// running. Bounded by CreateWaitTimeout and ctx.
+func (r *ociReal) EnsureRunning(ctx context.Context, instanceID string) error {
+	deadline := time.Now().Add(r.cfg.CreateWaitTimeout)
+	ticker := time.NewTicker(r.cfg.PollInterval)
+	defer ticker.Stop()
+	started := false
+	for {
+		resp, err := r.comp.GetInstance(ctx, core.GetInstanceRequest{InstanceId: common.String(instanceID)})
+		if err != nil {
+			return fmt.Errorf("get instance %s: %w", instanceID, err)
+		}
+		switch resp.LifecycleState {
+		case core.InstanceLifecycleStateRunning:
+			return nil
+		case core.InstanceLifecycleStateTerminated, core.InstanceLifecycleStateTerminating:
+			return fmt.Errorf("instance %s is %s; cannot power on", instanceID, resp.LifecycleState)
+		case core.InstanceLifecycleStateStopped:
+			// Issue START once; subsequent polls ride STARTING → RUNNING.
+			if !started {
+				if _, err := r.comp.InstanceAction(ctx, core.InstanceActionRequest{
+					InstanceId: common.String(instanceID),
+					Action:     core.InstanceActionActionStart,
+				}); err != nil {
+					return fmt.Errorf("start instance %s: %w", instanceID, err)
+				}
+				started = true
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for instance %s to run: %w", instanceID, ctx.Err())
+		case <-ticker.C:
+			if time.Now().After(deadline) {
+				return fmt.Errorf("instance %s did not reach RUNNING within %s", instanceID, r.cfg.CreateWaitTimeout)
+			}
+		}
+	}
+}
+
 func (r *ociReal) TerminateInstance(ctx context.Context, instanceID string) error {
 	_, err := r.comp.TerminateInstance(ctx, core.TerminateInstanceRequest{
 		InstanceId:         common.String(instanceID),
