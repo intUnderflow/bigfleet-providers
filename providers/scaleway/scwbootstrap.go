@@ -214,21 +214,6 @@ func (v *bootstrapVault) handleAck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad ack body", http.StatusBadRequest)
 		return
 	}
-	v.mu.Lock()
-	pc := v.pending[machineID]
-	v.mu.Unlock()
-	if pc == nil {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	// Ignore an ack for a command that has since been superseded: the current
-	// waiter is a DIFFERENT command, so completing it on this stale ack would
-	// report success/failure for work the agent never did. The agent will
-	// re-poll and pick up the current command.
-	if ack.CommandID != pc.cmd.CommandID {
-		w.WriteHeader(http.StatusConflict)
-		return
-	}
 	var result error
 	if !ack.OK {
 		msg := ack.Error
@@ -237,10 +222,32 @@ func (v *bootstrapVault) handleAck(w http.ResponseWriter, r *http.Request) {
 		}
 		result = fmt.Errorf("agent bootstrap failed for %s: %s", machineID, msg)
 	}
+
+	// Validate the command id and complete the waiter atomically under the lock:
+	// reading pending, matching the command id, removing it, and signalling must
+	// not interleave with a concurrent Enqueue (which could otherwise supersede the
+	// command between an unlocked check and the signal, completing the wrong
+	// waiter). pc.done is buffered (cap 1), so the send never blocks under the lock.
+	v.mu.Lock()
+	pc := v.pending[machineID]
+	switch {
+	case pc == nil:
+		v.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+		return
+	case ack.CommandID != pc.cmd.CommandID:
+		// Ack for a command that has since been superseded; the agent will re-poll
+		// and pick up the current command.
+		v.mu.Unlock()
+		w.WriteHeader(http.StatusConflict)
+		return
+	}
+	delete(v.pending, machineID)
 	select {
 	case pc.done <- result:
 	default:
 	}
+	v.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
 }
 

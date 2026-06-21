@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"mime/multipart"
+	"net/http"
 	"net/textproto"
 	"strings"
 	"time"
@@ -688,11 +689,18 @@ func is404(err error) bool {
 	if err == nil {
 		return false
 	}
+	// Rely only on SDK-typed errors — a substring match on "not found" could
+	// misclassify a permission/validation failure as a 404 and silently swallow a
+	// real error (notably on the Delete path).
 	var notFound *scw.ResourceNotFoundError
 	if errors.As(err, &notFound) {
 		return true
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "not found")
+	var respErr *scw.ResponseError
+	if errors.As(err, &respErr) && respErr.StatusCode == http.StatusNotFound {
+		return true
+	}
+	return false
 }
 
 var _ scwClient = (*scwReal)(nil)

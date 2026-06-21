@@ -455,10 +455,16 @@ func startBootstrapChannel(addr, certFile, keyFile, caFile string, vault *bootst
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", vault)
+	// The agent's requests are small and quick (fetch a command / post an ack —
+	// the handler never holds the connection), so a full set of timeouts hardens
+	// the secret-bearing endpoint against slow-client resource exhaustion.
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       120 * time.Second,
 		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13},
 	}
 	go func() {
