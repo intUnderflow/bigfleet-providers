@@ -69,8 +69,10 @@ open slot is a Speculative machine the shard can actuate.
 - `shape` → `Machine.instance_type` (top-level). The OCI shape name.
 - `availability_domain` → `Machine.zone` (top-level). Satisfies
   `topology.kubernetes.io/zone`.
-- `capacity_type` → `on_demand` | `spot` (preemptible) | `bare_metal`. A `BM.*`
-  shape is always treated as `bare_metal` (price 0), even if declared on-demand.
+- `capacity_type` → `on_demand` | `spot` (preemptible) | `bare_metal`. Capacity is
+  taken from this declared value, not inferred from the shape: a `BM.*` shape
+  declared `on_demand` is hourly-billed ON_DEMAND capacity (priced, idle-
+  releasable); declare `bare_metal` for a held, price-0 free-pool lane.
 - `count` → the number of Speculative slots (the quota the shard may Create).
 - `ocpus` / `memory_gb` → **required for flexible shapes** (name ends `.Flex`);
   they size the launch `ShapeConfig` and `Machine.allocatable`. Ignored for fixed

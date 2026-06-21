@@ -1,6 +1,6 @@
 ---
 title: Oracle Cloud (OCI) provider
-description: Provision OCI Compute capacity — on-demand, preemptible (spot), and bare metal — for your BigFleet fleet. Deploy one process per region with the Helm chart and container image, scaled in and out automatically.
+description: Provision OCI Compute capacity — on-demand, preemptible (spot), and bare metal — for your BigFleet fleet. Run one provider process per region (a single replica); BigFleet drives it to create and reclaim machines as fleet demand moves.
 sidebar:
   order: 0
   label: OCI overview

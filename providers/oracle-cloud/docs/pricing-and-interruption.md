@@ -25,7 +25,9 @@ the binary and overridable with `--prices-file`. It is read off the hot path
   keyed by shape family, times the launch OCPU/memory:
   `price = ocpus × ocpu_rate + memory_gb × ram_rate`.
 - **Fixed shapes** (e.g. GPU VM shapes) use a whole-instance hourly rate.
-- **Bare metal** (`BM.*`) reports `0` — it is fixed, already-paid-for capacity.
+- **`capacity_type: bare_metal`** reports `0` — it is held, already-paid-for
+  capacity. (This is driven by the declared capacity type, not the shape prefix: a
+  `BM.*` shape offered as `on_demand` is priced from `fixed_hourly`, not 0.)
 - **Preemptible (spot)** applies the table's `spot_discount` (default 0.5; OCI
   Preemptible Instances are ~50% off on-demand) to the on-demand price.
 

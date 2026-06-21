@@ -79,9 +79,11 @@ outside a claimed profile skip-as-pass:
   restart against a `--state` file.
 - **scale** — large inventory, churn-soak, latency budgets.
 
-The OCI provider does **not** claim `bare-metal`: it treats `BM.*` shapes as
-priced `BARE_METAL` capacity (with `Delete` implemented), not a fixed free pool
-where `Delete` is `Unimplemented`.
+The OCI provider does **not** claim the `bare-metal` profile: capacity is set by
+the declared `capacity_type` (a `BM.*` shape can be offered as `on_demand` —
+hourly-billed, `Delete`-able — or as `bare_metal` — held, price 0), and `Delete`
+is always implemented, so it never exposes the fixed free pool where `Delete` is
+`Unimplemented` that the `bare-metal` profile certifies.
 
 The fault, durable, and scale lanes come from `providerkit` and pass **by
 construction** for any kit-based provider.

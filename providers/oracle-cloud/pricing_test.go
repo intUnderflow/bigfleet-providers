@@ -24,7 +24,11 @@ func TestPricing_EmbeddedTable(t *testing.T) {
 		t.Errorf("spot price %v should be > 0 and < on-demand %v", spot, onDemand)
 	}
 	if bm := pr.price("BM.Standard.E5.192", 0, 0, providerkit.CapacityBareMetal); bm != 0 {
-		t.Errorf("bare-metal price = %v, want 0", bm)
+		t.Errorf("bare-metal (held) price = %v, want 0", bm)
+	}
+	// A BM.* shape offered as on-demand must be priced (non-zero), not ranked free.
+	if bmOD := pr.price("BM.Standard.E5.192", 0, 0, providerkit.CapacityOnDemand); bmOD <= 0 {
+		t.Errorf("on-demand bare-metal price = %v, want > 0 (fixed_hourly entry)", bmOD)
 	}
 	if gpu := pr.price("VM.GPU.A10.1", 0, 0, providerkit.CapacityOnDemand); gpu <= 0 {
 		t.Errorf("fixed GPU shape price = %v, want > 0", gpu)
