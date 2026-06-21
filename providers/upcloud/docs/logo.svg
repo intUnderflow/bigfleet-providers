@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="256px" height="192px" viewBox="0 0 256 192" version="1.1" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid">
+  <title>UpCloud</title>
+  <g fill="#7B00FF">
+    <path d="M73,96 a55,55 0 1,1 110,0 h-22 a33,33 0 1,0 -66,0 z"></path>
+    <path d="M115,52 h26 v52 a13,13 0 0,1 -26,0 z"></path>
+  </g>
+</svg>

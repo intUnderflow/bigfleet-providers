@@ -1,0 +1,23 @@
+{{- if .Values.offerings.content }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bigfleet-upcloud.fullname" . }}-offerings
+  labels:
+    {{- include "bigfleet-upcloud.labels" . | nindent 4 }}
+data:
+  offerings.json: |
+    {{- .Values.offerings.content | nindent 4 }}
+{{- end }}
+{{- if .Values.baseUserData.content }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bigfleet-upcloud.fullname" . }}-base-user-data
+  labels:
+    {{- include "bigfleet-upcloud.labels" . | nindent 4 }}
+data:
+  base-user-data: |
+    {{- .Values.baseUserData.content | nindent 4 }}
+{{- end }}
