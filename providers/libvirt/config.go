@@ -98,8 +98,12 @@ func parseConnections(connect, defaultZone string) ([]hostConn, error) {
 		if zone == "" || uri == "" {
 			return nil, fmt.Errorf("--connect entry %q must be zone=uri", part)
 		}
-		if strings.ContainsAny(zone, "/") {
-			return nil, fmt.Errorf("--connect zone %q must not contain '/'", zone)
+		// The bare-vs-zone=uri heuristic (isBareURI) assumes a zone label carries
+		// neither ':' nor '/': a libvirt URI's prefix always contains one of them, a
+		// zone label doesn't. Enforce that here so a stray ':'/'/' fails fast with a
+		// clear error instead of being silently mis-split as a bare URI.
+		if strings.ContainsAny(zone, ":/") {
+			return nil, fmt.Errorf("--connect zone %q must not contain ':' or '/'", zone)
 		}
 		if err := validateConnectURI(uri); err != nil {
 			return nil, err

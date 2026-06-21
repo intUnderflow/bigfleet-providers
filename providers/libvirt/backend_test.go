@@ -577,6 +577,11 @@ func TestValidateConnectURI(t *testing.T) {
 	if _, err := parseConnections("a/b=qemu:///system", "local"); err == nil {
 		t.Error("parseConnections should reject a zone containing '/'")
 	}
+	// A ':' in a zone label would defeat the bare-vs-zone=uri heuristic, so it must
+	// be rejected (multi-entry so it takes the zone=uri path, not bare-URI).
+	if _, err := parseConnections("a:b=qemu:///system,rack2=qemu:///system", "local"); err == nil {
+		t.Error("parseConnections should reject a zone containing ':'")
+	}
 }
 
 func TestDomainName_LongIDsDoNotAlias(t *testing.T) {

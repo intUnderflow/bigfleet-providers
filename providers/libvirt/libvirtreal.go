@@ -378,9 +378,21 @@ func (r *libvirtReal) deleteDomain(c *hostConnection, name string) error {
 		}
 		return fmt.Errorf("look up domain %s: %w", name, err)
 	}
-	// Destroy the running domain (ignore "not running"), then undefine removing
-	// managed-save + NVRAM state.
-	_ = c.lv.DomainDestroy(dom)
+	// Destroy a running domain before undefining. Check state first so an
+	// already-shut-off domain isn't a (benign) DomainDestroy error, and surface a
+	// real destroy failure (permission/RPC) rather than swallowing it and settling
+	// the machine deleted while the VM is still running. The kit's Delete is
+	// idempotent, so a rare stop-between-check-and-destroy race heals on retry.
+	state, _, err := c.lv.DomainGetState(dom, 0)
+	if err != nil {
+		return fmt.Errorf("get state of domain %s: %w", name, err)
+	}
+	if domainActive(libvirt.DomainState(state)) {
+		if err := c.lv.DomainDestroy(dom); err != nil {
+			return fmt.Errorf("destroy domain %s: %w", name, err)
+		}
+	}
+	// Undefine removing managed-save + NVRAM state.
 	if err := r.undefineDomain(c, dom); err != nil {
 		return fmt.Errorf("undefine domain %s: %w", name, err)
 	}

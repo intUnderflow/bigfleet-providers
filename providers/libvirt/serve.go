@@ -128,7 +128,17 @@ func newObservabilityServer(addr string, m *metrics) *observabilityServer {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte("not ready\n"))
 	})
-	o.srv = &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	// Full timeout set so a slow/idle client (slowloris-style) can't tie up
+	// goroutines/fds on the metrics+probe port even if it is reachable beyond the
+	// cluster. The handlers are trivial, so these bounds are generous.
+	o.srv = &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	return o
 }
 
