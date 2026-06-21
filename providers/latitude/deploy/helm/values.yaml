@@ -1,0 +1,160 @@
+# Values for the bigfleet-latitude chart.
+#
+# One release per Latitude.sh site. To run several sites, install the chart once
+# per site with a distinct release name, site, and (shared or per-site) token,
+# e.g.:
+#
+#   helm install latitude-ash ./helm \
+#     --set site=ASH \
+#     --set provider=latitude-ash \
+#     --set token.secretName=bigfleet-latitude-token \
+#     --set project.value=proj_xxx \
+#     --set-file offerings.content=offerings.ash.json
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-latitude
+  tag: ""            # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Number of replicas. Keep at 1 per site: the provider holds site-scoped state
+# and is the single CapacityProvider process for its site.
+replicaCount: 1
+
+# --- core provider config ---------------------------------------------------
+# Latitude site (sets --site-a; the first default-offering site).
+site: ASH
+# Second site for the default offerings (--site-b).
+siteB: NYC
+# HostRef provider label (--provider), e.g. latitude-ash.
+provider: ""
+# Latitude backend mode: auto | latitude | fake (--latitude-backend). auto =
+# latitude when a token AND project are set, else fake.
+latitudeBackend: auto
+
+ports:
+  # gRPC CapacityProvider (--addr).
+  grpc: 9000
+  # /metrics, /healthz, /readyz (--metrics-addr).
+  metrics: 9090
+
+# --- Latitude.sh server parameters ------------------------------------------
+latitude:
+  operatingSystem: ubuntu_22_04_x64_lts   # --operating-system (OS slug deployed at create)
+  bootstrapHook: /opt/bigfleet/bootstrap  # --bootstrap-hook
+  seedCount: 32                           # --seed-count (default offerings size)
+
+# --- project ----------------------------------------------------------------
+# Every Latitude server operation is scoped to a project (id or slug). Set it
+# inline (project.value) or from a Secret (project.secretName/secretKey).
+project:
+  value: ""                     # --project / LATITUDESH_PROJECT (id or slug)
+  secretName: ""                # optional: read the project from a Secret instead
+  secretKey: project
+
+# --- API token --------------------------------------------------------------
+# The provider authenticates with a project-scoped Latitude.sh API token, mounted
+# as the LATITUDESH_API_TOKEN env var from a Secret (key: token). Create it with:
+#   kubectl create secret generic bigfleet-latitude-token --from-literal=token=$LATITUDESH_API_TOKEN
+token:
+  secretName: ""                # Secret holding the token (key: token)
+  secretKey: token
+
+# --- SSH key (Configure/Drain delivery) -------------------------------------
+# Configure/Drain reach the server over SSH on the pinned host key (the
+# cluster-join secret is delivered HERE, never via user_data). Provide the
+# private key in a Secret; the deployed server authorises the matching public key
+# (the provider injects a generated host key via first-boot user_data). When
+# unset, Configure cannot deliver the bootstrap blob.
+ssh:
+  secretName: ""                # Secret holding the SSH private key
+  secretKey: id_ed25519
+  user: root                    # --ssh-user
+
+# --- offerings --------------------------------------------------------------
+# When content is set, it is rendered into a ConfigMap, mounted, and passed via
+# --offerings. Use --set-file offerings.content=offerings.json on install.
+offerings:
+  content: ""
+
+# Optional generic pre-binding cloud-init baked into Server create user_data
+# (--base-user-data). MUST NOT carry the cluster-join secret (that goes over SSH
+# at Configure). Same mechanism as offerings: set content to enable.
+baseUserData:
+  content: ""
+
+# --- background loops -------------------------------------------------------
+priceRefresh: 30m               # --price-refresh
+reconcileInterval: 2m           # --reconcile-interval
+
+# --- durable state ----------------------------------------------------------
+# When enabled, --state points at a file on a PersistentVolume so fence marks,
+# the idempotency map, inventory, bindings, and the pinned-host-key/deploy-tag
+# map survive restarts.
+state:
+  enabled: false
+  path: /var/lib/bigfleet-latitude/state.json
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+
+# --- TLS / mTLS -------------------------------------------------------------
+# Provide a Secret with tls.crt + tls.key (and optionally ca.crt for mTLS). When
+# ca.crt is present the provider requires + verifies client certs (mTLS).
+tls:
+  enabled: false
+  secretName: ""                 # Secret holding tls.crt, tls.key, [ca.crt]
+  mtls: false                   # mount ca.crt and pass --tls-ca
+
+# --- gRPC reflection (--reflection) -----------------------------------------
+reflection: true
+
+# Extra raw flags appended verbatim to the args.
+extraArgs: []
+
+# --- ServiceAccount ---------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# --- Service ----------------------------------------------------------------
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Scrape annotations added to the Service for the metrics port.
+metrics:
+  prometheusScrape: true
+
+# --- pod scheduling / resources ---------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# Hardened defaults to match the distroless/static:nonroot image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
