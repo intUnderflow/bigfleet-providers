@@ -262,11 +262,21 @@ jobs:
     steps:
       - name: All required jobs succeeded or were skipped
         run: |
+          # Fail ONLY on a genuine job `failure`. A `cancelled` result means this
+          # run was superseded in its concurrency group: a branch's push and
+          # pull_request runs share one group (group: ci-<branch>) and one
+          # cancels the other, and a new commit cancels older runs. `if: always()`
+          # still runs this aggregator on the cancelled run, so if we treated
+          # `cancelled` as failure it would post a blocking `ci-ok: failure` on
+          # the commit even though the surviving (authoritative) run is green —
+          # which is exactly what BLOCKED a clean PR. The superseding run posts
+          # the real verdict, so a cancelled run must not block. (A real failure
+          # alongside fail-fast-cancelled siblings is still caught by `failure`.)
           results='${{ join(needs.*.result, ' ') }}'
           echo "job results: $results"
           for r in $results; do
-            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
-              echo "::error::a required job did not succeed"
+            if [ "$r" = "failure" ]; then
+              echo "::error::a required job failed"
               exit 1
             fi
           done
