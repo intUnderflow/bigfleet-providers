@@ -102,7 +102,7 @@ credentials:
     secretKey: token
   ca:
     secretName: bigfleet-proxmox-ca         # mounted; passed as --proxmox-ca-file
-    secretKey: pve-root-ca.pem
+    secretKey: ca.pem
 
 # Durable state on a PersistentVolume: the idempotency map, bindings, and
 # inventory survive restarts. Without it the provider is in-memory only.
@@ -146,7 +146,7 @@ kubectl -n bigfleet create secret generic bigfleet-proxmox-token \
 
 # The Proxmox cluster CA that verifies the API cert.
 kubectl -n bigfleet create secret generic bigfleet-proxmox-ca \
-  --from-file=pve-root-ca.pem=/etc/pve/pve-root-ca.pem
+  --from-file=ca.pem=/etc/pve/pve-root-ca.pem
 ```
 
 The full least-privilege token setup (`pveum` user, role, pool, and ACL) and the

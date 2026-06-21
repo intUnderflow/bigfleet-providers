@@ -112,7 +112,7 @@ point the extension suite at it:
 ./bin/proxmox \
   --addr 127.0.0.1:9099 \
   --proxmox-api-url https://pve1:8006/api2/json \
-  --proxmox-token-id 'bigfleet@pve!bigfleet' \
+  --proxmox-token-id 'bigfleet@pve!autoscaler' \
   --proxmox-token-file ./token \
   --proxmox-ca-file /etc/pve/pve-root-ca.pem \
   --proxmox-pool bigfleet \

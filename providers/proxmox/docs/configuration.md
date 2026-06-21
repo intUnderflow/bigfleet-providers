@@ -57,7 +57,7 @@ A minimal production invocation:
 ./bin/proxmox \
   --provider proxmox-dc1 \
   --proxmox-api-url https://pve1.example.internal:8006/api2/json \
-  --proxmox-token-id 'bigfleet@pve!bigfleet' \
+  --proxmox-token-id 'bigfleet@pve!autoscaler' \
   --proxmox-token-file /etc/bigfleet/proxmox-token/token \
   --proxmox-ca-file /etc/pve/pve-root-ca.pem \
   --proxmox-pool bigfleet \
