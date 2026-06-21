@@ -274,24 +274,17 @@ func (b *azureBackend) DeleteInstance(ctx context.Context, req providerkit.Delet
 	return nil
 }
 
-// resolveHost recovers the substrate VM view (including the private IP and tags
-// the real extension client needs) for a machine the kit holds, by its resource
-// id.
-func (b *azureBackend) resolveHost(ctx context.Context, m providerkit.Machine) (vmInstance, error) {
+// resolveHost builds the substrate VM view the extension client needs to address
+// a machine the kit holds, from its host resource id. Configure/Drain run their
+// CustomScript extensions and tag updates by resource name, so only the resource
+// id is required — we deliberately avoid a DescribeManaged here, which would turn
+// every lifecycle transition into an O(N) list of the resource group (latency +
+// ARM throttling at scale). DeleteInstance already addresses the VM directly the
+// same way.
+func (b *azureBackend) resolveHost(_ context.Context, m providerkit.Machine) (vmInstance, error) {
 	if m.Host.Ref == "" {
 		return vmInstance{}, fmt.Errorf("machine %s has no host", m.ID)
 	}
-	managed, err := b.client.DescribeManaged(ctx)
-	if err != nil {
-		return vmInstance{}, fmt.Errorf("describe managed vms: %w", err)
-	}
-	for _, vm := range managed {
-		if vm.ResourceID == m.Host.Ref {
-			return vm, nil
-		}
-	}
-	// Fall back to a minimal view; the real client can still address the VM by its
-	// resource id even if a transient describe missed it.
 	return vmInstance{ResourceID: m.Host.Ref, VMSize: m.InstanceType, Zone: m.Zone}, nil
 }
 

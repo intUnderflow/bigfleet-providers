@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -594,7 +595,9 @@ func capacityFromSKU(caps []*armcompute.ResourceSKUCapabilities) (vmCapacity, bo
 		case "MemoryGB":
 			var g float64
 			if _, err := fmt.Sscanf(*c.Value, "%g", &g); err == nil {
-				out.MemMiB = int64(g * 1024)
+				// Round, don't truncate: 3.5 may parse as 3.4999… and int64() would
+				// floor it to 3583MiB instead of 3584MiB.
+				out.MemMiB = int64(math.Round(g * 1024))
 				haveMem = true
 			}
 		}

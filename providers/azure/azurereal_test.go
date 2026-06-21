@@ -3,7 +3,29 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6"
 )
+
+// capacityFromSKU must round MemoryGB→MiB, not truncate: 3.5 GB can parse as
+// 3.4999… and a bare int64() would floor it to 3583 MiB.
+func TestCapacityFromSKU_RoundsMemory(t *testing.T) {
+	caps := []*armcompute.ResourceSKUCapabilities{
+		{Name: to.Ptr("vCPUs"), Value: to.Ptr("2")},
+		{Name: to.Ptr("MemoryGB"), Value: to.Ptr("3.5")},
+	}
+	got, ok := capacityFromSKU(caps)
+	if !ok {
+		t.Fatal("capacityFromSKU returned ok=false")
+	}
+	if got.VCPU != 2 {
+		t.Errorf("VCPU = %d, want 2", got.VCPU)
+	}
+	if got.MemMiB != 3584 {
+		t.Errorf("MemMiB = %d, want 3584", got.MemMiB)
+	}
+}
 
 // The real backend's Create idempotency rests on vmName: a retried CreateVM with
 // the same IdempotencyToken must derive the same VM name, so ARM's
