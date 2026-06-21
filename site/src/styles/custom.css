@@ -51,28 +51,25 @@
   border-color: var(--sl-color-accent);
   background-color: var(--sl-color-gray-6);
 }
-/* Uniform square logo tile: every mark occupies the same footprint (so titles
-   line up regardless of logo aspect ratio), and the white tile gives each brand
-   logo its intended background so wordmarks/dark marks stay legible on the dark
-   card. The SVG is centred inside via object-fit: contain. */
+/* Uniform square footprint so every mark occupies the same box and the titles
+   line up regardless of logo aspect ratio; the SVG is centred via object-fit:
+   contain and rendered directly on the card (no tile). */
 .provider-logo,
 .provider-logo--fallback {
   flex: none;
   box-sizing: border-box;
-  width: 2.75rem;
-  height: 2.75rem;
-  border-radius: 0.5rem;
+  width: 2.5rem;
+  height: 2.5rem;
   margin-top: 0.1rem;
 }
 .provider-logo {
-  padding: 0.4rem;
-  background-color: #fff;
   object-fit: contain;
 }
 .provider-logo--fallback {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  border-radius: 0.5rem;
   background-color: var(--sl-color-gray-5);
   font-weight: 700;
   text-transform: uppercase;
