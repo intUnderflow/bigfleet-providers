@@ -243,7 +243,7 @@ func (b *ociBackend) ConfigureInstance(ctx context.Context, req providerkit.Conf
 	if err != nil {
 		return fmt.Errorf("configure: %w", err)
 	}
-	return b.client.ApplyBootstrap(ctx, inst, req.ClusterID, req.BootstrapBlob)
+	return b.client.ApplyBootstrap(ctx, inst, req.ClusterID, req.BootstrapBlob, req.OperationID)
 }
 
 // DrainInstance cordons + drains the kubelet and removes the cluster binding,
@@ -253,7 +253,7 @@ func (b *ociBackend) DrainInstance(ctx context.Context, req providerkit.DrainIns
 	if err != nil {
 		return fmt.Errorf("drain: %w", err)
 	}
-	return b.client.DrainNode(ctx, inst, req.GracePeriodSeconds)
+	return b.client.DrainNode(ctx, inst, req.GracePeriodSeconds, req.OperationID)
 }
 
 // DeleteInstance terminates the OCI instance; the slot returns to Speculative.

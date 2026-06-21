@@ -79,7 +79,7 @@ func (f *ociFake) DescribeManaged(_ context.Context) ([]ociInstance, error) {
 	return out, nil
 }
 
-func (f *ociFake) ApplyBootstrap(_ context.Context, inst ociInstance, clusterID string, _ []byte) error {
+func (f *ociFake) ApplyBootstrap(_ context.Context, inst ociInstance, clusterID string, _ []byte, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s, ok := f.instances[inst.InstanceID]
@@ -90,7 +90,7 @@ func (f *ociFake) ApplyBootstrap(_ context.Context, inst ociInstance, clusterID 
 	return nil
 }
 
-func (f *ociFake) DrainNode(_ context.Context, inst ociInstance, _ int64) error {
+func (f *ociFake) DrainNode(_ context.Context, inst ociInstance, _ int64, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s, ok := f.instances[inst.InstanceID]

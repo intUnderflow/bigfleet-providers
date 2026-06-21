@@ -101,15 +101,15 @@ func (c *metricsOCIClient) DescribeManaged(ctx context.Context) ([]ociInstance, 
 	c.m.observeAPI("DescribeManaged", start, err)
 	return out, err
 }
-func (c *metricsOCIClient) ApplyBootstrap(ctx context.Context, inst ociInstance, cluster string, blob []byte) error {
+func (c *metricsOCIClient) ApplyBootstrap(ctx context.Context, inst ociInstance, cluster string, blob []byte, operationID string) error {
 	start := time.Now()
-	err := c.inner.ApplyBootstrap(ctx, inst, cluster, blob)
+	err := c.inner.ApplyBootstrap(ctx, inst, cluster, blob, operationID)
 	c.m.observeAPI("Configure", start, err)
 	return err
 }
-func (c *metricsOCIClient) DrainNode(ctx context.Context, inst ociInstance, grace int64) error {
+func (c *metricsOCIClient) DrainNode(ctx context.Context, inst ociInstance, grace int64, operationID string) error {
 	start := time.Now()
-	err := c.inner.DrainNode(ctx, inst, grace)
+	err := c.inner.DrainNode(ctx, inst, grace, operationID)
 	c.m.observeAPI("Drain", start, err)
 	return err
 }

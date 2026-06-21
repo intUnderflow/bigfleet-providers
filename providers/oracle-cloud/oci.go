@@ -34,13 +34,15 @@ type ociClient interface {
 	// ApplyBootstrap binds a running instance to a cluster and delivers the opaque
 	// bootstrap blob (real impl: an Oracle Cloud Agent Run Command that writes the
 	// blob and runs the bootstrap hook). The blob is the kubelet join data — never
-	// parse it.
-	ApplyBootstrap(ctx context.Context, inst ociInstance, clusterID string, bootstrap []byte) error
+	// parse it. operationID is the kit's idempotency key, used as the Run Command
+	// OpcRetryToken so a retried Configure doesn't issue a duplicate command.
+	ApplyBootstrap(ctx context.Context, inst ociInstance, clusterID string, bootstrap []byte, operationID string) error
 
 	// DrainNode cordons and drains the kubelet off a running instance, honouring
 	// the grace period, and removes its cluster binding — leaving the instance
 	// running but unbound (Idle). Real impl: a Run Command (kubectl cordon/drain).
-	DrainNode(ctx context.Context, inst ociInstance, gracePeriodSeconds int64) error
+	// operationID is used as the Run Command OpcRetryToken (see ApplyBootstrap).
+	DrainNode(ctx context.Context, inst ociInstance, gracePeriodSeconds int64, operationID string) error
 }
 
 // launchSpec is the launch request handed to LaunchInstance.

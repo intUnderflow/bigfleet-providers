@@ -276,7 +276,7 @@ func (r *ociReal) DescribeManaged(ctx context.Context) ([]ociInstance, error) {
 	return out, nil
 }
 
-func (r *ociReal) ApplyBootstrap(ctx context.Context, inst ociInstance, clusterID string, bootstrap []byte) error {
+func (r *ociReal) ApplyBootstrap(ctx context.Context, inst ociInstance, clusterID string, bootstrap []byte, operationID string) error {
 	// Deliver the opaque bootstrap blob to the node and run the base image's hook.
 	// The image must ship the hook at BootstrapHookPath; it receives the blob at
 	// <hook>.blob and joins the cluster. We wait for the command to SUCCEED, so a
@@ -287,7 +287,7 @@ func (r *ociReal) ApplyBootstrap(ctx context.Context, inst ociInstance, clusterI
 	script := fmt.Sprintf(
 		"set -euo pipefail; umask 077; mkdir -p \"$(dirname %s)\"; echo %s | base64 -d > %s; %s %s",
 		blobPath, shellQuote(blob), blobPath, hook, shellQuote(clusterID))
-	if err := r.runCommand(ctx, inst.InstanceID, "bigfleet-configure", script); err != nil {
+	if err := r.runCommand(ctx, inst.InstanceID, "bigfleet-configure", script, operationID); err != nil {
 		return err
 	}
 	// Record the binding tag only AFTER the bootstrap actually succeeded, so a
@@ -299,7 +299,7 @@ func (r *ociReal) ApplyBootstrap(ctx context.Context, inst ociInstance, clusterI
 	return nil
 }
 
-func (r *ociReal) DrainNode(ctx context.Context, inst ociInstance, gracePeriodSeconds int64) error {
+func (r *ociReal) DrainNode(ctx context.Context, inst ociInstance, gracePeriodSeconds int64, operationID string) error {
 	grace := gracePeriodSeconds
 	if grace <= 0 {
 		// A zero/absent grace must not become a 1s drain timeout — that would fail
@@ -318,7 +318,7 @@ func (r *ociReal) DrainNode(ctx context.Context, inst ociInstance, gracePeriodSe
 			"kubectl drain \"$node\" --ignore-daemonsets --delete-emptydir-data "+
 			"--grace-period=%d --timeout=0s",
 		grace)
-	if err := r.runCommand(ctx, inst.InstanceID, "bigfleet-drain", script); err != nil {
+	if err := r.runCommand(ctx, inst.InstanceID, "bigfleet-drain", script, operationID); err != nil {
 		return err
 	}
 	return r.clearTag(ctx, inst.InstanceID, tagCluster)
@@ -328,12 +328,12 @@ func (r *ociReal) DrainNode(ctx context.Context, inst ociInstance, gracePeriodSe
 // waits for it to finish, returning an error unless it SUCCEEDED. The channel is
 // authenticated by OCI IAM (the provider's principal), the control-plane analogue
 // of AWS SSM SendCommand.
-func (r *ociReal) runCommand(ctx context.Context, instanceID, name, script string) error {
+func (r *ociReal) runCommand(ctx context.Context, instanceID, name, script, operationID string) error {
 	timeout := int(r.cfg.CommandTimeout.Seconds())
 	if timeout <= 0 {
 		timeout = 480
 	}
-	resp, err := r.agent.CreateInstanceAgentCommand(ctx, computeinstanceagent.CreateInstanceAgentCommandRequest{
+	req := computeinstanceagent.CreateInstanceAgentCommandRequest{
 		CreateInstanceAgentCommandDetails: computeinstanceagent.CreateInstanceAgentCommandDetails{
 			CompartmentId:             common.String(r.cfg.CompartmentOCID),
 			ExecutionTimeOutInSeconds: common.Int(timeout),
@@ -344,7 +344,14 @@ func (r *ociReal) runCommand(ctx context.Context, instanceID, name, script strin
 				Output: computeinstanceagent.InstanceAgentCommandOutputViaTextDetails{},
 			},
 		},
-	})
+	}
+	// Idempotency: a retried Configure/Drain (same kit operation id) dedupes onto
+	// the same Run Command rather than issuing a duplicate. Distinct per command
+	// name so a Configure and a later Drain on the same machine never collide.
+	if operationID != "" {
+		req.OpcRetryToken = common.String(retryToken(name + "-" + operationID))
+	}
+	resp, err := r.agent.CreateInstanceAgentCommand(ctx, req)
 	if err != nil {
 		return fmt.Errorf("run command %s on %s: %w", name, instanceID, err)
 	}
