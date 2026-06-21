@@ -17,9 +17,9 @@ You run **one process per region** (DigitalOcean's `nyc3`, `sfo3`, `fra1`,
 capacity, and BigFleet dials it to request, configure, drain, and delete
 machines as demand moves.
 
-## Why you'd trust it in production
+## How it behaves
 
-- **Production-ready.** It ships as a hardened container image and a Helm chart,
+- **Hardened and operable.** It ships as a container image and a Helm chart,
   runs non-root on a distroless, read-only root filesystem, and exposes
   liveness/readiness probes, Prometheus metrics, and structured logs. See
   [Observability](observability.md).
@@ -27,7 +27,7 @@ machines as demand moves.
   [92 certified behaviors](/conformance/) —
   credential-free on every change, plus an extension suite that asserts stronger
   invariants. See [Certification](certification.md).
-- **Correct by construction.** A `Create` blocks until the Droplet is actually
+- **Conservative by default.** A `Create` blocks until the Droplet is actually
   `active`, the price you see is the real published DigitalOcean rate in USD, and
   a failed bootstrap or drain surfaces as a hard failure rather than a
   silently-broken node. Capacity it doesn't own, it never touches.
