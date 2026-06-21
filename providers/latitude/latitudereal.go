@@ -188,7 +188,10 @@ func (r *latitudeReal) CreateServer(ctx context.Context, spec serverSpec) (serve
 	resp, err := r.sdk.Servers.Create(ctx, req)
 	if err != nil {
 		// A retried Create that raced an earlier success may now find the server by
-		// hostname — adopt it instead of failing.
+		// hostname — adopt it instead of failing. Either way the UserData we just
+		// created is not attached to a server we own, so tear it down rather than
+		// leak it (the adopted server carries its own).
+		r.deleteUserData(ctx, userDataID)
 		if existing, ok, lerr := r.serverByHostname(ctx, hostname); lerr == nil && ok {
 			return r.waitPoweredOn(ctx, existing.ServerID)
 		}
@@ -232,23 +235,38 @@ func (r *latitudeReal) waitPoweredOn(ctx context.Context, id string) (serverInst
 // DeleteServer deprovisions the server AND the per-server UserData resource it
 // created, idempotently (an already-gone server / resource is success).
 func (r *latitudeReal) DeleteServer(ctx context.Context, serverIDStr string) error {
+	// Resolve the per-server UserData id to tear down. The in-memory record is the
+	// fast path; after a provider restart (records empty, kit inventory restored
+	// from the FileStore) recover it by its hostname-derived description so the
+	// orphan resource is not leaked. Read the server's hostname BEFORE deleting it,
+	// while it is still resolvable.
+	userDataID := r.recordedUserDataID(serverIDStr)
+	if userDataID == "" {
+		if srv, gerr := r.GetServer(ctx, serverIDStr); gerr == nil && srv.MachineID != "" {
+			userDataID = r.findUserDataID(ctx, userDataDescription(deployHostname(srv.MachineID)))
+		}
+	}
+
 	_, err := r.sdk.Servers.Delete(ctx, serverIDStr, latitudeshgosdk.String("bigfleet-reclaim"))
 	if err != nil && !isNotFound(err) {
 		return fmt.Errorf("delete server %s: %w", serverIDStr, err)
 	}
 	// Tear down the per-server UserData resource so it does not leak.
 	r.mu.Lock()
-	rec := r.records[serverIDStr]
 	delete(r.records, serverIDStr)
 	r.mu.Unlock()
-	if rec != nil && rec.userDataID != "" {
-		if _, derr := r.sdk.UserData.Delete(ctx, rec.userDataID); derr != nil && !isNotFound(derr) {
-			if r.logger != nil {
-				r.logger.Warn("failed to delete per-server user-data (will retry on next delete)", "user_data", rec.userDataID, "err", derr)
-			}
-		}
-	}
+	r.deleteUserData(ctx, userDataID)
 	return nil
+}
+
+// recordedUserDataID returns the in-memory UserData id for a server, or "".
+func (r *latitudeReal) recordedUserDataID(serverIDStr string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rec, ok := r.records[serverIDStr]; ok {
+		return rec.userDataID
+	}
+	return ""
 }
 
 // DescribeManaged lists the project's servers and returns the BigFleet-managed
@@ -557,6 +575,14 @@ func (r *latitudeReal) ensureSSHKey(ctx context.Context) (string, error) {
 	return *resp.Object.Data.ID, nil
 }
 
+// userDataDescription is the stable, hostname-derived description stamped on a
+// server's UserData resource, so its id can be recovered (via UserData.List)
+// when the in-memory record is gone — e.g. after a restart — and the resource
+// torn down rather than leaked.
+func userDataDescription(hostname string) string {
+	return "bigfleet host-key bootstrap for " + hostname
+}
+
 // createUserData stores a UserData resource holding the host-key cloud-init and
 // returns its id, for reference in the server deploy.
 func (r *latitudeReal) createUserData(ctx context.Context, hostname, content string) (string, error) {
@@ -564,7 +590,7 @@ func (r *latitudeReal) createUserData(ctx context.Context, hostname, content str
 		Data: operations.PostUserDataUserDataData{
 			Type: operations.PostUserDataUserDataTypeUserData,
 			Attributes: &operations.PostUserDataUserDataAttributes{
-				Description: "bigfleet host-key bootstrap for " + hostname,
+				Description: userDataDescription(hostname),
 				Project:     latitudeshgosdk.String(r.project),
 				Content:     base64.StdEncoding.EncodeToString([]byte(content)),
 			},
@@ -577,6 +603,39 @@ func (r *latitudeReal) createUserData(ctx context.Context, hostname, content str
 		return "", fmt.Errorf("user-data create returned no id")
 	}
 	return *resp.UserDataObject.Data.ID, nil
+}
+
+// findUserDataID recovers a UserData resource id by its (hostname-derived)
+// description, so a teardown after a provider restart — when the in-memory
+// record is empty — does not leak the orphan resource. Returns "" if none
+// matches or the listing fails.
+func (r *latitudeReal) findUserDataID(ctx context.Context, description string) string {
+	resp, err := r.sdk.UserData.List(ctx, latitudeshgosdk.String(r.project), nil, nil)
+	if err != nil || resp.UserData == nil {
+		return ""
+	}
+	for i := range resp.UserData.Data {
+		ud := resp.UserData.Data[i].Data
+		if ud == nil || ud.ID == nil || ud.Attributes == nil || ud.Attributes.Description == nil {
+			continue
+		}
+		if *ud.Attributes.Description == description {
+			return *ud.ID
+		}
+	}
+	return ""
+}
+
+// deleteUserData removes a UserData resource, idempotently.
+func (r *latitudeReal) deleteUserData(ctx context.Context, userDataID string) {
+	if userDataID == "" {
+		return
+	}
+	if _, err := r.sdk.UserData.Delete(ctx, userDataID); err != nil && !isNotFound(err) {
+		if r.logger != nil {
+			r.logger.Warn("failed to delete per-server user-data", "user_data", userDataID, "err", err)
+		}
+	}
 }
 
 // serverID extracts the id from a created/fetched server.

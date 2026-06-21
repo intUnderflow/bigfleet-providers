@@ -170,14 +170,39 @@ func (b *latitudeBackend) Describe(ctx context.Context) ([]providerkit.Instance,
 		out = append(out, slot)
 	}
 	// Tagged servers matching no current offering slot (offering shrank, or a
-	// manually tagged server), then untagged-but-running managed servers.
+	// manually tagged server), then untagged-but-running managed servers. Unlike
+	// the slot path above (which sources instance_type/zone from the offering),
+	// these source them from the live server view, which can omit them if the API
+	// response is sparse. The provider registers RequireZone, so a machine with an
+	// empty zone/instance_type would fail the kit's whole seed batch — skip such
+	// servers with a warning (the FileStore is the primary recovery path for them).
 	for id, srv := range bySlot {
-		out = append(out, b.serverToIdle(id, srv))
+		if inst, ok := b.serverToIdleChecked(id, srv); ok {
+			out = append(out, inst)
+		}
 	}
 	for _, srv := range orphans {
-		out = append(out, b.serverToIdle(srv.ServerID, srv))
+		if inst, ok := b.serverToIdleChecked(srv.ServerID, srv); ok {
+			out = append(out, inst)
+		}
 	}
 	return out, nil
+}
+
+// serverToIdleChecked is serverToIdle plus the required-field guard for the
+// leftover/orphan paths: an Idle machine needs a non-empty instance_type (and,
+// under RequireZone, a non-empty zone) or the kit rejects the entire seed batch.
+// A server whose live view omits either is skipped with a warning rather than
+// crashing first boot — the FileStore restores it on the next reconcile.
+func (b *latitudeBackend) serverToIdleChecked(machineID string, srv serverInstance) (providerkit.Instance, bool) {
+	if srv.Plan == "" || srv.Site == "" {
+		if b.logger != nil {
+			b.logger.Warn("skipping managed server with empty plan/site in Describe (FileStore is the recovery path)",
+				"server", srv.ServerID, "machine", machineID, "plan", srv.Plan, "site", srv.Site)
+		}
+		return providerkit.Instance{}, false
+	}
+	return b.serverToIdle(machineID, srv), true
 }
 
 func (b *latitudeBackend) serverToIdle(machineID string, srv serverInstance) providerkit.Instance {

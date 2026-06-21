@@ -304,6 +304,37 @@ func TestServerToIdle_RecoversResources(t *testing.T) {
 	}
 }
 
+// Describe must skip a managed server whose live view omits plan/site rather
+// than emit an invalid Idle instance — under RequireZone the kit would otherwise
+// reject the whole seed batch and crash first boot. The FileStore recovers such
+// servers on a later reconcile.
+func TestDescribe_SkipsServerWithEmptyFields(t *testing.T) {
+	b, fake := newTestBackend(t, 4)
+	ctx := context.Background()
+
+	// A managed orphan (no machine id) with empty plan/site — e.g. a sparse API
+	// response. It is "ours" (running, managed) but not safely seedable.
+	bad, err := fake.CreateServer(ctx, serverSpec{MachineID: "", Plan: "", Site: ""})
+	if err != nil {
+		t.Fatalf("seed bad server: %v", err)
+	}
+
+	got, err := b.Describe(ctx)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	for _, inst := range got {
+		if inst.Host.Ref == bad.ServerID {
+			t.Errorf("Describe emitted server %s with empty plan/site; want it skipped", bad.ServerID)
+		}
+		// Belt and braces: every emitted Idle instance must carry the required
+		// fields (the kit validates these under RequireZone).
+		if inst.State == providerkit.StateIdle && (inst.InstanceType == "" || inst.Zone == "") {
+			t.Errorf("Describe emitted invalid Idle instance %s: type=%q zone=%q", inst.ID, inst.InstanceType, inst.Zone)
+		}
+	}
+}
+
 func TestOffering_CapacityType(t *testing.T) {
 	// Only on-demand is a valid Latitude capacity_type; spot and bare_metal are
 	// rejected so the provider can never mis-declare it (bare_metal would suppress
