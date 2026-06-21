@@ -127,7 +127,9 @@ func TestDeployHostname_CollisionFree(t *testing.T) {
 		}
 		// DNS-safe: lowercase [a-z2-7] plus the prefix's hyphen.
 		for _, c := range strings.TrimPrefix(h, hostnamePrefix) {
-			if !((c >= 'a' && c <= 'z') || (c >= '2' && c <= '7')) {
+			isLower := c >= 'a' && c <= 'z'
+			isBase32Digit := c >= '2' && c <= '7'
+			if !isLower && !isBase32Digit {
 				t.Errorf("hostname %q has non-DNS-safe char %q", h, c)
 			}
 		}
