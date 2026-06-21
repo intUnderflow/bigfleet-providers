@@ -217,7 +217,7 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 			return
 		}
 		if definedDom != nil {
-			_ = c.lv.DomainUndefineFlags(*definedDom, libvirt.DomainUndefineManagedSave|libvirt.DomainUndefineNvram)
+			_ = r.undefineDomain(c, *definedDom)
 		}
 		r.deleteVolumes(c, name)
 	}()
@@ -312,15 +312,23 @@ func (r *libvirtReal) deleteDomain(c *hostConnection, name string) error {
 	// Destroy the running domain (ignore "not running"), then undefine removing
 	// managed-save + NVRAM state.
 	_ = c.lv.DomainDestroy(dom)
-	if err := c.lv.DomainUndefineFlags(dom, libvirt.DomainUndefineManagedSave|libvirt.DomainUndefineNvram); err != nil {
-		// Fall back to plain undefine for hypervisors that reject the flags;
-		// report the fallback's own failure, not the flagged call's.
-		if uerr := c.lv.DomainUndefine(dom); uerr != nil {
-			return fmt.Errorf("undefine domain %s: %w", name, uerr)
-		}
+	if err := r.undefineDomain(c, dom); err != nil {
+		return fmt.Errorf("undefine domain %s: %w", name, err)
 	}
 	// Best-effort overlay + seed volume cleanup (keep the golden base image).
 	r.deleteVolumes(c, name)
+	return nil
+}
+
+// undefineDomain undefines a domain, removing managed-save + NVRAM state, with a
+// fallback to a plain undefine for hypervisors/libvirtd that reject the flags.
+// Returns the fallback's own error, not the flagged call's.
+func (r *libvirtReal) undefineDomain(c *hostConnection, dom libvirt.Domain) error {
+	if err := c.lv.DomainUndefineFlags(dom, libvirt.DomainUndefineManagedSave|libvirt.DomainUndefineNvram); err != nil {
+		if uerr := c.lv.DomainUndefine(dom); uerr != nil {
+			return uerr
+		}
+	}
 	return nil
 }
 
