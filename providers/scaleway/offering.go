@@ -36,7 +36,7 @@ func (o offering) capacityType() (providerkit.CapacityType, error) {
 	case "bare_metal", "bare-metal", "metal", "baremetal":
 		return providerkit.CapacityBareMetal, nil
 	case "spot":
-		return providerkit.CapacityUnspecified, fmt.Errorf("capacity_type %q is not offered by Scaleway (no spot/preemptible market; interruption_probability is ~0)", o.Capacity)
+		return providerkit.CapacityUnspecified, fmt.Errorf("capacity_type %q is not offered by Scaleway (no spot/preemptible market; interruption_probability is exactly 0)", o.Capacity)
 	case "reserved":
 		return providerkit.CapacityUnspecified, fmt.Errorf("capacity_type %q is not a Scaleway substrate (use on_demand for Instances or bare_metal for Elastic Metal)", o.Capacity)
 	default:

@@ -154,7 +154,9 @@ func (v *bootstrapVault) Enqueue(ctx context.Context, machineID string, cmd boot
 }
 
 // authenticate checks the Authorization bearer token against the per-machine
-// HMAC token. Constant-time, so it leaks no timing signal.
+// HMAC token. hmac.Equal compares the token bytes in constant time, so a valid
+// token's content leaks no timing signal (the tokens are fixed-length, so the
+// early length-mismatch return reveals nothing an attacker doesn't already know).
 func (v *bootstrapVault) authenticate(machineID, authHeader string) bool {
 	const prefix = "Bearer "
 	if machineID == "" || !strings.HasPrefix(authHeader, prefix) {
@@ -284,7 +286,10 @@ func agentCloudConfig(endpoint, caPEM, machineID, token string) string {
 	return b.String()
 }
 
-// drainGrace clamps a grace period to something sane for the agent command.
+// drainGrace enforces a minimum grace period of 1 second for the agent command
+// (a zero or negative grace would tell the agent to evict with no drain window).
+// There is no upper clamp: a long grace is the operator's deliberate choice and
+// the kit's Drain timeout already bounds how long the call can run.
 func drainGrace(seconds int64) int64 {
 	if seconds <= 0 {
 		return 1
