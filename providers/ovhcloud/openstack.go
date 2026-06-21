@@ -121,6 +121,14 @@ func newOVHReal(ctx context.Context, cfg ovhRealConfig, logger *slog.Logger) (*o
 	if err != nil {
 		return nil, fmt.Errorf("openstack: compute endpoint in region %s: %w", cfg.Region, err)
 	}
+	// Nova's default microversion (2.1) embeds only the flavor UUID in a server
+	// response. From 2.47 the server carries the flavor's `original_name`, which
+	// toServerInstance/flavorName need to recover the flavor NAME — without it, an
+	// orphan/offering-shrank instance (the serverToIdle path) would publish the
+	// UUID as InstanceType, with price_per_hour=0 (UUID not in the table) and a
+	// nil Allocatable (cache keyed by name). 2.47 is broadly supported and is the
+	// minimum that satisfies the code's stated intent.
+	compute.Microversion = "2.47"
 	r := &ovhReal{
 		cfg:       cfg,
 		compute:   compute,

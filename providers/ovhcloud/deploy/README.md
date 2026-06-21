@@ -106,8 +106,10 @@ The chart renders:
 Metrics are namespaced `bigfleet_ovh_*` on an isolated registry (OpenStack API
 calls, gRPC requests, reconcile runs), plus the standard Go/process collectors.
 
-> **Authored-not-verified note:** this chart and Dockerfile are modelled
-> one-to-one on the certified `providers/hetzner` artifacts (same templates,
-> probes, security context). `helm template` / `docker build` / `tofu validate`
-> were not run in the authoring environment (those tools were unavailable); verify
-> with `helm template` and a repo-root `docker build` before production rollout.
+> **CI-validated.** The `deploy (ovhcloud)` CI job runs `helm lint` on the chart
+> and a repo-root `docker build` of the Dockerfile on every change, so both are
+> exercised automatically (the chart and Dockerfile are also modelled one-to-one
+> on the certified `providers/hetzner` artifacts — same templates, probes, and
+> security context). For a production rollout, still render the chart with your
+> own values (`helm template … -f your-values.yaml`) to confirm the manifests
+> match your environment.
