@@ -38,7 +38,7 @@ request, configure, drain, and delete machines as demand moves.
   [92 certified behaviors](/conformance/) — credential-free on every change, plus
   an extension suite that asserts stronger invariants. See
   [Certification](/providers/scaleway/certification/).
-- **Correct by construction.** A `Create` blocks until the server is actually
+- **Conservative by default.** A `Create` blocks until the server is actually
   running, the price you see is the real published Scaleway rate converted to USD,
   and a failed bootstrap or drain surfaces as a hard failure rather than a
   silently-broken node. Capacity it doesn't own, it never touches. These

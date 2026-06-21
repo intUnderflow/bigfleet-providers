@@ -199,7 +199,7 @@ func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 	// polled forever; ensureRunning also (re-)applies user-data before first boot
 	// so a server created before SetServerUserData ran still gets its agent config.
 	if existing := r.serverByName(ctx, name); existing != nil {
-		return r.ensureRunning(ctx, existing.ID, userData)
+		return r.ensureRunning(ctx, existing.ID, spec.MachineID, userData)
 	}
 
 	res, err := r.api.CreateServer(&instance.CreateServerRequest{
@@ -212,7 +212,7 @@ func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 	}, scw.WithContext(ctx))
 	if err != nil {
 		if existing := r.serverByName(ctx, name); existing != nil {
-			return r.ensureRunning(ctx, existing.ID, userData)
+			return r.ensureRunning(ctx, existing.ID, spec.MachineID, userData)
 		}
 		return serverInstance{}, fmt.Errorf("create server %s: %w", spec.CommercialType, err)
 	}
@@ -255,7 +255,10 @@ func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 // agent config is in place); we only need it running again. No-op when already
 // running/starting.
 func (r *scwReal) EnsureRunning(ctx context.Context, serverID string) error {
-	_, err := r.ensureRunning(ctx, serverID, "")
+	// machineID "" → no volume re-tagging here: a Configure/Drain on an already-
+	// created server keeps the tags stamped at create (or repaired by the create-
+	// recovery path); only that path needs to repair them.
+	_, err := r.ensureRunning(ctx, serverID, "", "")
 	return err
 }
 
@@ -267,13 +270,20 @@ func (r *scwReal) EnsureRunning(ctx context.Context, serverID string) error {
 // otherwise boot an agentless server that never joins. Without the Poweron, a
 // recovery branch would poll a stopped server forever (timeout → sticky Create
 // failure + leaked server/volume on every retry).
-func (r *scwReal) ensureRunning(ctx context.Context, id, userData string) (serverInstance, error) {
+func (r *scwReal) ensureRunning(ctx context.Context, id, machineID, userData string) (serverInstance, error) {
 	res, err := r.api.GetServer(&instance.GetServerRequest{Zone: r.zone, ServerID: id}, scw.WithContext(ctx))
 	if err != nil {
 		return serverInstance{}, fmt.Errorf("recover server %s: %w", id, err)
 	}
 	if res == nil || res.Server == nil {
 		return serverInstance{}, fmt.Errorf("server %s vanished during recovery", id)
+	}
+	// On the create-recovery path (machineID set), (re-)assert the boot volume tags:
+	// a Create that crashed between CreateServer and tagVolumes would otherwise
+	// leave the volume permanently untagged and thus invisible to ReapOrphanVolumes.
+	// Idempotent, so repeating it on a later retry is harmless.
+	if machineID != "" {
+		r.tagVolumes(ctx, machineID, res.Server.Volumes)
 	}
 	switch res.Server.State {
 	case instance.ServerStateRunning, instance.ServerStateStarting:
