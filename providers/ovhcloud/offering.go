@@ -79,11 +79,14 @@ func defaultOfferings(seedCount int, regionA, regionB string) []offering {
 		counts[i]++
 	}
 	res := map[string]string{"cpu": "1", "memory": "2Gi"}
+	// Four distinct (flavor, region) pairs, so the slot ids stay unique even when
+	// regionA == regionB (the one-process-per-region case: --region set, no
+	// --region-b). Distinct flavors per bucket avoid a (flavor, region) collision.
 	return []offering{
 		{Flavor: "b2-7", Region: regionA, Capacity: "on_demand", Count: counts[0], Resources: res},
 		{Flavor: "c2-15", Region: regionA, Capacity: "on_demand", Count: counts[1], Resources: res},
-		{Flavor: "b2-7", Region: regionB, Capacity: "on_demand", Count: counts[2], Resources: res},
-		{Flavor: "c2-15", Region: regionB, Capacity: "on_demand", Count: counts[3], Resources: res},
+		{Flavor: "c2-7", Region: regionB, Capacity: "on_demand", Count: counts[2], Resources: res},
+		{Flavor: "b2-15", Region: regionB, Capacity: "on_demand", Count: counts[3], Resources: res},
 	}
 }
 

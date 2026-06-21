@@ -20,7 +20,9 @@ func newTestBackend(t *testing.T, seedCount int) (*ovhBackend, *ovhFake) {
 	t.Helper()
 	fake := newOVHFake()
 	logger := quietLogger()
-	offs := defaultOfferings(seedCount, "GRA", "SBG")
+	// One process per region: the backend is configured for GRA, so every
+	// offering must be in GRA (mismatched regions are rejected at construction).
+	offs := defaultOfferings(seedCount, "GRA", "GRA")
 	b, err := newOVHBackend("ovh-public-test", "GRA", "img-ubuntu-2404", fake, offs, newPricing(defaultEURtoUSD), nil, logger)
 	if err != nil {
 		t.Fatalf("newOVHBackend: %v", err)
@@ -259,6 +261,24 @@ func TestDescribe_DuplicateMachineIDSurfacedAsOrphan(t *testing.T) {
 	}
 	if !refs[a.ServerID] || !refs[c.ServerID] {
 		t.Errorf("both duplicate-machine-id servers must be surfaced; have refs %v (want %s and %s)", refs, a.ServerID, c.ServerID)
+	}
+}
+
+// A real (region-scoped) backend must reject an offering whose region differs
+// from --region — otherwise it would create in --region but advertise a foreign
+// Machine.zone. The fake backend (empty region) accepts multi-region offerings.
+func TestNewOVHBackend_RejectsForeignRegion(t *testing.T) {
+	fake := newOVHFake()
+	offs := []offering{
+		{Flavor: "b2-7", Region: "GRA", Capacity: "on_demand", Count: 1, Resources: map[string]string{"cpu": "1", "memory": "2Gi"}},
+		{Flavor: "c2-15", Region: "SBG", Capacity: "on_demand", Count: 1, Resources: map[string]string{"cpu": "1", "memory": "2Gi"}},
+	}
+	if _, err := newOVHBackend("ovh-public-GRA", "GRA", "img", fake, offs, newPricing(1.08), nil, quietLogger()); err == nil {
+		t.Error("expected rejection of an SBG offering on a GRA-configured backend")
+	}
+	// Empty region (fake backend) accepts the multi-region mix.
+	if _, err := newOVHBackend("ovh-public", "", "img", fake, offs, newPricing(1.08), nil, quietLogger()); err != nil {
+		t.Errorf("fake backend (empty region) should accept multi-region offerings: %v", err)
 	}
 }
 

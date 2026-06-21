@@ -50,7 +50,7 @@ func run() error {
 		offerings   = flag.String("offerings", "", "path to a JSON offerings file (default: a built-in mix sized by --seed-count)")
 		seedCount   = flag.Int("seed-count", 32, "number of Speculative slots when using the default offerings")
 		regionA     = flag.String("region-a", "", "first region for default offerings (default: <region> or GRA)")
-		regionB     = flag.String("region-b", "", "second region for default offerings (default: SBG)")
+		regionB     = flag.String("region-b", "", "second region for default offerings (default: --region when set, else SBG). The real backend rejects offerings outside --region (one process per region), so this only spreads regions for the fake backend.")
 		statePath   = flag.String("state", "", "durable state file (empty = in-memory only)")
 
 		image        = flag.String("image", "", "base image id (UUID) for server create (ovh backend)")
@@ -126,7 +126,7 @@ func run() error {
 		}
 		offs = loaded
 	} else {
-		offs = defaultOfferings(*seedCount, defaultRegion(*regionA, *region, "GRA"), defaultRegion(*regionB, "", "SBG"))
+		offs = defaultOfferings(*seedCount, defaultRegion(*regionA, *region, "GRA"), defaultRegion(*regionB, *region, "SBG"))
 	}
 
 	var userData []byte

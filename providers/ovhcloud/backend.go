@@ -52,6 +52,16 @@ func newOVHBackend(providerName, region, image string, client ovhClient, offerin
 		if off.Region == "" {
 			return nil, fmt.Errorf("ovh backend: offering %s with empty region", off.Flavor)
 		}
+		// The real OpenStack client is scoped to ONE region (--region selects the
+		// endpoint), so an offering for a different region would create instances
+		// in the configured region while advertising a different Machine.zone —
+		// breaking zone semantics. Reject the mismatch (one process per region).
+		// When region is empty (the fake backend / credential-free conformance) the
+		// client is not region-bound, so the multi-region default offerings are
+		// allowed.
+		if region != "" && off.Region != region {
+			return nil, fmt.Errorf("ovh backend: offering %s is in region %q but the provider is configured for region %q (one process per region; every offering must match --region)", off.Flavor, off.Region, region)
+		}
 		// Price comes from a pinned EUR table (OVH has no price API). A flavor
 		// absent from the table (and with no override) would publish
 		// price_per_hour=0 — i.e. effectively free — and always win the shard's
