@@ -502,29 +502,34 @@ func (r *libvirtReal) deleteNamedVolumes(c *hostConnection, names []string) {
 	}
 }
 
-func (r *libvirtReal) DescribeManaged(_ context.Context) ([]domainInstance, error) {
-	var out []domainInstance
-	for zone, c := range r.conns {
-		domains, _, err := c.lv.ConnectListAllDomains(1, libvirt.ConnectListDomainsPersistent)
-		if err != nil {
-			return nil, fmt.Errorf("list domains in zone %q: %w", zone, err)
-		}
-		for _, dom := range domains {
-			// Read metadata once: skip non-bigfleet domains before probing state
-			// (so an unrelated VM's transient state blip can't fail our reconcile),
-			// and reuse it for the view rather than re-reading it.
-			machineID, clusterID := r.readMetadata(c, dom)
-			if machineID == "" {
-				continue
-			}
-			view, err := r.domainViewMeta(c, dom, machineID, clusterID)
+func (r *libvirtReal) DescribeManaged(ctx context.Context) ([]domainInstance, error) {
+	// Bound the whole sweep (blocking ConnectListAllDomains + per-domain metadata/
+	// state RPCs) by ctx like the other methods, so a stalled libvirtd can't wedge
+	// reconcile/resolveHost or block a timely shutdown.
+	return callCtx(ctx, func() ([]domainInstance, error) {
+		var out []domainInstance
+		for zone, c := range r.conns {
+			domains, _, err := c.lv.ConnectListAllDomains(1, libvirt.ConnectListDomainsPersistent)
 			if err != nil {
-				return nil, fmt.Errorf("inspect managed domain %s in zone %q: %w", dom.Name, zone, err)
+				return nil, fmt.Errorf("list domains in zone %q: %w", zone, err)
 			}
-			out = append(out, view)
+			for _, dom := range domains {
+				// Read metadata once: skip non-bigfleet domains before probing state
+				// (so an unrelated VM's transient state blip can't fail our reconcile),
+				// and reuse it for the view rather than re-reading it.
+				machineID, clusterID := r.readMetadata(c, dom)
+				if machineID == "" {
+					continue
+				}
+				view, err := r.domainViewMeta(c, dom, machineID, clusterID)
+				if err != nil {
+					return nil, fmt.Errorf("inspect managed domain %s in zone %q: %w", dom.Name, zone, err)
+				}
+				out = append(out, view)
+			}
 		}
-	}
-	return out, nil
+		return out, nil
+	})
 }
 
 func (r *libvirtReal) ApplyBootstrap(ctx context.Context, dom domainInstance, clusterID string, bootstrap []byte) error {
