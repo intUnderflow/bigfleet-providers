@@ -45,7 +45,7 @@ type scwCredentials struct {
 // key, and project id) is present to talk to the real API. Used by
 // `--scaleway-backend=auto` to fall back to the fake when credentials are not
 // fully configured (the credential-free certification path). The project id is
-// required up front so a missing it fails fast at startup rather than as a
+// required up front so a missing one fails fast at startup rather than as a
 // confusing runtime CreateServer error.
 func (c scwCredentials) complete() bool {
 	return c.accessKey != "" && c.secretKey != "" && c.projectID != ""
