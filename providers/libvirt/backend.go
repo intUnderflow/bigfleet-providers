@@ -28,7 +28,6 @@ import (
 type libvirtBackend struct {
 	providerName string // HostRef.provider label, e.g. "libvirt-rack1"
 	client       libvirtClient
-	image        string // base/golden cloud image volume name for CreateDomain
 	offerings    []offering
 	catalog      *instanceCatalog
 	pricing      *pricing
@@ -36,7 +35,7 @@ type libvirtBackend struct {
 	logger       *slog.Logger
 }
 
-func newLibvirtBackend(providerName, image string, client libvirtClient, offerings []offering, catalog *instanceCatalog, pr *pricing, baseUserData []byte, logger *slog.Logger) (*libvirtBackend, error) {
+func newLibvirtBackend(providerName string, client libvirtClient, offerings []offering, catalog *instanceCatalog, pr *pricing, baseUserData []byte, logger *slog.Logger) (*libvirtBackend, error) {
 	if len(offerings) == 0 {
 		return nil, fmt.Errorf("libvirt backend: no offerings configured")
 	}
@@ -80,7 +79,6 @@ func newLibvirtBackend(providerName, image string, client libvirtClient, offerin
 	return &libvirtBackend{
 		providerName: providerName,
 		client:       client,
-		image:        image,
 		offerings:    offerings,
 		catalog:      catalog,
 		pricing:      pr,
@@ -235,7 +233,6 @@ func (b *libvirtBackend) CreateInstance(ctx context.Context, req providerkit.Cre
 		Zone:             m.Zone,
 		VCPUs:            cap.VCPU,
 		MemoryMiB:        cap.MemMiB,
-		Image:            b.image,
 		IdempotencyToken: req.OperationID,
 		BaseUserData:     b.baseUserData,
 	})

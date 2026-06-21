@@ -145,7 +145,7 @@ func run() error {
 		userData = b
 	}
 
-	backend, err := newLibvirtBackend(*providerLbl, *image, client, offs, catalog, pr, userData, logger)
+	backend, err := newLibvirtBackend(*providerLbl, client, offs, catalog, pr, userData, logger)
 	if err != nil {
 		return err
 	}

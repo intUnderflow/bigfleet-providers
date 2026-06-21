@@ -27,7 +27,7 @@ func newTestBackend(t *testing.T, seedCount int) (*libvirtBackend, *libvirtFake)
 	catalog := newInstanceCatalog(nil)
 	offs := defaultOfferings(seedCount, "rack1", "rack2", "on_demand", catalog.names())
 	pr := newPricing(catalog, 0, 0, nil)
-	b, err := newLibvirtBackend("libvirt-test", "ubuntu-24.04.qcow2", fake, offs, catalog, pr, nil, logger)
+	b, err := newLibvirtBackend("libvirt-test", fake, offs, catalog, pr, nil, logger)
 	if err != nil {
 		t.Fatalf("newLibvirtBackend: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestNewLibvirtBackend_RejectsNonPositiveCount(t *testing.T) {
 	catalog := newInstanceCatalog(nil)
 	pr := newPricing(catalog, 0, 0, nil)
 	offs := []offering{{InstanceType: "kvm.small", Zone: "rack1", Capacity: "on_demand", Count: 0}}
-	if _, err := newLibvirtBackend("libvirt-test", "img", newLibvirtFake(), offs, catalog, pr, nil, quietLogger()); err == nil {
+	if _, err := newLibvirtBackend("libvirt-test", newLibvirtFake(), offs, catalog, pr, nil, quietLogger()); err == nil {
 		t.Error("expected a count==0 offering to be rejected at startup")
 	}
 }
@@ -385,7 +385,7 @@ func TestBareMetalPool_DeleteUnimplemented(t *testing.T) {
 	catalog := newInstanceCatalog(nil)
 	pr := newPricing(catalog, 0, 0, nil)
 	bm := []offering{{InstanceType: "kvm.small", Zone: "rack1", Capacity: "bare_metal", Count: 2, Resources: map[string]string{"cpu": "1"}}}
-	b, err := newLibvirtBackend("libvirt-bm", "img", newLibvirtFake(), bm, catalog, pr, nil, quietLogger())
+	b, err := newLibvirtBackend("libvirt-bm", newLibvirtFake(), bm, catalog, pr, nil, quietLogger())
 	if err != nil {
 		t.Fatalf("newLibvirtBackend(bare_metal): %v", err)
 	}
@@ -407,7 +407,7 @@ func TestBareMetalPool_DeleteUnimplemented(t *testing.T) {
 
 	// The default on-demand backend keeps Delete.
 	on := []offering{{InstanceType: "kvm.small", Zone: "rack1", Capacity: "on_demand", Count: 1, Resources: map[string]string{"cpu": "1"}}}
-	ob, _ := newLibvirtBackend("libvirt-od", "img", newLibvirtFake(), on, catalog, pr, nil, quietLogger())
+	ob, _ := newLibvirtBackend("libvirt-od", newLibvirtFake(), on, catalog, pr, nil, quietLogger())
 	if _, ok := selectBackend(ob).(providerkit.Deleter); !ok {
 		t.Error("on-demand backend must advertise Deleter")
 	}
@@ -422,7 +422,7 @@ func TestNewLibvirtBackend_RejectsMixedCapacity(t *testing.T) {
 		{InstanceType: "kvm.small", Zone: "rack1", Capacity: "bare_metal", Count: 1, Resources: map[string]string{"cpu": "1"}},
 		{InstanceType: "kvm.small", Zone: "rack2", Capacity: "on_demand", Count: 1, Resources: map[string]string{"cpu": "1"}},
 	}
-	if _, err := newLibvirtBackend("libvirt-mix", "img", newLibvirtFake(), mixed, catalog, pr, nil, quietLogger()); err == nil {
+	if _, err := newLibvirtBackend("libvirt-mix", newLibvirtFake(), mixed, catalog, pr, nil, quietLogger()); err == nil {
 		t.Error("expected a mixed bare_metal + on_demand pool to be rejected at startup")
 	}
 }

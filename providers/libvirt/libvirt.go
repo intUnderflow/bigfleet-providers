@@ -57,7 +57,6 @@ type domainSpec struct {
 	Zone         string // the libvirt host to place the domain on
 	VCPUs        int    // resolved from the instance-type catalog
 	MemoryMiB    int64  // resolved from the instance-type catalog
-	Image        string // base/golden cloud image volume name the overlay backs onto
 	// IdempotencyToken is the kit's per-operation id. The real client folds it
 	// into the domain name so a retried launch maps to the same domain; the fake
 	// uses it to model idempotent create.
