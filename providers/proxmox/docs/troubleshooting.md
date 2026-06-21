@@ -101,8 +101,9 @@ guest agent, bounded by the grace period. An incomplete drain surfaces as
 ### A VM was stopped out of band
 
 A VM the kit holds Idle may have been stopped (operator power-cycle, an HA event,
-a maintenance reboot). The provider's `Describe` leaves a tagged-but-stopped VM's
-slot Speculative (so it is not advertised as schedulable), and Configure/Drain
+a maintenance reboot). The provider's `Describe` keeps a tagged-but-stopped VM
+`Idle` and owning its slot (host populated), so it stays reapable via `Delete`
+and a `Create` can't clone a duplicate under the same machine id; Configure/Drain
 power it back on first (`EnsureRunning`). So an out-of-band stop self-heals; you
 should see an `op="EnsureRunning"` call before the next Configure/Drain. If
 `EnsureRunning` itself errors, the node/storage is the problem, not the provider.

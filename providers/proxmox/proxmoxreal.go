@@ -156,23 +156,35 @@ func (r *proxmoxReal) configure(ctx context.Context, vm *proxmox.VirtualMachine,
 
 // DeleteVM stops then destroys the VM together with its disks (purge=1,
 // destroy-unreferenced-disks=1). Idempotent: an already-gone VMID succeeds.
+//
+// Idempotency is decided by cluster PRESENCE, not by the error string. The
+// pinned go-proxmox turns a gone-VM lookup into a generic
+// "500 Internal Server Error" (Proxmox's "...does not exist" detail is in a
+// body the SDK discards before reading), so isNotFound can never recognise it.
+// Cluster.Resources, by contrast, simply omits a destroyed VM — so we check
+// presence up front (absent ⇒ already gone ⇒ success) and, on any operation
+// error, re-check presence so a concurrently-destroyed VM (or a delete that in
+// fact succeeded) collapses to success rather than FAILing a Delete retry.
 func (r *proxmoxReal) DeleteVM(ctx context.Context, node string, vmid int) error {
+	present, err := r.vmPresent(ctx, vmid)
+	if err != nil {
+		return fmt.Errorf("check VM %s/%d existence: %w", node, vmid, err)
+	}
+	if !present {
+		return nil // already gone — idempotent
+	}
+
 	vm, err := r.nodeVM(ctx, node, vmid)
 	if err != nil {
-		if isNotFound(err) {
-			return nil // already gone
-		}
-		return fmt.Errorf("open VM %s/%d: %w", node, vmid, err)
+		return r.nilIfGone(ctx, vmid, fmt.Errorf("open VM %s/%d: %w", node, vmid, err))
 	}
 	if !vm.IsStopped() {
 		task, err := vm.Stop(ctx)
-		if err != nil && !isNotFound(err) {
-			return fmt.Errorf("stop VM %s/%d: %w", node, vmid, err)
+		if err != nil {
+			return r.nilIfGone(ctx, vmid, fmt.Errorf("stop VM %s/%d: %w", node, vmid, err))
 		}
-		if err == nil {
-			if werr := r.waitTask(ctx, task); werr != nil {
-				return fmt.Errorf("stop task: %w", werr)
-			}
+		if werr := r.waitTask(ctx, task); werr != nil {
+			return r.nilIfGone(ctx, vmid, fmt.Errorf("stop task: %w", werr))
 		}
 	}
 	task, err := vm.Delete(ctx, &proxmox.VirtualMachineDeleteOptions{
@@ -180,15 +192,43 @@ func (r *proxmoxReal) DeleteVM(ctx context.Context, node string, vmid int) error
 		DestroyUnreferencedDisks: true,
 	})
 	if err != nil {
-		if isNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("destroy VM %s/%d: %w", node, vmid, err)
+		return r.nilIfGone(ctx, vmid, fmt.Errorf("destroy VM %s/%d: %w", node, vmid, err))
 	}
-	if err := r.waitTask(ctx, task); err != nil {
-		return fmt.Errorf("destroy task: %w", err)
+	if werr := r.waitTask(ctx, task); werr != nil {
+		return r.nilIfGone(ctx, vmid, fmt.Errorf("destroy task: %w", werr))
 	}
 	return nil
+}
+
+// nilIfGone collapses an operation error to success when the VM is no longer
+// present in the cluster (it was concurrently destroyed, or the delete in fact
+// landed). A presence-check failure leaves the original error in place.
+func (r *proxmoxReal) nilIfGone(ctx context.Context, vmid int, opErr error) error {
+	if present, err := r.vmPresent(ctx, vmid); err == nil && !present {
+		return nil
+	}
+	return opErr
+}
+
+// vmPresent reports whether a qemu VM with the given VMID currently exists
+// anywhere in the cluster. VMIDs are cluster-unique, so node is not part of the
+// match — a VM that exists on any node is "present" (and one that exists nowhere
+// is genuinely gone).
+func (r *proxmoxReal) vmPresent(ctx context.Context, vmid int) (bool, error) {
+	cluster, err := r.client.Cluster(ctx)
+	if err != nil {
+		return false, fmt.Errorf("get cluster: %w", err)
+	}
+	resources, err := cluster.Resources(ctx, "vm")
+	if err != nil {
+		return false, fmt.Errorf("list cluster VM resources: %w", err)
+	}
+	for _, res := range resources {
+		if res.Type == "qemu" && int(res.VMID) == vmid {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // DescribeManaged returns every VM across the cluster carrying this provider's
