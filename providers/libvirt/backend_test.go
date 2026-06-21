@@ -293,9 +293,12 @@ func TestDescribe_ShutOffDomainNoOfferingNotDropped(t *testing.T) {
 	b, fake := newTestBackend(t, 4)
 	ctx := context.Background()
 
-	// A machine id that is NOT one of the offering slots.
-	const orphanID = "libvirt-test/OnDemand/kvm.small/rack1/999"
-	dom, err := fake.CreateDomain(ctx, domainSpec{MachineID: orphanID, InstanceType: "kvm.small", Zone: "rack1"})
+	// A machine id (slotID format) that is NOT one of the current offering slots,
+	// encoding kvm.large — while recoverOffering(rack1) would pick kvm.small (the
+	// first rack1 offering). The reported type must be the id's kvm.large, not the
+	// arbitrary same-zone offering, or allocatable/price would be mis-stated.
+	const orphanID = "libvirt-test/OnDemand/kvm.large/rack1/999"
+	dom, err := fake.CreateDomain(ctx, domainSpec{MachineID: orphanID, InstanceType: "kvm.large", Zone: "rack1"})
 	if err != nil {
 		t.Fatalf("seed domain: %v", err)
 	}
@@ -322,6 +325,12 @@ func TestDescribe_ShutOffDomainNoOfferingNotDropped(t *testing.T) {
 	}
 	if found.Host.Ref == "" {
 		t.Error("no-offering domain surfaced without a host (not reapable)")
+	}
+	if found.InstanceType != "kvm.large" {
+		t.Errorf("no-offering domain instance_type = %q, want kvm.large (parsed from the slot id, not an arbitrary same-zone offering)", found.InstanceType)
+	}
+	if found.CapacityType != providerkit.CapacityOnDemand {
+		t.Errorf("no-offering domain capacity = %v, want OnDemand (parsed from the slot id)", found.CapacityType)
 	}
 	// Surfacing it Idle is only safe because it is healable: a Configure-time
 	// EnsureRunning powers it back on rather than driving the guest agent against a
@@ -612,6 +621,20 @@ func TestSplitHostRef(t *testing.T) {
 	z, d, ok = splitHostRef("dc1/rack1/bigfleet-000001")
 	if !ok || z != "dc1/rack1" || d != "bigfleet-000001" {
 		t.Errorf("slash-in-zone split = (%q,%q,%v), want (dc1/rack1, bigfleet-000001, true)", z, d, ok)
+	}
+}
+
+func TestValidateOfferingZones(t *testing.T) {
+	conns := []hostConn{{Zone: "rack1", URI: "qemu:///system"}, {Zone: "rack2", URI: "qemu:///system"}}
+	// Every offering zone is connected → OK.
+	ok := []offering{{InstanceType: "kvm.small", Zone: "rack1", Count: 1}, {InstanceType: "kvm.large", Zone: "rack2", Count: 1}}
+	if err := validateOfferingZones(ok, conns); err != nil {
+		t.Errorf("all-connected offerings rejected: %v", err)
+	}
+	// An offering on a zone with no --connect host → rejected at startup.
+	bad := []offering{{InstanceType: "kvm.small", Zone: "rack3", Count: 1}}
+	if err := validateOfferingZones(bad, conns); err == nil {
+		t.Error("offering on unconfigured zone rack3 should be rejected")
 	}
 }
 

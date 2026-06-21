@@ -136,6 +136,15 @@ func run() error {
 		offs = defaultOfferings(*seedCount, hostA, hostB, *capacity, catalog.names())
 	}
 
+	// With the real backend, every offering must place onto a configured --connect
+	// zone, or Create would only fail at runtime ("no libvirt connection for zone")
+	// after the provider is already serving. Fail fast at startup instead.
+	if mode == "libvirt" {
+		if err := validateOfferingZones(offs, conns); err != nil {
+			return err
+		}
+	}
+
 	var userData []byte
 	if *baseUserData != "" {
 		b, err := os.ReadFile(*baseUserData)
@@ -260,6 +269,23 @@ func runReconciler(ctx context.Context, srv *providerkit.Server, m *metrics, int
 // makes the credential-free certification run (which boots the binary with no
 // --connect) default to the fake, while a real deployment that sets --connect
 // gets the real backend.
+// validateOfferingZones rejects an offering placed on a zone that has no
+// configured --connect host, so a typo fails fast at startup rather than as a
+// runtime Create error after the provider is already serving.
+func validateOfferingZones(offs []offering, conns []hostConn) error {
+	zones := make(map[string]bool, len(conns))
+	for _, c := range conns {
+		zones[c.Zone] = true
+	}
+	for _, off := range offs {
+		if !zones[off.Zone] {
+			return fmt.Errorf("offering %s is placed on zone %q, which has no --connect host (configured zones: %s)",
+				off.InstanceType, off.Zone, strings.Join(zonesOf(conns), ", "))
+		}
+	}
+	return nil
+}
+
 func resolveBackendMode(flagVal string, conns []hostConn) string {
 	switch strings.ToLower(flagVal) {
 	case "auto", "":

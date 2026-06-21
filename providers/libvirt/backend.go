@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"github.com/intUnderflow/bigfleet-providers/providerkit"
@@ -180,28 +181,94 @@ func (b *libvirtBackend) Describe(ctx context.Context) ([]providerkit.Instance, 
 }
 
 func (b *libvirtBackend) domainToIdle(machineID string, dom domainInstance) providerkit.Instance {
-	// Recover a representative instance type / capacity / resources for the orphan
-	// from a still-configured offering on the SAME host (not offerings[0], which
-	// could mis-state capacity_type and price for a recovered bare_metal vs
-	// on_demand domain). The domain reports only raw vCPU/memory, so we trust the
-	// zone-matched offering's catalog entry.
-	off, _ := b.recoverOffering(dom.Zone)
-	capacity := providerkit.CapacityOnDemand
-	if c, err := off.capacityType(); err == nil {
-		capacity = c
+	// Prefer the instance_type + capacity that slotID encoded into the machine id:
+	// for a managed slot whose offering was removed, the id is ground truth for
+	// what the domain was actually created as, so allocatable/price can't be
+	// mis-stated by an arbitrary same-zone offering (which could be a LARGER type
+	// and cause overcommit). Fall back to a representative same-zone offering only
+	// for an orphan (whose id is a host ref, not a slot id) or an unknown type.
+	instanceType, capacity, ok := b.parseSlotIdentity(machineID, dom.Zone)
+	var resources map[string]string
+	if !ok {
+		off, _ := b.recoverOffering(dom.Zone)
+		instanceType = off.InstanceType
+		capacity = providerkit.CapacityOnDemand
+		if c, err := off.capacityType(); err == nil {
+			capacity = c
+		}
+		resources = off.Resources
+	} else if off, found := b.offeringFor(dom.Zone, instanceType); found {
+		// Same-zone offering of the SAME type still configured: use its declared
+		// request shape. Otherwise leave Resources nil (the true per-replica shape
+		// left with the removed offering; identity/allocatable/price stay accurate).
+		resources = off.Resources
 	}
 	return providerkit.Instance{
 		ID:                      machineID,
 		State:                   providerkit.StateIdle,
 		Host:                    providerkit.HostRef{Provider: b.providerName, Ref: dom.hostRef()},
-		InstanceType:            off.InstanceType,
+		InstanceType:            instanceType,
 		Zone:                    dom.Zone,
 		CapacityType:            capacity,
-		PricePerHour:            b.pricing.price(off.InstanceType, capacity),
+		PricePerHour:            b.pricing.price(instanceType, capacity),
 		InterruptionProbability: 0,
-		Resources:               cloneMap(off.Resources),
-		Allocatable:             b.catalog.allocatable(off.InstanceType),
+		Resources:               cloneMap(resources),
+		Allocatable:             b.catalog.allocatable(instanceType),
 	}
+}
+
+// parseSlotIdentity extracts the instance_type and capacity_type that slotID
+// encoded into a machine id ("<provider>/<capacity>/<instance_type>/<zone>/<NNN>")
+// when the id is one this provider minted, its zone matches, and the
+// instance_type is still in the catalog. Parsed from the right because the
+// provider label may itself contain '/', while capacity/instance_type/zone/index
+// never do (zone rejects '/', the index is numeric).
+func (b *libvirtBackend) parseSlotIdentity(id, zone string) (string, providerkit.CapacityType, bool) {
+	parts := strings.Split(id, "/")
+	if len(parts) < 5 {
+		return "", 0, false
+	}
+	n := len(parts)
+	provider := strings.Join(parts[:n-4], "/")
+	capacityStr, instanceType, slotZone, index := parts[n-4], parts[n-3], parts[n-2], parts[n-1]
+	if provider != b.providerName || slotZone != zone {
+		return "", 0, false
+	}
+	if _, err := strconv.Atoi(index); err != nil {
+		return "", 0, false
+	}
+	capacity, ok := capacityFromString(capacityStr)
+	if !ok || !b.catalog.has(instanceType) {
+		return "", 0, false
+	}
+	return instanceType, capacity, true
+}
+
+// offeringFor returns the configured offering for an exact (zone, instance_type),
+// if one is still configured.
+func (b *libvirtBackend) offeringFor(zone, instanceType string) (offering, bool) {
+	for _, off := range b.offerings {
+		if off.Zone == zone && off.InstanceType == instanceType {
+			return off, true
+		}
+	}
+	return offering{}, false
+}
+
+// capacityFromString reverses providerkit.CapacityType.String() (the token slotID
+// embeds), so a slot id's capacity round-trips back to a CapacityType.
+func capacityFromString(s string) (providerkit.CapacityType, bool) {
+	for _, c := range []providerkit.CapacityType{
+		providerkit.CapacityBareMetal,
+		providerkit.CapacityReserved,
+		providerkit.CapacityOnDemand,
+		providerkit.CapacitySpot,
+	} {
+		if c.String() == s {
+			return c, true
+		}
+	}
+	return 0, false
 }
 
 // recoverOffering returns the configured offering that best describes a recovered
