@@ -1,12 +1,50 @@
 package main
 
 import (
+	"context"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6"
 )
+
+// retailStub is a stub RoundTripper for the Retail Prices API that records the
+// $filter and returns a fixed Linux+Windows spot meter set.
+type retailStub struct{ lastFilter string }
+
+func (s *retailStub) RoundTrip(req *http.Request) (*http.Response, error) {
+	s.lastFilter = req.URL.Query().Get("$filter")
+	body := `{"Items":[
+		{"unitPrice":0.05,"meterName":"D4s_v5 Spot","productName":"Virtual Machines DSv5 Series","skuName":"D4s_v5 Spot"},
+		{"unitPrice":0.04,"meterName":"D4s_v5 Spot","productName":"Virtual Machines DSv5 Series Windows","skuName":"D4s_v5 Spot"}
+	]}`
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+}
+
+// SpotPriceUSD must filter on the FULL Standard_* armSkuName (regression: a
+// stripped name matched zero meters and silently disabled live Spot pricing) and
+// exclude the cheaper Windows meter, returning the Linux price.
+func TestSpotPriceUSD_FullSkuNameAndExcludesWindows(t *testing.T) {
+	stub := &retailStub{}
+	a := &azureReal{
+		cfg:      azureRealConfig{Location: "eastus"},
+		priceAPI: "https://example.test/api",
+		http:     &http.Client{Transport: stub},
+	}
+	got, err := a.SpotPriceUSD(context.Background(), "Standard_D4s_v5")
+	if err != nil {
+		t.Fatalf("SpotPriceUSD: %v", err)
+	}
+	if got != 0.05 {
+		t.Errorf("price = %v, want 0.05 (Linux spot, not the 0.04 Windows meter)", got)
+	}
+	if !strings.Contains(stub.lastFilter, "armSkuName eq 'Standard_D4s_v5'") {
+		t.Errorf("filter %q must use the full Standard_ sku name", stub.lastFilter)
+	}
+}
 
 // toVMInstance must derive the real power state from the expanded instance view:
 // a deallocated VM is not Running even though provisioning Succeeded; a running

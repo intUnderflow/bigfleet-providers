@@ -303,6 +303,21 @@ func (a *azureReal) DescribeManaged(ctx context.Context) ([]vmInstance, error) {
 	return out, nil
 }
 
+// StartVM powers on the VM, polling to completion. Idempotent: BeginStart on an
+// already-running VM is a no-op. A missing VM is surfaced as an error (the caller
+// is mid-Configure and should fail rather than proceed against a gone host).
+func (a *azureReal) StartVM(ctx context.Context, resourceID string) error {
+	name := resourceName(resourceID)
+	poller, err := a.vms.BeginStart(ctx, a.cfg.ResourceGroup, name, nil)
+	if err != nil {
+		return fmt.Errorf("begin start vm %s: %w", name, err)
+	}
+	if _, err := poller.PollUntilDone(ctx, nil); err != nil {
+		return fmt.Errorf("start vm %s poll: %w", name, err)
+	}
+	return nil
+}
+
 // ApplyBootstrap delivers the opaque bootstrap blob via a CustomScript extension
 // that writes the blob and runs the bootstrap hook, then records the cluster
 // binding as a tag. The blob is the kubelet join data — never parsed.
@@ -399,11 +414,11 @@ func (a *azureReal) setClusterTag(ctx context.Context, vmNameStr, clusterID stri
 // SpotPriceUSD queries the public Retail Prices API for the current Spot
 // consumption price of a VM size in the configured region.
 func (a *azureReal) SpotPriceUSD(ctx context.Context, vmSize string) (float64, error) {
-	// armSkuName is the VM size with the "Standard_" prefix stripped (the meter's
-	// armSkuName, e.g. "D4s_v5").
-	armSku := strings.TrimPrefix(vmSize, "Standard_")
+	// armSkuName in the Retail Prices API is the full VM size name including the
+	// "Standard_" prefix (e.g. "Standard_D4s_v5") — do NOT strip it, or the filter
+	// matches zero meters and live Spot pricing silently never populates.
 	filter := fmt.Sprintf("armRegionName eq '%s' and armSkuName eq '%s' and priceType eq 'Consumption'",
-		a.cfg.Location, armSku)
+		a.cfg.Location, vmSize)
 	q := url.Values{}
 	q.Set("currencyCode", "USD")
 	q.Set("$filter", filter)
@@ -519,6 +534,7 @@ func (a *azureReal) toVMInstance(vm armcompute.VirtualMachine) vmInstance {
 		}
 		if p.ProvisioningState != nil && strings.EqualFold(*p.ProvisioningState, "Deleting") {
 			out.Running = false
+			out.Deleting = true
 		}
 	}
 	return out

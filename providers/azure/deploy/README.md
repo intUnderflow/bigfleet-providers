@@ -63,6 +63,7 @@ What the custom role grants, and why (each line maps to a call the code makes):
 | Actions | When |
 |---|---|
 | `Microsoft.Compute/virtualMachines/{read,write,delete}` | Create / Delete / inventory |
+| `Microsoft.Compute/virtualMachines/start/action` | power on a stopped host at Configure |
 | `Microsoft.Compute/virtualMachines/extensions/{read,write,delete}` | Configure / Drain (CustomScript) |
 | `Microsoft.Compute/disks/{read,write,delete}` | the OS managed disk |
 | `Microsoft.Compute/skus/read` | allocatable lookup (Resource SKUs) |

@@ -111,6 +111,12 @@ func (c *metricsAzureClient) DescribeManaged(ctx context.Context) ([]vmInstance,
 	c.m.observeAzure("ListVMs", start, err)
 	return out, err
 }
+func (c *metricsAzureClient) StartVM(ctx context.Context, id string) error {
+	start := time.Now()
+	err := c.inner.StartVM(ctx, id)
+	c.m.observeAzure("StartVM", start, err)
+	return err
+}
 func (c *metricsAzureClient) ApplyBootstrap(ctx context.Context, vm vmInstance, cluster string, blob []byte) error {
 	start := time.Now()
 	err := c.inner.ApplyBootstrap(ctx, vm, cluster, blob)

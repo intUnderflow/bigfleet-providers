@@ -96,6 +96,7 @@ resource "azurerm_role_definition" "provider" {
       "Microsoft.Compute/virtualMachines/read",
       "Microsoft.Compute/virtualMachines/write",
       "Microsoft.Compute/virtualMachines/delete",
+      "Microsoft.Compute/virtualMachines/start/action",
       "Microsoft.Compute/virtualMachines/extensions/read",
       "Microsoft.Compute/virtualMachines/extensions/write",
       "Microsoft.Compute/virtualMachines/extensions/delete",

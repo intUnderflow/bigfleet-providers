@@ -210,10 +210,14 @@ func run() error {
 			if evToken == "" {
 				evToken = os.Getenv("BIGFLEET_EVICTION_TOKEN")
 			}
-			reporter := newEvictionReporter(backend, srv, m, evToken, logger)
-			obs.handle("/internal/eviction", reporter.handle)
-			if evToken == "" {
-				logger.Warn("eviction ingest endpoint /internal/eviction is unauthenticated; set --eviction-token / BIGFLEET_EVICTION_TOKEN and restrict the metrics port with a NetworkPolicy")
+			// Fail closed: the endpoint mutates interruption state and triggers a
+			// reconcile, so it is only exposed when a token is configured. Without
+			// one it stays unregistered rather than accepting unauthenticated POSTs.
+			if evToken != "" {
+				reporter := newEvictionReporter(backend, srv, m, evToken, logger)
+				obs.handle("/internal/eviction", reporter.handle)
+			} else {
+				logger.Warn("eviction ingest endpoint /internal/eviction disabled: set --eviction-token / BIGFLEET_EVICTION_TOKEN to enable it")
 			}
 		}
 		obs.start(logger)

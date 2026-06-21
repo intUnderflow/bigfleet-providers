@@ -75,7 +75,7 @@ error and the machine goes `FAILED`.
   extension. 
 - **Diagnose:** read the extension's status:
   ```sh
-  az vm extension show -g <rg> --vm-name <vm> -n bigfleet-configure \
+  az vm extension show -g <rg> --vm-name <vm> -n bigfleet-hook \
     --query 'instanceView.statuses'
   ```
 - **Fix:** make the hook robust. The image must ship an executable at

@@ -201,10 +201,11 @@ registered only on the real `azure` backend. Body:
 { "machine_id": "azure-eastus/Spot/Standard_F8s_v2/eastus-1/000", "event_type": "Preempt" }
 ```
 
-It authenticates with a bearer token when set — supply it via the
-`BIGFLEET_EVICTION_TOKEN` env var (the Helm chart sources it from a Secret via
-`evictionToken.secretName`) in preference to the `--eviction-token` flag, which
-would sit in cleartext in the pod spec. Strongly recommended — pair it with a
+It is **fail-closed**: the endpoint is only registered when a bearer token is
+configured — supply it via the `BIGFLEET_EVICTION_TOKEN` env var (the Helm chart
+sources it from a Secret via `evictionToken.secretName`) in preference to the
+`--eviction-token` flag, which would sit in cleartext in the pod spec. Without a
+token the endpoint does not exist (the agent's POSTs get 404). Pair it with a
 NetworkPolicy restricting the metrics port to the node CIDR. On a `Preempt` it
 raises the machine's observed probability to
 `0.99`, increments `bigfleet_azure_spot_evictions_total`, logs

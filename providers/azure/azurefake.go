@@ -82,6 +82,15 @@ func (f *azureFake) DescribeManaged(_ context.Context) ([]vmInstance, error) {
 	return out, nil
 }
 
+func (f *azureFake) StartVM(_ context.Context, resourceID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if v, ok := f.vms[resourceID]; ok {
+		v.Running = true
+	}
+	return nil
+}
+
 func (f *azureFake) ApplyBootstrap(_ context.Context, vm vmInstance, clusterID string, _ []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

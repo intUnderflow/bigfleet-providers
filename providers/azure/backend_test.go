@@ -200,8 +200,9 @@ func TestDescribe_DeletingVMReleasesSlot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed vm: %v", err)
 	}
-	// Simulate the VM entering its Deleting state (toVMInstance sets Running=false).
+	// Simulate the VM entering its Deleting state.
 	fake.vms[vm.ResourceID].Running = false
+	fake.vms[vm.ResourceID].Deleting = true
 
 	got, err := b.Describe(ctx)
 	if err != nil {
@@ -219,6 +220,64 @@ func TestDescribe_DeletingVMReleasesSlot(t *testing.T) {
 		}
 	}
 	t.Fatalf("Describe did not return slot %s", slot.ID)
+}
+
+// A tagged VM that is merely stopped/deallocated (not deleting) must KEEP owning
+// its slot (Idle with its host), so it is recovered and powered on rather than
+// dropped — dropping it would re-seed Speculative and leak the stopped VM.
+func TestDescribe_StoppedVMKeepsSlot(t *testing.T) {
+	b, fake := newTestBackend(t, 4)
+	ctx := context.Background()
+
+	slot := b.speculativeSlots()[0]
+	vm, err := fake.CreateVM(ctx, vmSpec{MachineID: slot.ID, VMSize: slot.InstanceType, Zone: slot.Zone})
+	if err != nil {
+		t.Fatalf("seed vm: %v", err)
+	}
+	fake.vms[vm.ResourceID].Running = false // stopped/deallocated, NOT deleting
+
+	got, err := b.Describe(ctx)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	for i := range got {
+		if got[i].ID == slot.ID {
+			if got[i].State != providerkit.StateIdle {
+				t.Errorf("stopped VM's slot = %v, want Idle (recoverable, must keep its slot)", got[i].State)
+			}
+			if got[i].Host.Ref != vm.ResourceID {
+				t.Errorf("stopped VM's slot host = %q, want %q", got[i].Host.Ref, vm.ResourceID)
+			}
+			return
+		}
+	}
+	t.Fatalf("Describe did not return slot %s", slot.ID)
+}
+
+// ConfigureInstance must power on a stopped host before delivering the bootstrap,
+// so the CustomScript extension can run (it can't on a deallocated VM).
+func TestConfigure_PowersOnStoppedHost(t *testing.T) {
+	b, fake := newTestBackend(t, 4)
+	ctx := context.Background()
+
+	slot := b.speculativeSlots()[0]
+	vm, err := fake.CreateVM(ctx, vmSpec{MachineID: slot.ID, VMSize: slot.InstanceType, Zone: slot.Zone})
+	if err != nil {
+		t.Fatalf("seed vm: %v", err)
+	}
+	fake.vms[vm.ResourceID].Running = false
+
+	err = b.ConfigureInstance(ctx, providerkit.ConfigureInstanceRequest{
+		Machine:       providerkit.Machine{ID: slot.ID, InstanceType: slot.InstanceType, Zone: slot.Zone, Host: providerkit.HostRef{Provider: b.providerName, Ref: vm.ResourceID}},
+		ClusterID:     "cluster-1",
+		BootstrapBlob: []byte("blob"),
+	})
+	if err != nil {
+		t.Fatalf("ConfigureInstance: %v", err)
+	}
+	if !fake.vms[vm.ResourceID].Running {
+		t.Error("ConfigureInstance did not power on the stopped host")
+	}
 }
 
 // newAzureBackend must reject an offering whose VM size has no pinned on-demand

@@ -139,7 +139,11 @@ func (b *azureBackend) Describe(ctx context.Context) ([]providerkit.Instance, er
 	byMachine := make(map[string][]vmInstance)
 	for _, vm := range managed {
 		switch {
-		case vm.MachineID != "" && vm.Running:
+		case vm.MachineID != "" && !vm.Deleting:
+			// Owns its slot whether running OR stopped/deallocated: a stopped managed
+			// VM is recoverable (Configure powers it on), so it must keep its slot
+			// rather than be dropped — dropping it would re-seed the slot Speculative
+			// and leak the old VM (disk + record) when Create makes a new one.
 			byMachine[vm.MachineID] = append(byMachine[vm.MachineID], vm)
 		case vm.MachineID != "":
 			// Tagged but deleting/evicted: releasing its slot. Drop it so the slot
@@ -286,6 +290,12 @@ func (b *azureBackend) ConfigureInstance(ctx context.Context, req providerkit.Co
 	vm, err := b.resolveHost(ctx, req.Machine)
 	if err != nil {
 		return fmt.Errorf("configure: %w", err)
+	}
+	// Heal a stopped/deallocated host before configuring it: the CustomScript
+	// extension can't run on a deallocated VM, and a recovered Idle machine may
+	// point at one. StartVM is idempotent (a no-op for an already-running VM).
+	if err := b.client.StartVM(ctx, vm.ResourceID); err != nil {
+		return fmt.Errorf("configure: power on host: %w", err)
 	}
 	return b.client.ApplyBootstrap(ctx, vm, req.ClusterID, req.BootstrapBlob)
 }

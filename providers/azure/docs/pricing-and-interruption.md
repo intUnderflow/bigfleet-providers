@@ -136,8 +136,10 @@ EventBridge→SQS). So the observed signal has two halves:
    reads its own `bigfleet-machine-id` IMDS tag, and `POST`s any `Preempt` event
    to the provider.
 2. The provider's **eviction ingest endpoint**, `POST /internal/eviction` on the
-   metrics port, authenticated by the `--eviction-token` bearer (set it, and
-   restrict the metrics port with a NetworkPolicy). On a `Preempt` it raises that
+   metrics port, authenticated by a bearer token (`BIGFLEET_EVICTION_TOKEN` /
+   `--eviction-token`). It is fail-closed — registered only when a token is set —
+   so configure one and restrict the metrics port with a NetworkPolicy. On a
+   `Preempt` it raises that
    machine's observed probability to `0.99`, increments
    `bigfleet_azure_spot_evictions_total`, and kicks a reconcile so the raised
    value lands in inventory promptly (the periodic `--reconcile-interval` loop

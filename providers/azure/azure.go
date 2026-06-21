@@ -33,6 +33,11 @@ type azureClient interface {
 	// deallocated VM is not Running).
 	DescribeManaged(ctx context.Context) ([]vmInstance, error)
 
+	// StartVM powers on the VM (idempotent: a no-op for an already-running VM), so
+	// a stopped/deallocated managed VM is healed before Configure runs its
+	// CustomScript extension (extensions can't run on a deallocated VM).
+	StartVM(ctx context.Context, resourceID string) error
+
 	// ApplyBootstrap binds a running VM to a cluster and delivers the opaque
 	// bootstrap blob (real impl: a CustomScript VM extension that writes and runs
 	// the blob, plus a bigfleet-cluster tag). The blob is the kubelet join data —
@@ -89,10 +94,13 @@ type vmInstance struct {
 	PrivateIP  string
 	ClusterID  string // bigfleet-cluster tag, empty when unbound
 	Capacity   string // bigfleet-capacity tag (canonical capacity string)
-	// Running reports whether the VM is in a live provisioning/power state
-	// (creating / running / stopped-but-allocated), as opposed to
-	// deleting / deallocated-and-gone.
+	// Running reports whether the VM's power state is actually running. A
+	// stopped/deallocated VM is NOT running (but is still recoverable — it owns its
+	// slot and is powered on at Configure).
 	Running bool
+	// Deleting reports whether the VM is being torn down (ProvisioningState
+	// Deleting). A deleting VM is releasing its slot, unlike a merely stopped one.
+	Deleting bool
 }
 
 // vmCapacity is the real hardware capacity of an Azure VM size, used to populate

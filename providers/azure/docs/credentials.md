@@ -32,6 +32,7 @@ your resource group:
 | `Microsoft.Compute/virtualMachines/read` | List / reconcile / Create-wait | Recover inventory + bindings from the `bigfleet-managed` tag; read VM state. |
 | `Microsoft.Compute/virtualMachines/write` | `Create` | Create the VM (size, zone, image, Spot priority, BigFleet tags). |
 | `Microsoft.Compute/virtualMachines/delete` | `Delete` | Tear the VM down. |
+| `Microsoft.Compute/virtualMachines/start/action` | `Configure` | Power on a stopped/deallocated managed VM before configuring it. |
 | `Microsoft.Compute/virtualMachines/extensions/*` | `Configure` / `Drain` | Run the CustomScript extension that delivers the bootstrap blob and drains the node. |
 | `Microsoft.Compute/disks/*` | `Create` / `Delete` | The OS managed disk the VM creates and releases. |
 | `Microsoft.Compute/skus/read` | startup | Resolve each offered size's real vCPU/memory (Resource SKUs) for `Machine.allocatable`. |
