@@ -12,11 +12,10 @@ import (
 // client's substrate logic (stop-then-delete, idempotency, EnsureRunning) without
 // a live UpCloud account.
 type mockService struct {
-	details      map[string]*upcloud.ServerDetails
-	stopped      []string
-	deleted      []string
-	startCalled  []string
-	notFoundOnce bool
+	details     map[string]*upcloud.ServerDetails
+	stopped     []string
+	deleted     []string
+	startCalled []string
 }
 
 func newMockService() *mockService {

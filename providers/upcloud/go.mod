@@ -7,7 +7,7 @@ require (
 	github.com/intUnderflow/bigfleet v0.0.0-20260620114917-f809069ab3d8
 	github.com/intUnderflow/bigfleet-providers v0.0.0
 	github.com/prometheus/client_golang v1.23.2
-	golang.org/x/crypto v0.51.0
+	golang.org/x/crypto v0.52.0
 	google.golang.org/grpc v1.80.0
 )
 

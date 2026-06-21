@@ -230,11 +230,11 @@ func TestDrain_PowersOnStoppedServer(t *testing.T) {
 
 	id := firstSpeculative(t, s)
 	mustCreate(t, s, id)
-	m := waitState(t, s, id, pb.MachineState_MACHINE_STATE_IDLE)
+	waitState(t, s, id, pb.MachineState_MACHINE_STATE_IDLE)
 	if _, err := s.Configure(ctx, &pb.ConfigureRequest{MachineId: id, ClusterId: "c1", BootstrapBlob: []byte("join")}); err != nil {
 		t.Fatalf("Configure: %v", err)
 	}
-	m = waitState(t, s, id, pb.MachineState_MACHINE_STATE_CONFIGURED)
+	m := waitState(t, s, id, pb.MachineState_MACHINE_STATE_CONFIGURED)
 
 	fake.stopOutOfBand(m.GetHost().GetRef())
 

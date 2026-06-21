@@ -30,10 +30,8 @@ const (
 
 // UpCloud server states (the API reports these as plain strings).
 const (
-	stateStarted     = "started"
-	stateStopped     = "stopped"
-	stateMaintenance = "maintenance"
-	stateError       = "error"
+	stateStarted = "started"
+	stateStopped = "stopped"
 )
 
 // upcloudRealConfig is the launch configuration for the production UpCloud
