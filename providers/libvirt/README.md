@@ -73,8 +73,8 @@ libvirt has **no IAM/role/token model** — the authorisation surface is the
 **connection** itself. The provider reaches each host over `qemu:///system` (local
 socket), `qemu+libssh://` (an SSH key for a least-privilege `libvirt`-group user;
 use the `libssh` scheme, not `ssh`, so the pinned pure-Go client honours the
-`keyfile`/`known_hosts` URI params), or `qemu+tls://` (a libvirt client
-certificate on the host's `tls_allowed_dn_list`).
+`known_hosts` host-key-pinning param — `keyfile` works on both), or `qemu+tls://`
+(a libvirt client certificate on the host's `tls_allowed_dn_list`).
 Store the SSH key / client cert as a Kubernetes Secret; scope the connecting
 identity with the polkit rule and per-pool access in
 [`deploy/host-setup/`](deploy/host-setup). The provider's own gRPC listener is

@@ -108,7 +108,7 @@ Metrics are namespaced `bigfleet_libvirt_*` on an isolated registry (libvirt API
 calls, gRPC requests, reconcile runs), plus the standard Go/process collectors.
 
 > The Helm chart and Dockerfile in this directory mirror the certified
-> `providers/aws` and `providers/hetzner` deploy artifacts. `helm`/`tofu` were
-> not available in the authoring environment, so the chart was authored against
-> those references rather than rendered locally; validate with `helm template`
-> in your environment before first install.
+> `providers/aws` and `providers/hetzner` deploy artifacts. CI lints the chart
+> and builds the image on every change (the `deploy` job). Still run
+> `helm template` against your own values before first install to confirm the
+> rendered manifests match your cluster's conventions.

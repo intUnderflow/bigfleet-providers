@@ -88,8 +88,9 @@ A BigFleet **zone** is a libvirt host. The `--connect` list defines the mapping:
   (`rack1=qemu+libssh://user@a/system?keyfile=…&known_hosts=…&known_hosts_verify=normal,rack2=qemu+libssh://user@b/system?keyfile=…&known_hosts=…&known_hosts_verify=normal`),
   and `Create` places each domain on the host matching the slot's `zone`. Use the
   `qemu+libssh://` scheme for SSH (see [Credentials](/providers/libvirt/credentials/)
-  — the pinned pure-Go client accepts the `keyfile`/`known_hosts` params only on
-  the `libssh` transport). The provider holds one connection per host; the
+  — the pinned pure-Go client accepts the `known_hosts` host-key-pinning param
+  only on the `libssh` transport; `keyfile` works on both). The provider holds
+  one connection per host; the
   pure-Go go-libvirt client multiplexes concurrent calls over a single connection
   safely, so no per-host lock is taken (which would serialise every op behind a
   slow Configure/Drain).

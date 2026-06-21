@@ -102,6 +102,12 @@ func (c *metricsLibvirtClient) DescribeManaged(ctx context.Context) ([]domainIns
 	c.m.observeAPI("DescribeManaged", start, err)
 	return out, err
 }
+func (c *metricsLibvirtClient) EnsureRunning(ctx context.Context, dom domainInstance) error {
+	start := time.Now()
+	err := c.inner.EnsureRunning(ctx, dom)
+	c.m.observeAPI("EnsureRunning", start, err)
+	return err
+}
 func (c *metricsLibvirtClient) ApplyBootstrap(ctx context.Context, dom domainInstance, cluster string, blob []byte) error {
 	start := time.Now()
 	err := c.inner.ApplyBootstrap(ctx, dom, cluster, blob)

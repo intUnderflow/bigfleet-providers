@@ -262,6 +262,13 @@ func (b *libvirtBackend) ConfigureInstance(ctx context.Context, req providerkit.
 	if err != nil {
 		return fmt.Errorf("configure: %w", err)
 	}
+	// Heal an out-of-band poweroff before talking to the guest agent: a domain the
+	// kit holds Idle may have been shut off (guest poweroff, kubelet graceful node
+	// shutdown), and the guest-exec bootstrap would otherwise loop until the
+	// transition times out. EnsureRunning is a no-op when already running.
+	if err := b.client.EnsureRunning(ctx, dom); err != nil {
+		return fmt.Errorf("configure: %w", err)
+	}
 	return b.client.ApplyBootstrap(ctx, dom, req.ClusterID, req.BootstrapBlob)
 }
 
@@ -270,6 +277,11 @@ func (b *libvirtBackend) ConfigureInstance(ctx context.Context, req providerkit.
 func (b *libvirtBackend) DrainInstance(ctx context.Context, req providerkit.DrainInstanceRequest) error {
 	dom, err := b.resolveHost(ctx, req.Machine)
 	if err != nil {
+		return fmt.Errorf("drain: %w", err)
+	}
+	// Same out-of-band-poweroff heal as Configure: the drain hook runs via the
+	// guest agent, so the host must be powered on first.
+	if err := b.client.EnsureRunning(ctx, dom); err != nil {
 		return fmt.Errorf("drain: %w", err)
 	}
 	return b.client.DrainNode(ctx, dom, req.GracePeriodSeconds)

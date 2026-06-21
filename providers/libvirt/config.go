@@ -61,9 +61,10 @@ type hostConn struct {
 //     where each zone maps Machine.zone to a specific libvirt host.
 //
 // For SSH, use the "qemu+libssh://" scheme (libvirt's pure-Go SSH transport),
-// not "qemu+ssh://": the pinned go-libvirt accepts the keyfile/known_hosts URI
-// parameters only on the libssh transport. The string is passed verbatim to
-// go-libvirt's ConnectToURI; this only splits zones from URIs.
+// not "qemu+ssh://": the pinned go-libvirt accepts the known_hosts/
+// known_hosts_verify host-key-pinning params only on the libssh transport
+// (keyfile works on both). The string is passed verbatim to go-libvirt's
+// ConnectToURI; this only splits zones from URIs.
 func parseConnections(connect, defaultZone string) ([]hostConn, error) {
 	connect = strings.TrimSpace(connect)
 	if connect == "" {

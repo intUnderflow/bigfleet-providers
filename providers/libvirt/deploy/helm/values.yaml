@@ -30,7 +30,8 @@ libvirtBackend: auto
 # The libvirt connection(s) (--connect). Either a single bare URI assigned to
 # defaultZone, or a comma-separated zone=uri list for multi-host. Use the
 # qemu+libssh:// scheme for SSH (the pinned pure-Go go-libvirt accepts the
-# keyfile/known_hosts URI params only on the libssh transport). Examples:
+# known_hosts host-key-pinning param only on the libssh transport; keyfile works
+# on both). Examples:
 #   qemu:///system
 #   rack1=qemu+libssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519&known_hosts=/etc/bigfleet/libvirt-ssh/known_hosts&known_hosts_verify=normal
 connect: ""

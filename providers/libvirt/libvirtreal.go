@@ -119,8 +119,9 @@ func newLibvirtReal(cfg libvirtRealConfig, logger *slog.Logger) (*libvirtReal, e
 
 // dialLibvirt connects to a libvirt URI (qemu:///system, qemu+libssh://…,
 // qemu+tls://…) using go-libvirt's URI dialer. Use the qemu+libssh:// scheme for
-// SSH — the pinned go-libvirt accepts the keyfile/known_hosts URI parameters
-// only on the libssh transport, not on plain qemu+ssh://.
+// SSH — the pinned go-libvirt accepts the known_hosts/known_hosts_verify
+// host-key-pinning params only on the libssh transport (keyfile works on both,
+// but plain qemu+ssh:// can't pin known_hosts).
 func dialLibvirt(uri string) (*libvirt.Libvirt, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
@@ -293,24 +294,52 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 // would schedule onto a dead node. A shut-off domain is started; a paused one is
 // resumed; autostart is re-asserted.
 func (r *libvirtReal) recoverDomain(c *hostConnection, dom libvirt.Domain) (domainInstance, error) {
+	if err := r.powerOn(c, dom); err != nil {
+		return domainInstance{}, err
+	}
+	return r.domainView(c, dom)
+}
+
+// powerOn ensures a domain is active: a shut-off/crashed one is started, a
+// paused/pmsuspended one is resumed, and autostart is (best-effort) re-asserted
+// so it survives a host reboot. A domain already running is a no-op. Shared by
+// the Create idempotency-recovery branch and EnsureRunning (Configure/Drain).
+func (r *libvirtReal) powerOn(c *hostConnection, dom libvirt.Domain) error {
 	state, _, err := c.lv.DomainGetState(dom, 0)
 	if err != nil {
-		return domainInstance{}, fmt.Errorf("get state of domain %s: %w", dom.Name, err)
+		return fmt.Errorf("get state of domain %s: %w", dom.Name, err)
 	}
 	switch libvirt.DomainState(state) {
 	case libvirt.DomainShutoff, libvirt.DomainCrashed:
 		if err := c.lv.DomainCreate(dom); err != nil {
-			return domainInstance{}, fmt.Errorf("start recovered domain %s: %w", dom.Name, err)
+			return fmt.Errorf("start domain %s: %w", dom.Name, err)
 		}
 	case libvirt.DomainPaused, libvirt.DomainPmsuspended:
 		if err := c.lv.DomainResume(dom); err != nil {
-			return domainInstance{}, fmt.Errorf("resume recovered domain %s: %w", dom.Name, err)
+			return fmt.Errorf("resume domain %s: %w", dom.Name, err)
 		}
 	}
 	if err := c.lv.DomainSetAutostart(dom, 1); err != nil && r.logger != nil {
-		r.logger.Warn("set domain autostart (recovery)", "domain", dom.Name, "err", err)
+		r.logger.Warn("set domain autostart", "domain", dom.Name, "err", err)
 	}
-	return r.domainView(c, dom)
+	return nil
+}
+
+// EnsureRunning powers on the domain backing a kit-held machine before
+// Configure/Drain run the guest agent against it, healing an out-of-band
+// poweroff. Looks the domain up by (zone, name) and applies powerOn.
+func (r *libvirtReal) EnsureRunning(ctx context.Context, dom domainInstance) error {
+	c, err := r.conn(dom.Zone)
+	if err != nil {
+		return err
+	}
+	return callCtxErr(ctx, func() error {
+		d, err := c.lv.DomainLookupByName(dom.DomainName)
+		if err != nil {
+			return fmt.Errorf("look up domain %s: %w", dom.DomainName, err)
+		}
+		return r.powerOn(c, d)
+	})
 }
 
 // writeSeed creates a raw volume and uploads the cloud-init NoCloud ISO into it,

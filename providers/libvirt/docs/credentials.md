@@ -29,13 +29,15 @@ least-privilege user.
 
 :::note
 Use the **`qemu+libssh://`** scheme, not `qemu+ssh://`. The provider's pinned
-pure-Go go-libvirt client only honours the explicit `keyfile` and `known_hosts`
-URI parameters on the `libssh` transport — on the plain `ssh` transport it
-rejects them ("option invalid with ssh transport, use libssh transport
-instead"). `libssh` is also the right fit for a distroless pod: it takes the key
-and known-hosts paths you mount explicitly rather than reading a system SSH
-config that isn't there. Both transports use the same CGO-free Go SSH dialer, so
-the static image is unaffected.
+pure-Go go-libvirt client honours the explicit `known_hosts` /
+`known_hosts_verify` host-key-pinning parameters only on the `libssh` transport —
+on the plain `ssh` transport it rejects them ("option invalid with ssh transport,
+use libssh transport instead") and would fall back to verifying against a system
+`known_hosts` that a distroless pod doesn't have. (`keyfile` itself works on both
+transports; it's the pinned host-key verification that requires `libssh`.)
+`libssh` takes the key and known-hosts paths you mount explicitly rather than
+reading a system SSH config that isn't there. Both transports use the same
+CGO-free Go SSH dialer, so the static image is unaffected.
 :::
 
 On each host (full steps in

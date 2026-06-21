@@ -168,6 +168,50 @@ func TestFullLifecycle_DrivesLibvirt(t *testing.T) {
 	}
 }
 
+// Configure must power on a host that went Idle then shut off out of band (guest
+// poweroff trips <on_poweroff>destroy</on_poweroff>; autostart only fires on host
+// boot) before driving the guest-agent bootstrap — otherwise it would run against
+// a dead host and time out FAILED. The fake's ApplyBootstrap rejects a shut-off
+// domain, so a green Configure proves EnsureRunning healed it first.
+func TestConfigure_PowersOnStoppedHost(t *testing.T) {
+	b, fake := newTestBackend(t, 8)
+	s := newTestServer(t, b)
+	ctx := context.Background()
+
+	resp, _ := s.List(ctx, &pb.ListFilter{States: []pb.MachineState{pb.MachineState_MACHINE_STATE_SPECULATIVE}, MaxResults: 1})
+	id := resp.GetMachines()[0].GetId()
+	if _, err := s.Create(ctx, &pb.CreateRequest{MachineId: id}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m := waitState(t, s, id, pb.MachineState_MACHINE_STATE_IDLE)
+
+	// Simulate an out-of-band poweroff of the now-Idle host.
+	zone, name, ok := splitHostRef(m.GetHost().GetRef())
+	if !ok {
+		t.Fatalf("Idle machine has no usable host ref %q", m.GetHost().GetRef())
+	}
+	if !fake.setRunning(zone, name, false) {
+		t.Fatalf("setRunning: domain %s/%s not found", zone, name)
+	}
+
+	// Configure must heal it (EnsureRunning) before the guest-agent bootstrap.
+	if _, err := s.Configure(ctx, &pb.ConfigureRequest{MachineId: id, ClusterId: "c1", BootstrapBlob: []byte("join")}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	waitState(t, s, id, pb.MachineState_MACHINE_STATE_CONFIGURED)
+
+	d := fake.domains[fakeKey(zone, name)]
+	if d == nil {
+		t.Fatalf("domain %s/%s gone after Configure", zone, name)
+	}
+	if !d.Running {
+		t.Error("Configure did not power the shut-off host back on")
+	}
+	if d.ClusterID != "c1" {
+		t.Errorf("Configure did not bind the healed host: cluster=%q", d.ClusterID)
+	}
+}
+
 // Describe must reconcile a running managed domain back to its offering slot as
 // Idle (recovery from libvirt metadata when there is no persisted store).
 func TestDescribe_ReconcilesRunningDomain(t *testing.T) {
@@ -279,6 +323,20 @@ func TestDescribe_ShutOffDomainNoOfferingNotDropped(t *testing.T) {
 	if found.Host.Ref == "" {
 		t.Error("no-offering domain surfaced without a host (not reapable)")
 	}
+	// Surfacing it Idle is only safe because it is healable: a Configure-time
+	// EnsureRunning powers it back on rather than driving the guest agent against a
+	// dead host. Assert that heal works (it has no Speculative slot, so Create's
+	// recoverDomain never fires for it).
+	zone, name, ok := splitHostRef(found.Host.Ref)
+	if !ok {
+		t.Fatalf("no-offering domain host ref %q not splittable", found.Host.Ref)
+	}
+	if err := b.client.EnsureRunning(ctx, domainInstance{Zone: zone, DomainName: name}); err != nil {
+		t.Fatalf("EnsureRunning on no-offering host: %v", err)
+	}
+	if d := fake.domains[fakeKey(zone, name)]; d == nil || !d.Running {
+		t.Error("EnsureRunning did not power the no-offering host back on (un-healable dead node)")
+	}
 }
 
 // Create must be idempotent at the substrate level: a retried CreateDomain with
@@ -300,6 +358,28 @@ func TestCreateDomain_IdempotentOnToken(t *testing.T) {
 	}
 	if len(fake.domains) != 1 {
 		t.Errorf("idempotent create defined %d domains, want 1", len(fake.domains))
+	}
+}
+
+// A retried Create whose domain has since shut off out of band must recover it
+// powered on (the real client's recoverDomain branch), not return a dead host.
+func TestCreateDomain_RecoversStoppedDomain(t *testing.T) {
+	fake := newLibvirtFake()
+	ctx := context.Background()
+	spec := domainSpec{MachineID: "m1", InstanceType: "kvm.small", Zone: "rack1", IdempotencyToken: "op-1"}
+	first, err := fake.CreateDomain(ctx, spec)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if !fake.setRunning(first.Zone, first.DomainName, false) {
+		t.Fatalf("setRunning: domain %s/%s not found", first.Zone, first.DomainName)
+	}
+	again, err := fake.CreateDomain(ctx, spec)
+	if err != nil {
+		t.Fatalf("recover create: %v", err)
+	}
+	if !again.Running {
+		t.Error("retried Create returned a shut-off domain (recoverDomain did not power it on)")
 	}
 }
 

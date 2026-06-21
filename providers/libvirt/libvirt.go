@@ -35,6 +35,15 @@ type libvirtClient interface {
 	// store can still rebuild inventory.
 	DescribeManaged(ctx context.Context) ([]domainInstance, error)
 
+	// EnsureRunning powers a domain on if it is not already running and returns
+	// once it is active, so Configure/Drain never drive the guest agent against a
+	// stopped host. A domain that went Idle then shut off out of band (a guest
+	// poweroff trips <on_poweroff>destroy</on_poweroff>; autostart only fires on
+	// host/libvirtd boot) would otherwise loop on guest-ping until the transition
+	// times out and FAILs, while its disk keeps billing. Idempotent: a domain that
+	// is already running is a no-op.
+	EnsureRunning(ctx context.Context, dom domainInstance) error
+
 	// ApplyBootstrap binds a running domain to a cluster and delivers the opaque
 	// bootstrap blob by writing it into the guest and running the in-image
 	// bootstrap hook via the qemu guest agent (guest-exec), waiting for the hook

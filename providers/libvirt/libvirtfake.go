@@ -40,6 +40,9 @@ func (f *libvirtFake) CreateDomain(_ context.Context, spec domainSpec) (domainIn
 	if spec.IdempotencyToken != "" {
 		if key, ok := f.byToken[spec.IdempotencyToken]; ok {
 			if dom, ok := f.domains[key]; ok {
+				// Recover-on-retry: a domain that shut off out of band is powered
+				// back on, modelling the real client's recoverDomain branch.
+				dom.Running = true
 				return *dom, nil
 			}
 		}
@@ -81,12 +84,31 @@ func (f *libvirtFake) DescribeManaged(_ context.Context) ([]domainInstance, erro
 	return out, nil
 }
 
+// EnsureRunning powers a stopped fake domain back on, modelling the real
+// client's heal of an out-of-band poweroff before Configure/Drain.
+func (f *libvirtFake) EnsureRunning(_ context.Context, dom domainInstance) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.domains[fakeKey(dom.Zone, dom.DomainName)]
+	if !ok {
+		return fmt.Errorf("libvirtfake: ensure-running unknown domain %q", dom.hostRef())
+	}
+	d.Running = true
+	return nil
+}
+
 func (f *libvirtFake) ApplyBootstrap(_ context.Context, dom domainInstance, clusterID string, _ []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	d, ok := f.domains[fakeKey(dom.Zone, dom.DomainName)]
 	if !ok {
 		return fmt.Errorf("libvirtfake: configure unknown domain %q", dom.hostRef())
+	}
+	// The real guest-agent bootstrap can't run against a stopped domain, so reject
+	// it here too — a Configure that reaches this on a shut-off domain means the
+	// EnsureRunning heal was skipped.
+	if !d.Running {
+		return fmt.Errorf("libvirtfake: configure shut-off domain %q (EnsureRunning not called first)", dom.hostRef())
 	}
 	d.ClusterID = clusterID
 	return nil
@@ -98,6 +120,9 @@ func (f *libvirtFake) DrainNode(_ context.Context, dom domainInstance, _ int64) 
 	d, ok := f.domains[fakeKey(dom.Zone, dom.DomainName)]
 	if !ok {
 		return fmt.Errorf("libvirtfake: drain unknown domain %q", dom.hostRef())
+	}
+	if !d.Running {
+		return fmt.Errorf("libvirtfake: drain shut-off domain %q (EnsureRunning not called first)", dom.hostRef())
 	}
 	d.ClusterID = ""
 	return nil
