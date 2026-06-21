@@ -98,7 +98,7 @@ func run() error {
 			}
 			sshKey = b
 		}
-		real, err := newAzureReal(ctx, azureRealConfig{
+		real, err := newAzureReal(azureRealConfig{
 			SubscriptionID:    subID,
 			ResourceGroup:     *resourceGrp,
 			Location:          *location,

@@ -66,7 +66,7 @@ const (
 	tagCluster   = "bigfleet-cluster"
 )
 
-func newAzureReal(ctx context.Context, cfg azureRealConfig, logger *slog.Logger) (*azureReal, error) {
+func newAzureReal(cfg azureRealConfig, logger *slog.Logger) (*azureReal, error) {
 	if cfg.SubscriptionID == "" {
 		return nil, fmt.Errorf("azure backend: --subscription-id (or AZURE_SUBSCRIPTION_ID) is required")
 	}
@@ -99,7 +99,6 @@ func newAzureReal(ctx context.Context, cfg azureRealConfig, logger *slog.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("nic client: %w", err)
 	}
-	_ = ctx
 	return &azureReal{
 		cfg:      cfg,
 		logger:   logger,

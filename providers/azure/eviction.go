@@ -32,13 +32,15 @@ type evictionReporter struct {
 	logger  *slog.Logger
 }
 
-// evictionReport is the JSON body the node-side agent POSTs. It identifies the
-// machine either directly (machine_id, read from the bigfleet-machine-id IMDS
-// tag) or by its Azure resource id (resolved via the bigfleet-machine-id tag).
+// evictionReport is the JSON body the node-side agent POSTs. The machine is
+// identified directly by machine_id, which the agent reads from its own
+// bigfleet-machine-id IMDS tag. We deliberately do not accept an Azure resource
+// id here: resolving one would require an O(N) DescribeManaged list of the
+// resource group per report, which a spammed (or unauthenticated) endpoint could
+// turn into an ARM-throttling amplifier — and the agent always has machine_id.
 type evictionReport struct {
-	MachineID  string `json:"machine_id"`
-	ResourceID string `json:"resource_id"`
-	EventType  string `json:"event_type"` // Preempt (Spot eviction); others ack-and-ignore
+	MachineID string `json:"machine_id"`
+	EventType string `json:"event_type"` // Preempt (Spot eviction); others ack-and-ignore
 }
 
 // preemptProbability is the observed interruption probability published once a
@@ -51,8 +53,8 @@ func newEvictionReporter(backend *azureBackend, srv *providerkit.Server, m *metr
 }
 
 // handle is the POST /internal/eviction handler. It authenticates (if a token is
-// configured), resolves the report to a machine id, and on a Preempt event
-// raises that machine's observed interruption probability and counts the notice.
+// configured), reads the reported machine id, and on a Preempt event raises that
+// machine's observed interruption probability and counts the notice.
 func (e *evictionReporter) handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -72,15 +74,12 @@ func (e *evictionReporter) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	machineID := rep.MachineID
-	if machineID == "" && rep.ResourceID != "" {
-		machineID = e.backend.machineIDFor(r.Context(), rep.ResourceID)
-	}
-	if machineID == "" {
-		// Unknown / unmanaged VM — ack so the agent stops retrying.
+	if rep.MachineID == "" {
+		// No machine id to attribute the notice to — ack so the agent stops retrying.
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	machineID := rep.MachineID
 
 	// Only Preempt (Spot eviction) raises the probability; other Scheduled Events
 	// types (Reboot/Redeploy/Freeze/Terminate) are acknowledged and ignored.
