@@ -460,9 +460,24 @@ func (r *ovhReal) toServerInstance(srv *servers.Server) serverInstance {
 		Region:     r.cfg.Region,
 		Flavor:     flavorName(srv.Flavor),
 		PublicIPv4: firstIPv4(srv.Addresses),
-		Running:    srv.Status == "ACTIVE" || srv.Status == "BUILD",
+		// Match waitActive's case-insensitive status handling, so a non-canonical
+		// case from some Nova deployment never misclassifies a live instance as
+		// non-running (which would orphan it / fail Create idempotency recovery).
+		Running: isRunningStatus(srv.Status),
 	}
 	return out
+}
+
+// isRunningStatus reports whether a Nova server status means the instance is
+// live (ACTIVE or still BUILDing), case-insensitively — the single source of
+// truth for "running", shared by toServerInstance and waitActive.
+func isRunningStatus(status string) bool {
+	switch strings.ToUpper(status) {
+	case "ACTIVE", "BUILD":
+		return true
+	default:
+		return false
+	}
 }
 
 // serverByName looks up a managed server by its exact name. It returns

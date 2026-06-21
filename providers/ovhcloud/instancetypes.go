@@ -55,7 +55,7 @@ var flavorTable = map[string]flavorCapacity{
 	"r2-120": {16, gib(120)}, "r2-240": {32, gib(240)},
 	// RAM-optimised — r3.
 	"r3-16": {2, gib(16)}, "r3-32": {4, gib(32)}, "r3-64": {8, gib(64)}, "r3-128": {16, gib(128)},
-	// GPU — t1/t2 (V100), a10 (A100), l4. Accelerator types carry a label too.
+	// GPU — t1 (V100), t2 (V100S), a10 (A10), l4 (L4). Accelerator types carry a label too.
 	"t1-45": {8, gib(45)}, "t1-90": {16, gib(90)}, "t1-180": {32, gib(180)},
 	"t2-45": {8, gib(45)}, "t2-90": {16, gib(90)}, "t2-180": {32, gib(180)},
 	"a10-45": {8, gib(45)}, "a10-90": {16, gib(90)}, "l4-90": {22, gib(90)},

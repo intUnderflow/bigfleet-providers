@@ -90,17 +90,27 @@ func defaultOfferings(seedCount int, regionA, regionB string) []offering {
 	}
 }
 
-// gpuLabel adds an accelerator-type label for OVH GPU flavor families (t1, t2,
-// a10, l4, …), so the shard can satisfy accelerator node-selectors without
-// re-deriving from the flavor name. (flavor / region / capacity_type stay
-// top-level; labels carry only the extras.)
+// gpuLabel adds an accelerator-type label for OVH GPU flavor families, so the
+// shard can satisfy accelerator node-selectors without re-deriving from the
+// flavor name. (flavor / region / capacity_type stay top-level; labels carry
+// only the extras.) The label value is the actual NVIDIA model the family
+// carries, per the OVH Public Cloud GPU catalogue: t1 = V100, t2 = V100S,
+// a10 = A10, a100 = A100, l4 = L4, l40s = L40S. Order the a100/l40s cases
+// before a10/l4 is unnecessary (the trailing '-' makes the prefixes disjoint),
+// but kept explicit for clarity.
 func gpuLabel(flavor string) (string, bool) {
 	switch {
-	case strings.HasPrefix(flavor, "t1-"), strings.HasPrefix(flavor, "t2-"):
+	case strings.HasPrefix(flavor, "t1-"):
 		return "nvidia-v100", true
-	case strings.HasPrefix(flavor, "a10-"):
+	case strings.HasPrefix(flavor, "t2-"):
+		return "nvidia-v100s", true
+	case strings.HasPrefix(flavor, "a100-"):
 		return "nvidia-a100", true
-	case strings.HasPrefix(flavor, "l4-"), strings.HasPrefix(flavor, "l40s-"):
+	case strings.HasPrefix(flavor, "a10-"):
+		return "nvidia-a10", true
+	case strings.HasPrefix(flavor, "l40s-"):
+		return "nvidia-l40s", true
+	case strings.HasPrefix(flavor, "l4-"):
 		return "nvidia-l4", true
 	default:
 		return "", false

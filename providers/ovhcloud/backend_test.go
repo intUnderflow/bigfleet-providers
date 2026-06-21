@@ -316,6 +316,28 @@ func TestDescribe_NonRunningTaggedServerNotSlotBacking(t *testing.T) {
 	}
 }
 
+// gpuLabel must map each OVH GPU family to its ACTUAL NVIDIA model (a10 != a100,
+// l40s != l4), or accelerator node-selectors would mis-schedule.
+func TestGPULabel(t *testing.T) {
+	cases := map[string]string{
+		"t1-45":  "nvidia-v100",
+		"t2-45":  "nvidia-v100s",
+		"a10-45": "nvidia-a10",
+		"a100-7": "nvidia-a100",
+		"l4-90":  "nvidia-l4",
+		"l40s-7": "nvidia-l40s",
+	}
+	for flavor, want := range cases {
+		got, ok := gpuLabel(flavor)
+		if !ok || got != want {
+			t.Errorf("gpuLabel(%q) = (%q, %v), want (%q, true)", flavor, got, ok, want)
+		}
+	}
+	if _, ok := gpuLabel("b2-7"); ok {
+		t.Error("non-GPU flavor b2-7 should not get an accelerator label")
+	}
+}
+
 func TestOffering_CapacityType(t *testing.T) {
 	// Only on-demand is a real OVH Public Cloud substrate; everything else is
 	// rejected so the provider can never mis-declare capacity_type.
