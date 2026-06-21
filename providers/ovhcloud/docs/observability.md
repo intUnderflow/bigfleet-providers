@@ -41,7 +41,7 @@ global default), plus the standard Go/process collectors.
 
 ### Useful queries
 
-```promql
+```
 # OpenStack API error rate by operation
 sum by (op) (rate(bigfleet_ovh_api_calls_total{outcome="error"}[5m]))
 
