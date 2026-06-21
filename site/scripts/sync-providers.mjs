@@ -134,10 +134,16 @@ for (const p of found) {
   if (p.logo) {
     await copyFile(p.logo, join(publicProvidersDir, `${p.name}.svg`));
     logos++;
-    mark = `<img class="provider-logo provider-logo--light" src="/providers/${p.name}.svg" alt="" loading="lazy" />`;
     if (p.logoDark) {
+      // Theme-aware: full-colour logo in light, dark-readable variant in dark.
       await copyFile(p.logoDark, join(publicProvidersDir, `${p.name}-dark.svg`));
-      mark += `\n    <img class="provider-logo provider-logo--dark" src="/providers/${p.name}-dark.svg" alt="" loading="lazy" />`;
+      mark =
+        `<img class="provider-logo provider-logo--light" src="/providers/${p.name}.svg" alt="" loading="lazy" />\n` +
+        `    <img class="provider-logo provider-logo--dark" src="/providers/${p.name}-dark.svg" alt="" loading="lazy" />`;
+    } else {
+      // One logo for both themes (reads on either). NO --light/--dark class, so
+      // the dark-theme swap rules never hide it (otherwise it would vanish).
+      mark = `<img class="provider-logo" src="/providers/${p.name}.svg" alt="" loading="lazy" />`;
     }
   } else {
     mark = `<span class="provider-logo provider-logo--fallback" aria-hidden="true">${esc(p.title.slice(0, 1))}</span>`;

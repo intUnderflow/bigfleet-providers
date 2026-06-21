@@ -14,22 +14,24 @@ const shortName = (title) => title.replace(/\s+provider$/i, "");
     providers.map((p) => (
       <a class="provider-chip" href={p.href}>
         {p.logo ? (
-          <>
-            <img
-              class="provider-chip-logo provider-chip-logo--light"
-              src={p.logo}
-              alt=""
-              loading="lazy"
-            />
-            {p.logoDark && (
+          p.logoDark ? (
+            <>
+              <img
+                class="provider-chip-logo provider-chip-logo--light"
+                src={p.logo}
+                alt=""
+                loading="lazy"
+              />
               <img
                 class="provider-chip-logo provider-chip-logo--dark"
                 src={p.logoDark}
                 alt=""
                 loading="lazy"
               />
-            )}
-          </>
+            </>
+          ) : (
+            <img class="provider-chip-logo" src={p.logo} alt="" loading="lazy" />
+          )
         ) : (
           <span
             class="provider-chip-logo provider-chip-logo--fallback"
