@@ -1,0 +1,17 @@
+apiVersion: v2
+name: bigfleet-libvirt
+description: BigFleet CapacityProvider for libvirt (QEMU/KVM) — one release per libvirt deployment (a set of hosts, one zone per host).
+type: application
+# Chart version; bump on chart changes.
+version: 0.1.0
+# Tracks the provider binary; the image tag is set in values.yaml.
+appVersion: "0.1.0"
+keywords:
+  - bigfleet
+  - capacity-provider
+  - libvirt
+  - qemu
+  - kvm
+home: https://github.com/intUnderflow/bigfleet-providers/tree/main/providers/libvirt
+sources:
+  - https://github.com/intUnderflow/bigfleet-providers

@@ -1,0 +1,17 @@
+{{- if and .Values.state.enabled .Values.state.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "bigfleet-libvirt.fullname" . }}-state
+  labels:
+    {{- include "bigfleet-libvirt.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.state.persistence.accessModes | nindent 4 }}
+  {{- if .Values.state.persistence.storageClass }}
+  storageClassName: {{ .Values.state.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.state.persistence.size }}
+{{- end }}
