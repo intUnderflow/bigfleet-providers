@@ -164,12 +164,14 @@ func (b *libvirtBackend) Describe(ctx context.Context) ([]providerkit.Instance, 
 		out = append(out, slot)
 	}
 	// Tagged domains matching no current offering slot (offering shrank, or a
-	// manually tagged domain), then untagged managed domains — but only live ones;
-	// a shut-off domain is not a schedulable node.
+	// manually tagged domain). These have no Speculative slot to fall back to, so
+	// they are surfaced under their machine id regardless of power state — a
+	// shut-off one must NOT be silently dropped (Describe is the only path that
+	// surfaces managed domains; losing it would leak its disk and leave it
+	// unmanaged). Surfaced Idle-with-host, it stays reapable: the kit scales the
+	// now-offering-less id in and Delete tears the domain + volumes down.
 	for id, dom := range bySlot {
-		if dom.Running {
-			out = append(out, b.domainToIdle(id, dom))
-		}
+		out = append(out, b.domainToIdle(id, dom))
 	}
 	for _, dom := range orphans {
 		out = append(out, b.domainToIdle(dom.hostRef(), dom))

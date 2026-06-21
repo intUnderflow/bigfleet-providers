@@ -137,8 +137,9 @@ func isBareURI(s string) bool {
 //   - libssh/libssh2: require strict host-key verification
 //     (known_hosts_verify=normal, the default); 'auto' (trust-on-first-use) and
 //     'ignore' are refused, as is no_verify.
-//   - ssh: refuse the keyfile/known_hosts params the pinned go-libvirt rejects on
-//     this transport at dial time (point at qemu+libssh:// instead), and no_verify.
+//   - ssh: refuse the known_hosts/known_hosts_verify/sshauth params the pinned
+//     go-libvirt rejects on this transport at dial time (point at qemu+libssh://
+//     instead), and no_verify. keyfile is a common option, accepted on both.
 //   - tls: refuse no_verify (which sets InsecureSkipVerify).
 //   - tcp: refuse outright — plaintext, no authentication.
 //
@@ -160,12 +161,14 @@ func validateConnectURI(uri string) error {
 	switch transport {
 	case "ssh":
 		// The pinned go-libvirt's plain ssh transport rejects the explicit
-		// keyfile/known_hosts params at dial time ("option invalid with ssh
-		// transport, use libssh transport instead"). Green-lighting such a URI here
-		// would only defer the failure to first connect, so reject it now and point
-		// at qemu+libssh:// (which honours them) — that is also the documented
-		// scheme for the provider's host-key-pinned SSH model.
-		for _, f := range []string{"known_hosts", "known_hosts_verify", "sshauth", "keyfile"} {
+		// known_hosts/known_hosts_verify/sshauth params at dial time ("option
+		// invalid with ssh transport, use libssh transport instead"). keyfile is a
+		// common SSH option honoured on both transports, so it is NOT rejected here.
+		// Green-lighting an undiallable URI would only defer the failure to first
+		// connect, so reject these now and point at qemu+libssh:// (which honours
+		// keyfile + known_hosts) — also the documented scheme for the provider's
+		// host-key-pinned SSH model.
+		for _, f := range []string{"known_hosts", "known_hosts_verify", "sshauth"} {
 			if q.Get(f) != "" {
 				return fmt.Errorf("--connect URI %q sets %s on the ssh transport, which the provider's go-libvirt rejects at dial time; use the qemu+libssh:// scheme (which honours keyfile/known_hosts)", uri, f)
 			}

@@ -168,9 +168,11 @@ small/large slots across two zones, distributing `--seed-count` slots evenly.
 That default is for dev and conformance; **real deployments supply
 `--offerings`.**
 
-Shrinking an offering (or removing it) does not destroy live domains: a managed,
-running domain keeps owning its slot, and any managed domain with no matching
-offering is surfaced as Idle under its machine id rather than being lost.
+Shrinking an offering (or removing it) does not destroy domains: a managed domain
+that still matches a slot keeps owning it (running → Idle; shut off → the slot
+stays Speculative until a Create powers it back on), and any managed domain with
+no matching offering is surfaced under its machine id — running or shut off —
+rather than being lost, so it stays reapable on scale-in.
 
 ## Allocatable vs resources
 

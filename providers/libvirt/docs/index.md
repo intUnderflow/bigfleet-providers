@@ -18,9 +18,9 @@ BigFleet **zone** per host — next to BigFleet. Each process owns those hosts'
 capacity, and BigFleet dials it to request, configure, drain, and delete machines
 as demand moves.
 
-## Why you'd trust it in production
+## How it behaves
 
-- **Production-ready.** It ships as a hardened container image and a Helm chart,
+- **Hardened and operable.** It ships as a hardened container image and a Helm chart,
   runs non-root on a distroless, read-only root filesystem, and exposes
   liveness/readiness probes, Prometheus metrics, and structured logs. See
   [Observability](/providers/libvirt/observability/).

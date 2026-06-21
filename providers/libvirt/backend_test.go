@@ -242,6 +242,45 @@ func TestDescribe_ShutOffDomainNotIdle(t *testing.T) {
 	}
 }
 
+// A tagged managed domain that matches no current offering slot (e.g. the
+// offering was removed) must still be surfaced by Describe even when shut off,
+// so it stays managed and reapable rather than leaking its disk invisibly.
+func TestDescribe_ShutOffDomainNoOfferingNotDropped(t *testing.T) {
+	b, fake := newTestBackend(t, 4)
+	ctx := context.Background()
+
+	// A machine id that is NOT one of the offering slots.
+	const orphanID = "libvirt-test/OnDemand/kvm.small/rack1/999"
+	dom, err := fake.CreateDomain(ctx, domainSpec{MachineID: orphanID, InstanceType: "kvm.small", Zone: "rack1"})
+	if err != nil {
+		t.Fatalf("seed domain: %v", err)
+	}
+	if !fake.setRunning(dom.Zone, dom.DomainName, false) {
+		t.Fatalf("setRunning: domain %s/%s not found", dom.Zone, dom.DomainName)
+	}
+
+	got, err := b.Describe(ctx)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	var found *providerkit.Instance
+	for i := range got {
+		if got[i].ID == orphanID {
+			found = &got[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("Describe dropped shut-off no-offering domain %s (would leak its disk, unmanaged)", orphanID)
+	}
+	if found.State != providerkit.StateIdle {
+		t.Errorf("no-offering domain state = %v, want Idle (reapable)", found.State)
+	}
+	if found.Host.Ref == "" {
+		t.Error("no-offering domain surfaced without a host (not reapable)")
+	}
+}
+
 // Create must be idempotent at the substrate level: a retried CreateDomain with
 // the same operation id returns the same domain, never a duplicate.
 func TestCreateDomain_IdempotentOnToken(t *testing.T) {
@@ -505,11 +544,13 @@ func TestValidateConnectURI(t *testing.T) {
 		"qemu+ssh://h/system?no_verify=1",
 		"qemu+tls://h/system?no_verify=1", // TLS InsecureSkipVerify must not be silently enabled
 		"qemu+tcp://h/system",             // plaintext, unauthenticated
-		// keyfile/known_hosts on the plain ssh transport are rejected by go-libvirt
-		// at dial time, so refuse the undiallable URI up front (use qemu+libssh://).
+		// known_hosts/known_hosts_verify/sshauth on the plain ssh transport are
+		// rejected by go-libvirt at dial time, so refuse the undiallable URI up
+		// front (use qemu+libssh://). keyfile is NOT in this set — it's a common
+		// option honoured on both transports.
 		"qemu+ssh://h/system?known_hosts_verify=normal",
-		"qemu+ssh://h/system?keyfile=/k",
 		"qemu+ssh://h/system?known_hosts=/kh",
+		"qemu+ssh://h/system?sshauth=privkey",
 	} {
 		if err := validateConnectURI(bad); err == nil {
 			t.Errorf("expected %q to be rejected", bad)
@@ -522,7 +563,8 @@ func TestValidateConnectURI(t *testing.T) {
 		"qemu:///system",
 		"qemu+tls://h/system?pkipath=/etc/bigfleet/libvirt-tls",
 		"qemu+tls://h/system?no_verify=0",
-		"qemu+ssh://h/system", // plain ssh with no explicit params verifies against system known_hosts
+		"qemu+ssh://h/system",            // plain ssh with no explicit params verifies against system known_hosts
+		"qemu+ssh://h/system?keyfile=/k", // keyfile is a common option, honoured on plain ssh too
 	} {
 		if err := validateConnectURI(ok); err != nil {
 			t.Errorf("expected %q to be accepted, got %v", ok, err)
