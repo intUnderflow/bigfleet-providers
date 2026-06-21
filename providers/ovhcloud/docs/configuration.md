@@ -133,10 +133,19 @@ Example `offerings.json`:
 ]
 ```
 
-If you omit `--offerings`, the provider synthesizes a representative mix of
-`b2-7`/`c2-15` slots across `--region-a`/`--region-b`, distributing `--seed-count`
-slots evenly. That default is for dev and conformance; **real deployments supply
-`--offerings`.**
+If you omit `--offerings`, the provider synthesizes a representative mix of four
+flavors distributing `--seed-count` slots evenly. That default is for dev and
+conformance; **real deployments supply `--offerings`.**
+
+:::caution
+The default offerings span `--region-a` and `--region-b`. On the **real backend**
+every offering must be in `--region` (one process per region — the backend
+rejects any other region and exits), so `--region-b` defaults to `--region` when
+unset; if you point it at a *different* region while relying on the default
+offerings, startup fails. The two-region spread is only meaningful on the **fake
+backend** (no `--region`), where the client isn't region-bound. Supply
+`--offerings` (all in `--region`) for any real multi-flavor mix.
+:::
 
 Shrinking an offering (or removing it) does not delete live instances: a tagged,
 running instance keeps owning its slot, and any tagged instance with no matching

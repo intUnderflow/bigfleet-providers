@@ -22,8 +22,13 @@ replicaCount: 1
 # --- core provider config ---------------------------------------------------
 # OVH/OpenStack region (sets --region and the first default-offering region).
 region: GRA
-# Second region for the default offerings (--region-b).
-regionB: SBG
+# Second region for the default offerings (--region-b). MUST be empty (or equal
+# to `region`) for the real backend: it runs one process per region and rejects
+# any offering outside `region`, so a second region here would CrashLoop the pod
+# when relying on the default offerings. Leave empty (the chart then omits
+# --region-b, and it defaults to `region`); only set it for a fake-backend
+# multi-region dev demo.
+regionB: ""
 # HostRef provider label (--provider), e.g. ovh-public-GRA.
 provider: ""
 # OVH backend mode: auto | ovh | fake (--ovh-backend). auto = ovh when --region

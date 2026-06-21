@@ -282,6 +282,40 @@ func TestNewOVHBackend_RejectsForeignRegion(t *testing.T) {
 	}
 }
 
+// A powered-off (non-running) tagged server must NOT back its slot as a reachable
+// Idle host — the slot returns to Speculative for a fresh Create, and the dead
+// server is surfaced as an orphan for cleanup (consistent with serverByMachineID).
+func TestDescribe_NonRunningTaggedServerNotSlotBacking(t *testing.T) {
+	b, fake := newTestBackend(t, 4)
+	ctx := context.Background()
+	slot := b.speculativeSlots()[0]
+	srv, err := fake.CreateServer(ctx, serverSpec{MachineID: slot.ID, Flavor: slot.InstanceType, Region: slot.Zone})
+	if err != nil {
+		t.Fatalf("seed server: %v", err)
+	}
+	fake.servers[srv.ServerID].Running = false // power it off (SHUTOFF)
+
+	got, err := b.Describe(ctx)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	var slotInst, orphan *providerkit.Instance
+	for i := range got {
+		switch {
+		case got[i].ID == slot.ID:
+			slotInst = &got[i]
+		case got[i].Host.Ref == srv.ServerID:
+			orphan = &got[i]
+		}
+	}
+	if slotInst == nil || slotInst.State != providerkit.StateSpeculative || slotInst.Host.Ref != "" {
+		t.Errorf("slot should be Speculative with no host when its server is powered off, got %+v", slotInst)
+	}
+	if orphan == nil {
+		t.Error("powered-off server should be surfaced as an orphan for cleanup, not dropped")
+	}
+}
+
 func TestOffering_CapacityType(t *testing.T) {
 	// Only on-demand is a real OVH Public Cloud substrate; everything else is
 	// rejected so the provider can never mis-declare capacity_type.

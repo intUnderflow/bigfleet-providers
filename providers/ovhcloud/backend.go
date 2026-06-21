@@ -137,12 +137,19 @@ func slotLabels(off offering) map[string]string {
 // any orphan managed servers. The kit calls this to seed a fresh store; the
 // persisted store is the primary restart path.
 //
-// A machine-id-tagged managed server owns its slot while it is alive, keeping
-// the slot from being re-seeded Speculative so Create can't launch a duplicate
-// under the same machine id. A deleting server is releasing its slot and is
-// correctly absent (the slot returns to Speculative for re-provisioning).
-// Untagged-but-running managed servers are surfaced as orphans under their
-// server UUID so they are not lost.
+// A machine-id-tagged, RUNNING managed server owns its slot, keeping the slot
+// from being re-seeded Speculative so Create can't launch a duplicate under the
+// same machine id. A deleting server is releasing its slot and is correctly
+// absent (the slot returns to Speculative for re-provisioning).
+//
+// A NON-running tagged server (SHUTOFF/ERROR — a powered-off image-backed
+// instance can't be made Idle/reachable, and there is no power-on path) does NOT
+// back its slot: backing it would publish a powered-off host as a reachable Idle
+// node (Configure/Drain would then fail). It is instead surfaced as an orphan for
+// cleanup (the shard's idle-release can Delete it), and its slot returns to
+// Speculative for a fresh Create — consistent with serverByMachineID, the Create
+// guard, which likewise only recovers running servers. Untagged-but-running
+// managed servers are likewise surfaced as orphans so they are not lost.
 func (b *ovhBackend) Describe(ctx context.Context) ([]providerkit.Instance, error) {
 	managed, err := b.client.DescribeManaged(ctx)
 	if err != nil {
@@ -152,7 +159,7 @@ func (b *ovhBackend) Describe(ctx context.Context) ([]providerkit.Instance, erro
 	var orphans []serverInstance
 	for _, srv := range managed {
 		switch {
-		case srv.MachineID != "":
+		case srv.MachineID != "" && srv.Running:
 			if _, dup := bySlot[srv.MachineID]; dup {
 				// Two live servers carry the same machine id (e.g. a botched
 				// create that left a duplicate). Keep the first as the slot
@@ -162,9 +169,15 @@ func (b *ovhBackend) Describe(ctx context.Context) ([]providerkit.Instance, erro
 				orphans = append(orphans, srv)
 				continue
 			}
-			bySlot[srv.MachineID] = srv // owns its slot, running or not
+			bySlot[srv.MachineID] = srv // owns its slot
 		case srv.Running:
 			orphans = append(orphans, srv) // managed + running, but untagged
+		default:
+			// Non-running (SHUTOFF/ERROR), tagged or not — a dead remnant. Surface
+			// it as an orphan for cleanup; it does NOT back a slot (a powered-off
+			// server is not a reachable Idle host), so its slot returns to
+			// Speculative for a fresh Create.
+			orphans = append(orphans, srv)
 		}
 	}
 
