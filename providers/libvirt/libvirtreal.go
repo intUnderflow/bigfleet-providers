@@ -166,7 +166,7 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 	// so fail fast rather than provisioning volumes on a shaky connection.
 	existing, err := c.lv.DomainLookupByName(name)
 	if err == nil {
-		return r.domainView(c, existing)
+		return r.recoverDomain(c, existing)
 	}
 	if !libvirt.IsNotFound(err) {
 		return domainInstance{}, fmt.Errorf("look up domain %s: %w", name, err)
@@ -179,7 +179,7 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 	if dom, ok, err := r.findByMachineID(c, spec.MachineID); err != nil {
 		return domainInstance{}, err
 	} else if ok {
-		return r.domainView(c, dom)
+		return r.recoverDomain(c, dom)
 	}
 
 	pool, err := c.lv.StoragePoolLookupByName(r.cfg.StoragePool)
@@ -261,9 +261,42 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 	if err := c.lv.DomainCreate(dom); err != nil {
 		return domainInstance{}, fmt.Errorf("start domain %s: %w", name, err)
 	}
+	// Autostart so the node powers back on after a host reboot rather than sitting
+	// persistent-but-shut-off (which would otherwise be advertised Idle yet be
+	// unreachable). Best-effort: a hypervisor that rejects it doesn't fail Create.
+	if err := c.lv.DomainSetAutostart(dom, 1); err != nil && r.logger != nil {
+		r.logger.Warn("set domain autostart", "domain", name, "err", err)
+	}
 	// The domain is defined and running; it now owns the overlay/seed volumes, so
 	// stop the rollback. A later domainView error must not tear down a live domain.
 	committed = true
+	return r.domainView(c, dom)
+}
+
+// recoverDomain returns the substrate view of an existing domain found on a
+// Create idempotency-recovery branch, first ensuring it is actually powered on:
+// a recovered domain may be persistent-but-shut-off (host reboot without
+// autostart, or an in-guest poweroff), and the kit settles it Idle, so the shard
+// would schedule onto a dead node. A shut-off domain is started; a paused one is
+// resumed; autostart is re-asserted.
+func (r *libvirtReal) recoverDomain(c *hostConnection, dom libvirt.Domain) (domainInstance, error) {
+	state, _, err := c.lv.DomainGetState(dom, 0)
+	if err != nil {
+		return domainInstance{}, fmt.Errorf("get state of domain %s: %w", dom.Name, err)
+	}
+	switch libvirt.DomainState(state) {
+	case libvirt.DomainShutoff, libvirt.DomainCrashed:
+		if err := c.lv.DomainCreate(dom); err != nil {
+			return domainInstance{}, fmt.Errorf("start recovered domain %s: %w", dom.Name, err)
+		}
+	case libvirt.DomainPaused, libvirt.DomainPmsuspended:
+		if err := c.lv.DomainResume(dom); err != nil {
+			return domainInstance{}, fmt.Errorf("resume recovered domain %s: %w", dom.Name, err)
+		}
+	}
+	if err := c.lv.DomainSetAutostart(dom, 1); err != nil && r.logger != nil {
+		r.logger.Warn("set domain autostart (recovery)", "domain", dom.Name, "err", err)
+	}
 	return r.domainView(c, dom)
 }
 
@@ -494,8 +527,20 @@ func (r *libvirtReal) domainViewMeta(c *hostConnection, dom libvirt.Domain, mach
 		UUID:       uuidString(dom.UUID),
 		MachineID:  machineID,
 		ClusterID:  clusterID,
-		Running:    libvirt.DomainState(state) == libvirt.DomainRunning,
+		Running:    domainActive(libvirt.DomainState(state)),
 	}, nil
+}
+
+// domainActive reports whether a domain is live (not shut off / crashed /
+// shutting down). A paused or pm-suspended domain is still a live domain — it is
+// not a free slot — so it counts as active.
+func domainActive(s libvirt.DomainState) bool {
+	switch s {
+	case libvirt.DomainRunning, libvirt.DomainBlocked, libvirt.DomainPaused, libvirt.DomainPmsuspended:
+		return true
+	default: // Nostate, Shutdown (in progress), Shutoff, Crashed
+		return false
+	}
 }
 
 // readMetadata returns the (machineID, clusterID) from a domain's bigfleet

@@ -78,10 +78,11 @@ pricing:
 #                         key for a least-privilege libvirt user.
 #   * qemu+tls://...     — mount a libvirt client cert/key + CA.
 credentials:
-  # SSH private key for qemu+libssh:// connections. Mounted at /etc/bigfleet/libvirt-ssh.
+  # SSH private key for qemu+libssh:// connections. The whole Secret is mounted
+  # at /etc/bigfleet/libvirt-ssh; select the key file with the keyfile= URI param
+  # (e.g. keyfile=/etc/bigfleet/libvirt-ssh/id_ed25519).
   ssh:
     secretName: ""              # Secret holding the SSH private key (and optional known_hosts)
-    secretKey: id_ed25519
   # libvirt client TLS for qemu+tls:// connections. Mounted flat at
   # /etc/bigfleet/libvirt-tls; point each qemu+tls:// URI at it with
   # ?pkipath=/etc/bigfleet/libvirt-tls.

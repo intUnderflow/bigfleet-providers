@@ -72,11 +72,12 @@ rack1=qemu+libssh://bigfleet@host-a/system?keyfile=/etc/bigfleet/libvirt-ssh/id_
 `known_hosts_verify=normal` (the default) means strict verification against the
 pinned `known_hosts` file — an unknown host or a changed host key aborts the
 connection. Use a **dedicated** key for the provider, not an operator's personal
-key, and pin `known_hosts` so the transport is not trust-on-first-use
-(`known_hosts_verify=auto` would trust-on-first-use). The provider **rejects at
-startup** any SSH `--connect` URI that disables host-key verification
-(`known_hosts_verify=ignore` or `no_verify`), so a misconfiguration can't quietly
-open a MITM window on the cluster-join material.
+key, and pin `known_hosts`. The provider **rejects at startup** any SSH
+`--connect` URI that weakens or disables host-key verification —
+`known_hosts_verify=auto` (trust-on-first-use, a first-connection MITM window),
+`known_hosts_verify=ignore`, or `no_verify` — and any plaintext
+`qemu+tcp://` URI, so a misconfiguration can't quietly expose the cluster-join
+material. Only `known_hosts_verify=normal` (or omitting it) is accepted.
 
 ## 2. `qemu+tls://` — libvirt native TLS
 

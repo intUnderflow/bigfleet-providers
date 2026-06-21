@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	libvirt "github.com/digitalocean/go-libvirt"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -372,6 +373,35 @@ func TestBareMetalPool_DeleteUnimplemented(t *testing.T) {
 	}
 }
 
+// A pool mixing bare_metal with deletable capacity is rejected at startup (the
+// kit's Deleter is provider-wide, so the two can't coexist safely).
+func TestNewLibvirtBackend_RejectsMixedCapacity(t *testing.T) {
+	catalog := newInstanceCatalog(nil)
+	pr := newPricing(catalog, 0, 0, nil)
+	mixed := []offering{
+		{InstanceType: "kvm.small", Zone: "rack1", Capacity: "bare_metal", Count: 1, Resources: map[string]string{"cpu": "1"}},
+		{InstanceType: "kvm.small", Zone: "rack2", Capacity: "on_demand", Count: 1, Resources: map[string]string{"cpu": "1"}},
+	}
+	if _, err := newLibvirtBackend("libvirt-mix", "img", newLibvirtFake(), mixed, catalog, pr, nil, quietLogger()); err == nil {
+		t.Error("expected a mixed bare_metal + on_demand pool to be rejected at startup")
+	}
+}
+
+func TestDomainActive(t *testing.T) {
+	active := []libvirt.DomainState{libvirt.DomainRunning, libvirt.DomainBlocked, libvirt.DomainPaused, libvirt.DomainPmsuspended}
+	for _, s := range active {
+		if !domainActive(s) {
+			t.Errorf("domainActive(%d) = false, want true (live domain)", s)
+		}
+	}
+	dead := []libvirt.DomainState{libvirt.DomainNostate, libvirt.DomainShutdown, libvirt.DomainShutoff, libvirt.DomainCrashed}
+	for _, s := range dead {
+		if domainActive(s) {
+			t.Errorf("domainActive(%d) = true, want false (not a live node)", s)
+		}
+	}
+}
+
 func TestShellQuote(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
 		{"abc", "'abc'"},
@@ -427,21 +457,23 @@ func TestSplitHostRef(t *testing.T) {
 }
 
 func TestValidateConnectURI(t *testing.T) {
-	// Disabling peer verification is rejected for SSH and TLS transports.
+	// Disabled/weak peer verification and plaintext transports are rejected.
 	for _, bad := range []string{
 		"qemu+libssh://h/system?known_hosts_verify=ignore",
+		"qemu+libssh://h/system?known_hosts_verify=auto", // TOFU leaves a first-connection MITM window
 		"qemu+libssh://h/system?no_verify=1",
 		"qemu+ssh://h/system?no_verify=1",
 		"qemu+tls://h/system?no_verify=1", // TLS InsecureSkipVerify must not be silently enabled
+		"qemu+tcp://h/system",             // plaintext, unauthenticated
 	} {
 		if err := validateConnectURI(bad); err == nil {
-			t.Errorf("expected %q to be rejected (peer verification disabled)", bad)
+			t.Errorf("expected %q to be rejected", bad)
 		}
 	}
-	// Strict / TOFU / explicit-normal and verifying transports are accepted.
+	// Strict verification, the local socket, and verified TLS are accepted.
 	for _, ok := range []string{
 		"qemu+libssh://h/system?keyfile=/k&known_hosts=/kh&known_hosts_verify=normal",
-		"qemu+libssh://h/system?known_hosts_verify=auto",
+		"qemu+libssh://h/system?keyfile=/k&known_hosts=/kh",
 		"qemu:///system",
 		"qemu+tls://h/system?pkipath=/etc/bigfleet/libvirt-tls",
 		"qemu+tls://h/system?no_verify=0",

@@ -130,13 +130,19 @@ func isBareURI(s string) bool {
 	return strings.Contains(s[:eq], ":")
 }
 
-// validateConnectURI rejects a connect URI that would silently turn OFF the
-// transport's peer verification — so a misconfiguration can't quietly open a
-// MITM window on the cluster-join material delivered over the connection. For
-// SSH (libssh/ssh) that means rejecting known_hosts_verify=ignore and no_verify;
-// for TLS it means rejecting no_verify (which sets InsecureSkipVerify). Strict
-// verification and SSH trust-on-first-use (auto) are allowed; the local socket
-// and tcp transports carry no peer identity, so they pass.
+// validateConnectURI rejects a connect URI whose transport would carry the
+// cluster-join secret without authenticated encryption, or with peer
+// verification turned off. The bootstrap blob is delivered over this same
+// connection (qemu guest-exec), so:
+//   - ssh/libssh/libssh2: require strict host-key verification
+//     (known_hosts_verify=normal, the default); 'auto' (trust-on-first-use) and
+//     'ignore' are refused, as is no_verify.
+//   - tls: refuse no_verify (which sets InsecureSkipVerify).
+//   - tcp: refuse outright — plaintext, no authentication.
+//
+// A remote bare URI (qemu://host/system, no +transport) is dialed over TLS by
+// go-libvirt, so it is validated as tls. The local unix socket carries no peer
+// identity and passes.
 func validateConnectURI(uri string) error {
 	u, err := url.Parse(uri)
 	if err != nil {
@@ -145,12 +151,16 @@ func validateConnectURI(uri string) error {
 	transport := ""
 	if parts := strings.SplitN(u.Scheme, "+", 2); len(parts) == 2 {
 		transport = parts[1]
+	} else if u.Host != "" {
+		transport = "tls" // go-libvirt dials a remote bare URI over TLS
 	}
 	q := u.Query()
 	switch transport {
 	case "ssh", "libssh", "libssh2":
-		if q.Get("known_hosts_verify") == "ignore" {
-			return fmt.Errorf("--connect URI %q disables SSH host-key verification (known_hosts_verify=ignore); use 'normal' (the default, strict against known_hosts) or 'auto'", uri)
+		switch q.Get("known_hosts_verify") {
+		case "", "normal":
+		default:
+			return fmt.Errorf("--connect URI %q must use known_hosts_verify=normal (strict against known_hosts); 'auto' (trust-on-first-use) and 'ignore' leave a host-key MITM window", uri)
 		}
 		if noVerifyTruthy(q.Get("no_verify")) {
 			return fmt.Errorf("--connect URI %q sets no_verify, disabling SSH host-key verification; remove it", uri)
@@ -159,6 +169,8 @@ func validateConnectURI(uri string) error {
 		if noVerifyTruthy(q.Get("no_verify")) {
 			return fmt.Errorf("--connect URI %q sets no_verify, disabling TLS server-certificate verification; remove it", uri)
 		}
+	case "tcp":
+		return fmt.Errorf("--connect URI %q uses plaintext qemu+tcp:// (no encryption or authentication); the cluster-join secret would travel in the clear — use qemu+tls:// or qemu+libssh://", uri)
 	}
 	return nil
 }

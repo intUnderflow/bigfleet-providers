@@ -61,6 +61,22 @@ func newLibvirtBackend(providerName, image string, client libvirtClient, offerin
 			return nil, fmt.Errorf("libvirt backend: offering %s/%s has non-positive count %d", off.InstanceType, off.Zone, off.Count)
 		}
 	}
+	// Deleter is a provider-wide property (the kit gates Delete on whether the
+	// backend implements Deleter), so a pool mixing bare_metal (never deleted)
+	// with on_demand (deleted on scale-in) can't honour both: a bare_metal machine
+	// would still be destroyed. Require a uniform capacity class per provider
+	// instance — run separate instances for separate pools.
+	var sawBareMetal, sawDeletable bool
+	for _, off := range offerings {
+		if c, _ := off.capacityType(); c == providerkit.CapacityBareMetal {
+			sawBareMetal = true
+		} else {
+			sawDeletable = true
+		}
+	}
+	if sawBareMetal && sawDeletable {
+		return nil, fmt.Errorf("libvirt backend: offerings mix bare_metal with deletable (on_demand/reserved) capacity; run one provider instance per capacity class")
+	}
 	return &libvirtBackend{
 		providerName: providerName,
 		client:       client,
@@ -127,7 +143,7 @@ func (b *libvirtBackend) Describe(ctx context.Context) ([]providerkit.Instance, 
 	for _, dom := range managed {
 		switch {
 		case dom.MachineID != "":
-			bySlot[dom.MachineID] = dom // owns its slot, running or not
+			bySlot[dom.MachineID] = dom // running or not; decided per-slot below
 		case dom.Running:
 			orphans = append(orphans, dom) // managed + running, but untagged
 		}
@@ -137,16 +153,25 @@ func (b *libvirtBackend) Describe(ctx context.Context) ([]providerkit.Instance, 
 	out := make([]providerkit.Instance, 0, len(slots)+len(bySlot)+len(orphans))
 	for _, slot := range slots {
 		if dom, ok := bySlot[slot.ID]; ok {
-			slot.State = providerkit.StateIdle
-			slot.Host = providerkit.HostRef{Provider: b.providerName, Ref: dom.hostRef()}
 			delete(bySlot, slot.ID)
+			// Only a live domain backs an Idle node. A tagged-but-shut-off domain
+			// (host reboot without autostart, in-guest poweroff) must NOT be
+			// advertised as schedulable Idle — leave the slot Speculative so a
+			// Create recovers and powers it back on (recoverDomain).
+			if dom.Running {
+				slot.State = providerkit.StateIdle
+				slot.Host = providerkit.HostRef{Provider: b.providerName, Ref: dom.hostRef()}
+			}
 		}
 		out = append(out, slot)
 	}
 	// Tagged domains matching no current offering slot (offering shrank, or a
-	// manually tagged domain), then untagged-but-running managed domains.
+	// manually tagged domain), then untagged managed domains — but only live ones;
+	// a shut-off domain is not a schedulable node.
 	for id, dom := range bySlot {
-		out = append(out, b.domainToIdle(id, dom))
+		if dom.Running {
+			out = append(out, b.domainToIdle(id, dom))
+		}
 	}
 	for _, dom := range orphans {
 		out = append(out, b.domainToIdle(dom.hostRef(), dom))
@@ -155,44 +180,44 @@ func (b *libvirtBackend) Describe(ctx context.Context) ([]providerkit.Instance, 
 }
 
 func (b *libvirtBackend) domainToIdle(machineID string, dom domainInstance) providerkit.Instance {
-	// Recover a representative instance type for the orphan from a still-configured
-	// offering on the same host, so it keeps matching a demand profile. The domain
-	// itself does not report its catalog flavor name, only raw vCPU/memory, so we
-	// trust the offering catalog. Falls back to the first offering's type.
-	instanceType, resources := b.recoverShape(dom.Zone)
+	// Recover a representative instance type / capacity / resources for the orphan
+	// from a still-configured offering on the SAME host (not offerings[0], which
+	// could mis-state capacity_type and price for a recovered bare_metal vs
+	// on_demand domain). The domain reports only raw vCPU/memory, so we trust the
+	// zone-matched offering's catalog entry.
+	off, _ := b.recoverOffering(dom.Zone)
 	capacity := providerkit.CapacityOnDemand
-	if len(b.offerings) > 0 {
-		if c, err := b.offerings[0].capacityType(); err == nil {
-			capacity = c
-		}
+	if c, err := off.capacityType(); err == nil {
+		capacity = c
 	}
 	return providerkit.Instance{
 		ID:                      machineID,
 		State:                   providerkit.StateIdle,
 		Host:                    providerkit.HostRef{Provider: b.providerName, Ref: dom.hostRef()},
-		InstanceType:            instanceType,
+		InstanceType:            off.InstanceType,
 		Zone:                    dom.Zone,
 		CapacityType:            capacity,
-		PricePerHour:            b.pricing.price(instanceType, capacity),
+		PricePerHour:            b.pricing.price(off.InstanceType, capacity),
 		InterruptionProbability: 0,
-		Resources:               resources,
-		Allocatable:             b.catalog.allocatable(instanceType),
+		Resources:               cloneMap(off.Resources),
+		Allocatable:             b.catalog.allocatable(off.InstanceType),
 	}
 }
 
-// recoverShape returns a representative instance type and per-replica resources
-// for an orphan domain on the given zone, preferring an offering on that exact
-// host. Falls back to the first configured offering.
-func (b *libvirtBackend) recoverShape(zone string) (string, map[string]string) {
+// recoverOffering returns the configured offering that best describes a recovered
+// domain on the given zone, preferring an offering on that exact host and
+// falling back to the first configured offering. The bool is false only when no
+// offerings are configured.
+func (b *libvirtBackend) recoverOffering(zone string) (offering, bool) {
 	for _, off := range b.offerings {
 		if off.Zone == zone {
-			return off.InstanceType, cloneMap(off.Resources)
+			return off, true
 		}
 	}
 	if len(b.offerings) > 0 {
-		return b.offerings[0].InstanceType, cloneMap(b.offerings[0].Resources)
+		return b.offerings[0], true
 	}
-	return "", nil
+	return offering{}, false
 }
 
 // CreateInstance defines + starts the libvirt domain for a Speculative slot and
