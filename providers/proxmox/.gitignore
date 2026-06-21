@@ -1,0 +1,4 @@
+# A bare `go build .` inside this module drops a binary named after the module
+# dir (`proxmox`); build via `make build-proxmox` (writes to repo-root bin/)
+# instead. Ignore the stray so it can never be committed again.
+/proxmox

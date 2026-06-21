@@ -1,0 +1,17 @@
+apiVersion: v2
+name: bigfleet-proxmox
+description: BigFleet CapacityProvider for Proxmox VE (QEMU/KVM) — one release per Proxmox cluster (one zone per cluster node).
+type: application
+# Chart version; bump on chart changes.
+version: 0.1.0
+# Tracks the provider binary; the image tag is set in values.yaml.
+appVersion: "0.1.0"
+keywords:
+  - bigfleet
+  - capacity-provider
+  - proxmox
+  - qemu
+  - kvm
+home: https://github.com/intUnderflow/bigfleet-providers/tree/main/providers/proxmox
+sources:
+  - https://github.com/intUnderflow/bigfleet-providers
