@@ -79,9 +79,9 @@ image:
 # One process per zone, one substrate. `zone` sets the default offering zone and
 # the region this process serves; `provider` is the label stamped on every HostRef.
 zone: fr-par-1
-zoneB: nl-ams-1
 provider: scaleway-fr-par
 substrate: instances        # instances (ON_DEMAND) | elastic-metal (BARE_METAL)
+                            # elastic-metal real backend is not yet built — fake only; use instances for real deployments
 
 # The Scaleway server settings.
 scaleway:
@@ -143,7 +143,7 @@ reference (defaults, semantics, the bootstrap model) is in
 |---|---|---|
 | `--addr` | `:9000` | gRPC listen address |
 | `--provider` | `scaleway` | Label stamped on `HostRef.provider` (e.g. `scaleway-fr-par`) |
-| `--substrate` | `instances` | `instances` (ON_DEMAND) \| `elastic-metal` (BARE_METAL) |
+| `--substrate` | `instances` | `instances` (ON_DEMAND) \| `elastic-metal` (BARE_METAL). The real Elastic Metal backend is not yet built — `--substrate=elastic-metal` with real credentials fails fast at startup and runs on the in-memory fake only; use `instances` for real deployments |
 | `--scaleway-backend` | `auto` | `scaleway` \| `fake` \| `auto` (auto = `scaleway` when credentials are set, else `fake`) |
 | `--state` | _(empty)_ | Durable state file; empty = in-memory only |
 
@@ -174,7 +174,7 @@ reference (defaults, semantics, the bootstrap model) is in
 |---|---|---|
 | `--offerings` | _(empty)_ | JSON offerings file (else a built-in mix sized by `--seed-count`) |
 | `--seed-count` | `32` | Speculative slots for the default offerings |
-| `--zone-a` / `--zone-b` | `fr-par-1` / `nl-ams-1` | Zones for the default offerings (`--zone-a` is the zone this process serves) |
+| `--zone` | `fr-par-1` | The single Scaleway zone this process serves; all offerings must be in this zone |
 
 **Background, observability & TLS**
 

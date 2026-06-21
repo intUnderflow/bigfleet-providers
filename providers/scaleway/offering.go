@@ -61,33 +61,28 @@ func loadOfferings(path string) ([]offering, error) {
 }
 
 // defaultInstanceOfferings spreads seedCount slots across a representative mix of
-// Scaleway Instances commercial types and zones. Used when no --offerings file is
-// given for the Instances backend — enough for a certification run to have
-// Speculative slots to walk, and a sensible dev default. Real deployments supply
-// --offerings.
-func defaultInstanceOfferings(seedCount int, zoneA, zoneB string) []offering {
+// Scaleway Instances commercial types, all in the process's single zone (one
+// process serves one zone/region). Used when no --offerings file is given — enough
+// for a certification run to have Speculative slots to walk, and a sensible dev
+// default. Real deployments supply --offerings (all in the process's zone).
+func defaultInstanceOfferings(seedCount int, zone string) []offering {
 	if seedCount <= 0 {
 		seedCount = 16
 	}
-	base := seedCount / 4
-	rem := seedCount % 4
-	counts := [4]int{base, base, base, base}
-	for i := 0; i < rem; i++ {
-		counts[i]++
-	}
+	base := seedCount / 2
+	rem := seedCount % 2
+	counts := [2]int{base + rem, base}
 	res := map[string]string{"cpu": "1", "memory": "2Gi"}
 	return []offering{
-		{CommercialType: "DEV1-S", Zone: zoneA, Capacity: "on_demand", Count: counts[0], Resources: res},
-		{CommercialType: "GP1-XS", Zone: zoneA, Capacity: "on_demand", Count: counts[1], Resources: res},
-		{CommercialType: "DEV1-S", Zone: zoneB, Capacity: "on_demand", Count: counts[2], Resources: res},
-		{CommercialType: "GP1-XS", Zone: zoneB, Capacity: "on_demand", Count: counts[3], Resources: res},
+		{CommercialType: "DEV1-S", Zone: zone, Capacity: "on_demand", Count: counts[0], Resources: res},
+		{CommercialType: "GP1-XS", Zone: zone, Capacity: "on_demand", Count: counts[1], Resources: res},
 	}
 }
 
 // defaultBaremetalOfferings is the Elastic Metal analogue of
 // defaultInstanceOfferings: a small mix of Elastic Metal server types, all
-// bare_metal.
-func defaultBaremetalOfferings(seedCount int, zoneA, zoneB string) []offering {
+// bare_metal, in the process's single zone.
+func defaultBaremetalOfferings(seedCount int, zone string) []offering {
 	if seedCount <= 0 {
 		seedCount = 8
 	}
@@ -96,8 +91,8 @@ func defaultBaremetalOfferings(seedCount int, zoneA, zoneB string) []offering {
 	counts := [2]int{base + rem, base}
 	res := map[string]string{"cpu": "2", "memory": "4Gi"}
 	return []offering{
-		{CommercialType: "EM-A210R-HDD", Zone: zoneA, Capacity: "bare_metal", Count: counts[0], Resources: res},
-		{CommercialType: "EM-B112X-SSD", Zone: zoneB, Capacity: "bare_metal", Count: counts[1], Resources: res},
+		{CommercialType: "EM-A210R-HDD", Zone: zone, Capacity: "bare_metal", Count: counts[0], Resources: res},
+		{CommercialType: "EM-B112X-SSD", Zone: zone, Capacity: "bare_metal", Count: counts[1], Resources: res},
 	}
 }
 

@@ -57,10 +57,7 @@ spec:
             - --price-refresh={{ .Values.priceRefresh }}
             - --reconcile-interval={{ .Values.reconcileInterval }}
             {{- if .Values.zone }}
-            - --zone-a={{ .Values.zone }}
-            {{- end }}
-            {{- if .Values.zoneB }}
-            - --zone-b={{ .Values.zoneB }}
+            - --zone={{ .Values.zone }}
             {{- end }}
             {{- if .Values.scaleway.image }}
             - --image={{ .Values.scaleway.image }}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
@@ -34,6 +35,7 @@ import (
 type scalewayBackend struct {
 	providerName string // HostRef.provider label, e.g. "scaleway-fr-par"
 	capacity     providerkit.CapacityType
+	zone         string // the single zone this process serves
 	client       scwClient
 	image        string // base image for CreateServer
 	offerings    []offering
@@ -41,11 +43,20 @@ type scalewayBackend struct {
 	types        *commercialTypeResolver // resolves Machine.allocatable
 	baseUserData []byte                  // generic pre-binding bootstrap baked in at Create
 	logger       *slog.Logger
+
+	// inFlight counts Create actuations in progress per machine id, so the
+	// Describe reaper never terminates a server a live Create is waiting on (the
+	// kit runs Describe/Reconcile concurrently with, and unlocked from, a Create).
+	inFlightMu sync.Mutex
+	inFlight   map[string]int
 }
 
-func newScalewayBackend(providerName string, capacity providerkit.CapacityType, image string, client scwClient, offerings []offering, pr *pricing, baseUserData []byte, logger *slog.Logger) (*scalewayBackend, error) {
+func newScalewayBackend(providerName string, capacity providerkit.CapacityType, zone, image string, client scwClient, offerings []offering, pr *pricing, baseUserData []byte, logger *slog.Logger) (*scalewayBackend, error) {
 	if len(offerings) == 0 {
 		return nil, fmt.Errorf("scaleway backend: no offerings configured")
+	}
+	if zone == "" {
+		return nil, fmt.Errorf("scaleway backend: empty zone")
 	}
 	for _, off := range offerings {
 		cap, err := off.capacityType()
@@ -58,15 +69,25 @@ func newScalewayBackend(providerName string, capacity providerkit.CapacityType, 
 		if off.CommercialType == "" {
 			return nil, fmt.Errorf("scaleway backend: offering with empty commercial_type")
 		}
-		// The provider registers multi-zone (RequireZone), so a zoneless offering
-		// would only fail later at seed time — reject it up front.
-		if off.Zone == "" {
-			return nil, fmt.Errorf("scaleway backend: offering %s with empty zone", off.CommercialType)
+		// One process serves exactly one zone (the client is single-zone), so an
+		// offering for any other zone would be created/listed in the wrong place.
+		// Reject it up front rather than silently mis-placing servers.
+		if off.Zone != zone {
+			return nil, fmt.Errorf("scaleway backend: offering %s is for zone %q but this process serves zone %q (one zone per process; deploy another process for other zones)", off.CommercialType, off.Zone, zone)
+		}
+		// An on-demand type with no pinned price would advertise price_per_hour=0
+		// (a paid VM shown free), skewing the engine's cost ranking. Require a
+		// pinned entry (the live catalogue refresh still overlays it at runtime).
+		if capacity == providerkit.CapacityOnDemand {
+			if _, ok := onDemandEURHourly[off.CommercialType]; !ok {
+				return nil, fmt.Errorf("scaleway backend: on-demand commercial type %q has no pinned price in onDemandEURHourly (add it so price_per_hour isn't 0)", off.CommercialType)
+			}
 		}
 	}
 	return &scalewayBackend{
 		providerName: providerName,
 		capacity:     capacity,
+		zone:         zone,
 		client:       client,
 		image:        image,
 		offerings:    offerings,
@@ -74,7 +95,34 @@ func newScalewayBackend(providerName string, capacity providerkit.CapacityType, 
 		types:        newCommercialTypeResolver(client, logger),
 		baseUserData: baseUserData,
 		logger:       logger,
+		inFlight:     make(map[string]int),
 	}, nil
+}
+
+// beginCreate / endCreate track in-flight Create actuations per machine id so the
+// Describe reaper can skip them (it must not delete a server a live Create depends
+// on).
+func (b *scalewayBackend) beginCreate(machineID string) {
+	b.inFlightMu.Lock()
+	b.inFlight[machineID]++
+	b.inFlightMu.Unlock()
+}
+
+func (b *scalewayBackend) endCreate(machineID string) {
+	b.inFlightMu.Lock()
+	if b.inFlight[machineID] <= 1 {
+		delete(b.inFlight, machineID)
+	} else {
+		b.inFlight[machineID]--
+	}
+	b.inFlightMu.Unlock()
+}
+
+func (b *scalewayBackend) createInFlight(machineID string) bool {
+	b.inFlightMu.Lock()
+	n := b.inFlight[machineID]
+	b.inFlightMu.Unlock()
+	return n > 0
 }
 
 // slotID is the stable BigFleet machine id for one offering slot. A Speculative
@@ -216,6 +264,15 @@ func (b *scalewayBackend) reapDuplicateServers(ctx context.Context, managed []se
 		byMachine[srv.MachineID] = append(byMachine[srv.MachineID], srv)
 	}
 	for machineID, servers := range byMachine {
+		// Never reap while a Create for this machine id is in flight: the kit runs
+		// Describe/Reconcile concurrently with (and unlocked from) the Create, so a
+		// freshly-launched server is a live dependency, not a stale duplicate.
+		// Report all of them this round; the next reconcile collapses any genuine
+		// duplicate once the Create has settled.
+		if len(servers) == 1 || b.createInFlight(machineID) {
+			out = append(out, servers...)
+			continue
+		}
 		keep := servers[0]
 		for _, srv := range servers[1:] {
 			if srv.ServerID < keep.ServerID {
@@ -223,9 +280,6 @@ func (b *scalewayBackend) reapDuplicateServers(ctx context.Context, managed []se
 			}
 		}
 		out = append(out, keep)
-		if len(servers) == 1 {
-			continue
-		}
 		for _, srv := range servers {
 			if srv.ServerID == keep.ServerID {
 				continue
@@ -284,6 +338,11 @@ func (b *scalewayBackend) resourcesForType(commercialType, zone string) map[stri
 // ConfigureInstance, because Scaleway user-data is consumed only at first boot.
 func (b *scalewayBackend) CreateInstance(ctx context.Context, req providerkit.CreateInstanceRequest) (providerkit.CreateInstanceResult, error) {
 	m := req.Machine
+	// Mark this machine id as having a Create in flight so the Describe reaper
+	// (which runs concurrently on the reconcile path) won't terminate the server
+	// this Create is provisioning/waiting on.
+	b.beginCreate(m.ID)
+	defer b.endCreate(m.ID)
 	srv, err := b.client.CreateServer(ctx, serverSpec{
 		MachineID:        m.ID,
 		CommercialType:   m.InstanceType,

@@ -22,8 +22,8 @@ func newInstancesBackend(t *testing.T, seedCount int) (*cloudBackend, *scwFake) 
 	t.Helper()
 	fake := newSCWFake()
 	logger := quietLogger()
-	offs := defaultInstanceOfferings(seedCount, "fr-par-1", "nl-ams-1")
-	core, err := newScalewayBackend("scaleway-test", providerkit.CapacityOnDemand, "ubuntu_jammy", fake, offs, newPricing(defaultEURtoUSD, fake, logger), nil, logger)
+	offs := defaultInstanceOfferings(seedCount, "fr-par-1")
+	core, err := newScalewayBackend("scaleway-test", providerkit.CapacityOnDemand, "fr-par-1", "ubuntu_jammy", fake, offs, newPricing(defaultEURtoUSD, fake, logger), nil, logger)
 	if err != nil {
 		t.Fatalf("newScalewayBackend: %v", err)
 	}
@@ -36,8 +36,8 @@ func newBaremetalBackend(t *testing.T, seedCount int) (*scalewayBackend, *scwFak
 	t.Helper()
 	fake := newSCWFake()
 	logger := quietLogger()
-	offs := defaultBaremetalOfferings(seedCount, "fr-par-1", "nl-ams-1")
-	core, err := newScalewayBackend("scaleway-metal-test", providerkit.CapacityBareMetal, "ubuntu_jammy", fake, offs, newPricing(defaultEURtoUSD, fake, logger), nil, logger)
+	offs := defaultBaremetalOfferings(seedCount, "fr-par-1")
+	core, err := newScalewayBackend("scaleway-metal-test", providerkit.CapacityBareMetal, "fr-par-1", "ubuntu_jammy", fake, offs, newPricing(defaultEURtoUSD, fake, logger), nil, logger)
 	if err != nil {
 		t.Fatalf("newScalewayBackend (bare metal): %v", err)
 	}
@@ -349,7 +349,29 @@ func TestBackend_RejectsMismatchedCapacity(t *testing.T) {
 	logger := quietLogger()
 	// A bare_metal offering handed to an ON_DEMAND (Instances) process must fail.
 	offs := []offering{{CommercialType: "EM-A210R-HDD", Zone: "fr-par-1", Capacity: "bare_metal", Count: 1, Resources: map[string]string{"cpu": "1"}}}
-	if _, err := newScalewayBackend("scaleway-test", providerkit.CapacityOnDemand, "img", fake, offs, newPricing(defaultEURtoUSD, fake, logger), nil, logger); err == nil {
+	if _, err := newScalewayBackend("scaleway-test", providerkit.CapacityOnDemand, "fr-par-1", "img", fake, offs, newPricing(defaultEURtoUSD, fake, logger), nil, logger); err == nil {
 		t.Fatal("expected a bare_metal offering to be rejected by an ON_DEMAND process")
+	}
+}
+
+// A backend rejects an offering whose zone differs from the process's single zone
+// (one zone per process; the real client is single-zone).
+func TestBackend_RejectsMismatchedZone(t *testing.T) {
+	fake := newSCWFake()
+	logger := quietLogger()
+	offs := []offering{{CommercialType: "DEV1-S", Zone: "nl-ams-1", Capacity: "on_demand", Count: 1, Resources: map[string]string{"cpu": "1"}}}
+	if _, err := newScalewayBackend("scaleway-test", providerkit.CapacityOnDemand, "fr-par-1", "img", fake, offs, newPricing(defaultEURtoUSD, fake, logger), nil, logger); err == nil {
+		t.Fatal("expected an nl-ams-1 offering to be rejected by an fr-par-1 process")
+	}
+}
+
+// A backend rejects an on-demand offering whose commercial type has no pinned
+// price (it would otherwise advertise price_per_hour = 0).
+func TestBackend_RejectsUnpricedOnDemandType(t *testing.T) {
+	fake := newSCWFake()
+	logger := quietLogger()
+	offs := []offering{{CommercialType: "DEV9-UNPRICED", Zone: "fr-par-1", Capacity: "on_demand", Count: 1, Resources: map[string]string{"cpu": "1"}}}
+	if _, err := newScalewayBackend("scaleway-test", providerkit.CapacityOnDemand, "fr-par-1", "img", fake, offs, newPricing(defaultEURtoUSD, fake, logger), nil, logger); err == nil {
+		t.Fatal("expected an unpinned on-demand type to be rejected (price would be 0)")
 	}
 }

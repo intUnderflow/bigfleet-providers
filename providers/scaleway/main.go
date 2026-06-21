@@ -59,10 +59,9 @@ func run() error {
 		secretKey = flag.String("secret-key", "", "Scaleway secret key (or set SCW_SECRET_KEY)")
 		projectID = flag.String("project-id", "", "Scaleway project id (or set SCW_DEFAULT_PROJECT_ID)")
 
-		offerings = flag.String("offerings", "", "path to a JSON offerings file (default: a built-in mix sized by --seed-count)")
+		offerings = flag.String("offerings", "", "path to a JSON offerings file (default: a built-in mix sized by --seed-count). All offerings must be in --zone.")
 		seedCount = flag.Int("seed-count", 32, "number of Speculative slots when using the default offerings")
-		zoneA     = flag.String("zone-a", "fr-par-1", "first zone for default offerings (and the region this process serves)")
-		zoneB     = flag.String("zone-b", "nl-ams-1", "second zone for default offerings")
+		zoneA     = flag.String("zone", "fr-par-1", "the single Scaleway zone this process serves (e.g. fr-par-1); all offerings must match it")
 		statePath = flag.String("state", "", "durable state file (empty = in-memory only)")
 
 		image        = flag.String("image", "", "base image label/id for CreateServer (scaleway backend)")
@@ -160,9 +159,9 @@ func run() error {
 		}
 		offs = loaded
 	} else if isCloud {
-		offs = defaultInstanceOfferings(*seedCount, *zoneA, *zoneB)
+		offs = defaultInstanceOfferings(*seedCount, *zoneA)
 	} else {
-		offs = defaultBaremetalOfferings(*seedCount, *zoneA, *zoneB)
+		offs = defaultBaremetalOfferings(*seedCount, *zoneA)
 	}
 
 	var userData []byte
@@ -175,7 +174,7 @@ func run() error {
 	}
 
 	pr := newPricing(*eurUSD, client, logger)
-	core, err := newScalewayBackend(*providerLbl, capacity, *image, client, offs, pr, userData, logger)
+	core, err := newScalewayBackend(*providerLbl, capacity, *zoneA, *image, client, offs, pr, userData, logger)
 	if err != nil {
 		return err
 	}

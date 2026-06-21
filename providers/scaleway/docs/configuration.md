@@ -24,15 +24,14 @@ sourced see [Pricing](/providers/scaleway/pricing-and-interruption/).
 |---|---|---|
 | `--addr` | `:9000` | gRPC listen address (CapacityProvider + health + reflection). |
 | `--provider` | `scaleway` | Provider/region label stamped on every `HostRef` (e.g. `scaleway-fr-par`). |
-| `--substrate` | `instances` | `instances` (ON_DEMAND, deletable) \| `elastic-metal` (BARE_METAL, `Delete` = `Unimplemented`). |
+| `--substrate` | `instances` | `instances` (ON_DEMAND, deletable) \| `elastic-metal` (BARE_METAL, `Delete` = `Unimplemented`). **The real Elastic Metal backend is not yet built:** `--substrate=elastic-metal` with real credentials fails fast at startup; it runs on the in-memory fake only (which is what the bare-metal conformance profile certifies). Use `instances` for any real deployment. |
 | `--scaleway-backend` | `auto` | `scaleway` \| `fake` \| `auto`. `auto` = `scaleway` when credentials are set, else `fake`. See [Backend modes](#backend-modes). |
 | `--access-key` | _(empty)_ | Scaleway access key. Falls back to `SCW_ACCESS_KEY`. |
 | `--secret-key` | _(empty)_ | Scaleway secret key. Falls back to `SCW_SECRET_KEY`. |
 | `--project-id` | _(empty)_ | Scaleway project id. Falls back to `SCW_DEFAULT_PROJECT_ID`. |
 | `--offerings` | _(built-in)_ | Path to a JSON offerings file. Omit to use a built-in mix sized by `--seed-count`. |
 | `--seed-count` | `32` | Number of Speculative slots in the default offerings (ignored when `--offerings` is set). |
-| `--zone-a` | `fr-par-1` | First zone for the default offerings, and the zone this process serves. |
-| `--zone-b` | `nl-ams-1` | Second zone for the default offerings. |
+| `--zone` | `fr-par-1` | The single Scaleway zone this process serves; all offerings must be in this zone. |
 | `--state` | _(empty)_ | Durable state file. Empty = in-memory only (state is lost on restart). |
 | `--image` | _(empty)_ | Base image label/id for `CreateServer`. **Required** for the `scaleway` backend. |
 | `--base-user-data` | _(empty)_ | Path to the generic, pre-binding cloud-init baked into `user_data` at create (installs the on-host agent). |
@@ -101,7 +100,7 @@ Pass a JSON file with `--offerings`. The file is a JSON array of objects:
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `commercial_type` | string | yes | Scaleway commercial type, e.g. `DEV1-S`, `GP1-XS`, `PRO2-S`, `COPARM1-4C-16G`, `EM-A210R-HDD`. |
-| `zone` | string | yes | Scaleway zone, e.g. `fr-par-1`. Zoneless offerings are rejected at startup (the provider is multi-zone). |
+| `zone` | string | yes | Scaleway zone, e.g. `fr-par-1`. Must equal `--zone`; an offering in any other zone (or zoneless) is rejected at startup. |
 | `capacity_type` | string | no | `on_demand` (Instances) or `bare_metal` (Elastic Metal); must match the process's `--substrate`. `spot` and `reserved` are rejected at startup — Scaleway has no spot/preemptible market. |
 | `count` | int | yes | Number of Speculative slots this offering provides. |
 | `resources` | map[string]string | no | The per-replica request shape the offering serves (the `Machine.resources`). Distinct from `allocatable`, which is derived from the commercial type. |
@@ -120,7 +119,7 @@ Example `offerings.json`:
   },
   {
     "commercial_type": "PRO2-S",
-    "zone": "nl-ams-1",
+    "zone": "fr-par-1",
     "capacity_type": "on_demand",
     "count": 16,
     "resources": { "cpu": "2", "memory": "4Gi" }
@@ -136,12 +135,19 @@ Example `offerings.json`:
 ]
 ```
 
+Every offering's `zone` must equal `--zone` (here `fr-par-1`) or the provider
+refuses to start — the process serves exactly one zone. An on-demand
+`commercial_type` must also have a pinned price in the provider's price table, or
+startup fails.
+
 The `COPARM1-4C-16G` offering above carries both `team` and the automatic
 `kubernetes.io/arch=arm64` label. An Elastic Metal process supplies
-`bare_metal` offerings instead (e.g. `EM-A210R-HDD`).
+`bare_metal` offerings instead (e.g. `EM-A210R-HDD`) — but note the real Elastic
+Metal backend is not yet built (see [`--substrate`](#flags)); it runs on the
+in-memory fake only.
 
-If you omit `--offerings`, the provider synthesizes a representative mix across
-`--zone-a`/`--zone-b` — `DEV1-S`/`GP1-XS` for Instances, `EM-A210R-HDD`/
+If you omit `--offerings`, the provider synthesizes a representative mix in
+`--zone` — `DEV1-S`/`GP1-XS` for Instances, `EM-A210R-HDD`/
 `EM-B112X-SSD` for Elastic Metal — distributing `--seed-count` slots evenly. That
 default is for dev and conformance; **real deployments supply `--offerings`.**
 

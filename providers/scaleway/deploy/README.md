@@ -4,7 +4,7 @@ Production deploy artifacts for the BigFleet Scaleway capacity provider: a
 container image, a Helm chart, and the credential (API key) setup.
 
 The provider follows a **one-process-per-region/zone** model. Each process owns a
-single Scaleway zone (`--zone-a`, e.g. `fr-par-1`) and one substrate
+single Scaleway zone (`--zone`, e.g. `fr-par-1`) and one substrate
 (`--substrate=instances` or `--substrate=elastic-metal`), holds zone-scoped
 inventory/state, and is the single `CapacityProvider` for that pair. To cover
 several zones or both substrates, deploy the chart once per (zone, substrate)
@@ -76,7 +76,6 @@ helm install scaleway-fr-par-1 providers/scaleway/deploy/helm \
   --set image.repository=ghcr.io/intunderflow/bigfleet-scaleway \
   --set image.tag=0.1.0 \
   --set zone=fr-par-1 \
-  --set zoneB=nl-ams-1 \
   --set provider=scaleway-fr-par \
   --set substrate=instances \
   --set scaleway.image=ubuntu_jammy \

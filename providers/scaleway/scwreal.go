@@ -179,25 +179,27 @@ func newSCWReal(cfg scwRealConfig, logger *slog.Logger) (scwClient, error) {
 
 func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInstance, error) {
 	name := serverName(spec)
-	// Idempotent create: a retried Create whose name already exists recovers the
-	// existing server instead of launching a second one. Recovery is
-	// power-state-aware (ensureRunning), because a Create that died between
-	// CreateServer and Poweron leaves a STOPPED server that would otherwise be
-	// polled forever.
-	if existing := r.serverByName(ctx, name); existing != nil {
-		return r.ensureRunning(ctx, existing.ID)
-	}
-
 	// Bake the generic, pre-binding agent bootstrap into user_data: the operator's
 	// base user-data (installs/starts the agent) plus the agent config carrying
 	// this server's per-machine token and the provider's pinned endpoint/CA. The
 	// cluster-specific blob is delivered later over the agent channel, because
-	// user_data is consumed only at first boot.
+	// user_data is consumed only at first boot. Computed before the recovery
+	// pre-check so a recovered, not-yet-booted server can have it (re-)applied.
 	token := r.vault.Token(spec.MachineID)
 	agentCfg := agentCloudConfig(r.cfg.BootstrapEndpoint, r.cfg.BootstrapCAPEM, spec.MachineID, token)
 	userData, err := combineUserData(spec.BaseUserData, agentCfg)
 	if err != nil {
 		return serverInstance{}, err
+	}
+
+	// Idempotent create: a retried Create whose name already exists recovers the
+	// existing server instead of launching a second one. Recovery is
+	// power-state-aware (ensureRunning), because a Create that died between
+	// CreateServer and Poweron leaves a STOPPED server that would otherwise be
+	// polled forever; ensureRunning also (re-)applies user-data before first boot
+	// so a server created before SetServerUserData ran still gets its agent config.
+	if existing := r.serverByName(ctx, name); existing != nil {
+		return r.ensureRunning(ctx, existing.ID, userData)
 	}
 
 	res, err := r.api.CreateServer(&instance.CreateServerRequest{
@@ -210,7 +212,7 @@ func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 	}, scw.WithContext(ctx))
 	if err != nil {
 		if existing := r.serverByName(ctx, name); existing != nil {
-			return r.ensureRunning(ctx, existing.ID)
+			return r.ensureRunning(ctx, existing.ID, userData)
 		}
 		return serverInstance{}, fmt.Errorf("create server %s: %w", spec.CommercialType, err)
 	}
@@ -240,12 +242,15 @@ func (r *scwReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 	return r.waitRunning(ctx, srv.ID)
 }
 
-// ensureRunning recovers an already-created server toward running: if it is
+// ensureRunning recovers an already-created server toward running. If it is
 // stopped (a Create that died before/at Poweron leaves it stopped — Scaleway
-// Instances boot stopped), it issues an idempotent Poweron, then waits. Without
-// this, a recovery branch would poll a stopped server forever (timeout → sticky
-// Create failure + leaked server/volume on every retry).
-func (r *scwReal) ensureRunning(ctx context.Context, id string) (serverInstance, error) {
+// Instances boot stopped), it (re-)applies the agent user-data and issues an
+// idempotent Poweron, then waits. Re-applying user-data before first boot also
+// repairs a crash between CreateServer and SetServerUserData, which would
+// otherwise boot an agentless server that never joins. Without the Poweron, a
+// recovery branch would poll a stopped server forever (timeout → sticky Create
+// failure + leaked server/volume on every retry).
+func (r *scwReal) ensureRunning(ctx context.Context, id, userData string) (serverInstance, error) {
 	res, err := r.api.GetServer(&instance.GetServerRequest{Zone: r.zone, ServerID: id}, scw.WithContext(ctx))
 	if err != nil {
 		return serverInstance{}, fmt.Errorf("recover server %s: %w", id, err)
@@ -255,11 +260,23 @@ func (r *scwReal) ensureRunning(ctx context.Context, id string) (serverInstance,
 	}
 	switch res.Server.State {
 	case instance.ServerStateRunning, instance.ServerStateStarting:
-		// already on its way up
+		// already booted / booting: user-data is consumed at first boot, so it is
+		// too late (and unnecessary) to re-apply it here.
 	default:
-		// stopped / stopped-in-place / locked-then-cleared: power it on. A poweron
-		// on an already-running server would error, but we only reach here when it
-		// is not running/starting.
+		// stopped / stopped-in-place: (re-)assert user-data, then power on. The
+		// server has not booted yet, so a crash between CreateServer and the
+		// original SetServerUserData is repaired here — cloud-init consumes the
+		// freshly-set user-data on first boot, so the agent config is present.
+		if len(userData) > 0 {
+			if err := r.api.SetServerUserData(&instance.SetServerUserDataRequest{
+				Zone:     r.zone,
+				ServerID: id,
+				Key:      "cloud-init",
+				Content:  strings.NewReader(userData),
+			}, scw.WithContext(ctx)); err != nil {
+				return serverInstance{}, fmt.Errorf("recover: set user-data on %s: %w", id, err)
+			}
+		}
 		if _, err := r.api.ServerAction(&instance.ServerActionRequest{
 			Zone: r.zone, ServerID: id, Action: instance.ServerActionPoweron,
 		}, scw.WithContext(ctx)); err != nil && !is404(err) {
@@ -333,31 +350,54 @@ func (r *scwReal) DeleteServer(ctx context.Context, serverID string) error {
 	}
 	// Delete the now-detached volumes so storage does not leak. Modern images boot
 	// on a Block Storage (sbs_volume) volume managed by the block API; legacy
-	// l_ssd/b_ssd volumes are managed by the instance API. Best-effort: a volume
-	// that is already gone (404) is fine; any other failure is logged, not fatal,
-	// so a transient volume-delete error never wedges the machine in Deleting.
-	r.deleteVolumes(ctx, serverID, volumes)
-	return nil
+	// l_ssd/b_ssd volumes are managed by the instance API. 404 = already gone;
+	// transient errors are retried inside deleteVolumes. A volume that still can't
+	// be deleted is surfaced (the kit drives the machine to FAILED with a
+	// last_error naming the volume) rather than silently leaked.
+	return r.deleteVolumes(ctx, serverID, volumes)
 }
 
 // deleteVolumes removes the server's detached volumes via the correct API for
-// each volume type. Best-effort and idempotent.
-func (r *scwReal) deleteVolumes(ctx context.Context, serverID string, volumes map[string]*instance.VolumeServer) {
+// each volume type, retrying a few times so a transient error (e.g. a volume
+// still detaching) doesn't leak the boot volume. Idempotent (404 = already gone).
+// Returns an error only if a volume still can't be deleted after the retries, so
+// the caller can decide whether to surface it.
+func (r *scwReal) deleteVolumes(ctx context.Context, serverID string, volumes map[string]*instance.VolumeServer) error {
+	const attempts = 5
+	var failed []string
 	for _, vol := range volumes {
 		if vol == nil || vol.ID == "" {
 			continue
 		}
 		var err error
-		if vol.VolumeType == instance.VolumeServerVolumeTypeSbsVolume {
-			err = r.block.DeleteVolume(&block.DeleteVolumeRequest{Zone: r.zone, VolumeID: vol.ID}, scw.WithContext(ctx))
-		} else {
-			err = r.api.DeleteVolume(&instance.DeleteVolumeRequest{Zone: r.zone, VolumeID: vol.ID}, scw.WithContext(ctx))
+		for i := 0; i < attempts; i++ {
+			if vol.VolumeType == instance.VolumeServerVolumeTypeSbsVolume {
+				err = r.block.DeleteVolume(&block.DeleteVolumeRequest{Zone: r.zone, VolumeID: vol.ID}, scw.WithContext(ctx))
+			} else {
+				err = r.api.DeleteVolume(&instance.DeleteVolumeRequest{Zone: r.zone, VolumeID: vol.ID}, scw.WithContext(ctx))
+			}
+			if err == nil || is404(err) {
+				err = nil
+				break
+			}
+			select {
+			case <-ctx.Done():
+				err = ctx.Err()
+			case <-time.After(2 * time.Second):
+				continue
+			}
+			break
 		}
-		if err != nil && !is404(err) {
-			r.logger.Warn("delete: could not delete volume; it may need manual cleanup",
+		if err != nil {
+			failed = append(failed, vol.ID)
+			r.logger.Warn("delete: could not delete volume after retries",
 				"server", serverID, "volume", vol.ID, "type", vol.VolumeType, "err", err)
 		}
 	}
+	if len(failed) > 0 {
+		return fmt.Errorf("delete: %d volume(s) of server %s could not be deleted: %v", len(failed), serverID, failed)
+	}
+	return nil
 }
 
 // waitStopped polls until the server reaches the stopped state (poweroff is

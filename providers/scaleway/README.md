@@ -38,7 +38,7 @@ One process serves one substrate, selected by `--substrate`:
 make build-scaleway
 ./bin/scaleway --provider scaleway-fr-par \
                --substrate instances \
-               --zone-a fr-par-1 \
+               --zone fr-par-1 \
                --image ubuntu_jammy \
                --bootstrap-addr :9443 \
                --bootstrap-endpoint https://scaleway-fr-par.bigfleet.svc:9443 \
@@ -83,7 +83,7 @@ backend — exactly how `make certify-scaleway` runs credential-free.
 | `--bootstrap-secret` | HMAC secret minting per-machine agent tokens (or `BIGFLEET_BOOTSTRAP_SECRET`; random if unset) |
 | `--eur-usd` | EUR→USD rate applied to Scaleway prices (default `1.08`) |
 | `--offerings` / `--seed-count` | offerings JSON file (or a default mix sized by seed-count) |
-| `--zone-a` / `--zone-b` | zones for the default offerings (`fr-par-1`/`nl-ams-1`) |
+| `--zone` | the single Scaleway zone this process serves; all offerings must be in this zone (default `fr-par-1`) |
 | `--state` | durable state file; empty = in-memory only |
 | `--tls-cert` / `--tls-key` / `--tls-ca` | TLS / mTLS |
 
