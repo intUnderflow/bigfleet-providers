@@ -119,6 +119,11 @@ func (a *azureReal) CreateVM(ctx context.Context, spec vmSpec) (vmInstance, erro
 
 	nicID, err := a.ensureNIC(ctx, name)
 	if err != nil {
+		// ensureNIC submits the NIC PUT then polls; if the ctx cancels/deadlines
+		// during the poll, ARM may still have provisioned the NIC, so clean it up
+		// best-effort (ctx-detached) like the VM-create error paths below — a leaked
+		// NIC is never reaped (DescribeManaged pages only VMs).
+		a.cleanupNIC(ctx, name+"-nic")
 		return vmInstance{}, fmt.Errorf("create nic: %w", err)
 	}
 

@@ -35,10 +35,11 @@ call the provider makes is counted and timed.
 | `bigfleet_azure_api_calls_total` | counter | `op`, `outcome` | Azure API call volume, split by operation and `success`/`error`. The first place to look when creates or drains are failing. |
 | `bigfleet_azure_api_duration_seconds` | histogram | `op` | Per-operation Azure API latency (default buckets). Rising latency on `CreateVM` or `ListVMs` usually precedes throttling. |
 
-`op` is one of: `CreateVM`, `DeleteVM`, `ListVMs`, `Configure` (the CustomScript
-extension that delivers the bootstrap blob), `Drain` (the drain extension),
-`RetailPrices` (the Spot price fetch), and `ResourceSkus` (the allocatable
-lookup). `outcome` is `success` or `error`.
+`op` is one of: `CreateVM`, `DeleteVM`, `ListVMs`, `StartVM` (power on a
+stopped host before Configure), `Configure` (the CustomScript extension that
+delivers the bootstrap blob), `Drain` (the drain extension), `RetailPrices` (the
+Spot price fetch), and `ResourceSkus` (the allocatable lookup). `outcome` is
+`success` or `error`.
 
 ### gRPC RPCs
 
