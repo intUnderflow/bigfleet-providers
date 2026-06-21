@@ -57,7 +57,8 @@ Authorisation to Scaleway is an **IAM-application access key + secret key**, sco
 by a least-privilege IAM policy to a single project — not a role or instance
 profile. Consequences for security:
 
-- The key holds only the permission sets the provider calls (`InstancesFullAccess`,
+- The key holds only the permission sets the provider calls (`InstancesFullAccess`
+  + `BlockStorageFullAccess` — the latter so Delete can remove the boot volume;
   plus `BareMetalFullAccess` when Elastic Metal is enabled), scoped to one project.
   Keep the project scoped to BigFleet-managed capacity so the key's blast radius is
   only what this provider owns.

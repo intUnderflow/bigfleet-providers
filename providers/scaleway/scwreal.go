@@ -371,31 +371,58 @@ func (r *scwReal) waitStopped(ctx context.Context, id string) error {
 }
 
 func (r *scwReal) DescribeManaged(ctx context.Context) ([]serverInstance, error) {
-	var out []serverInstance
-	tags := []string{tagManaged}
-	page := int32(1)
-	per := uint32(100)
-	for {
-		res, err := r.api.ListServers(&instance.ListServersRequest{
-			Zone:    r.zone,
-			Tags:    tags,
-			Page:    &page,
-			PerPage: &per,
-			Project: optStr(r.cfg.Creds.projectID),
-		}, scw.WithContext(ctx))
-		if err != nil {
-			return nil, err
+	servers, err := r.listManaged(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]serverInstance, 0, len(servers))
+	for _, srv := range servers {
+		out = append(out, r.toServerInstance(srv))
+	}
+	return out, nil
+}
+
+// listManaged returns the BigFleet-managed servers (optionally filtered by name),
+// enumerating ALL power states. ListServers with a nil State applies the API's
+// running-only default, so a stopped server (e.g. a Create that died before/at
+// Poweron, or a powered-off machine) would otherwise be invisible — which would
+// let idempotency recovery miss it (→ a duplicate billed server) and let
+// DescribeManaged re-seed its slot Speculative. Results are de-duplicated by
+// server id across states and pages.
+func (r *scwReal) listManaged(ctx context.Context, name *string) ([]*instance.Server, error) {
+	byID := make(map[string]*instance.Server)
+	for _, state := range instance.ServerStateRunning.Values() {
+		state := state
+		page := int32(1)
+		per := uint32(100)
+		for {
+			res, err := r.api.ListServers(&instance.ListServersRequest{
+				Zone:    r.zone,
+				Tags:    []string{tagManaged},
+				Name:    name,
+				State:   &state,
+				Page:    &page,
+				PerPage: &per,
+				Project: optStr(r.cfg.Creds.projectID),
+			}, scw.WithContext(ctx))
+			if err != nil {
+				return nil, err
+			}
+			if res == nil || len(res.Servers) == 0 {
+				break
+			}
+			for _, srv := range res.Servers {
+				byID[srv.ID] = srv
+			}
+			if len(res.Servers) < int(per) {
+				break
+			}
+			page++
 		}
-		if res == nil || len(res.Servers) == 0 {
-			break
-		}
-		for _, srv := range res.Servers {
-			out = append(out, r.toServerInstance(srv))
-		}
-		if len(res.Servers) < int(per) {
-			break
-		}
-		page++
+	}
+	out := make([]*instance.Server, 0, len(byID))
+	for _, srv := range byID {
+		out = append(out, srv)
 	}
 	return out, nil
 }
@@ -520,19 +547,16 @@ func (r *scwReal) toServerInstance(srv *instance.Server) serverInstance {
 
 // serverByName finds a BigFleet-managed server by its derived name, used to make
 // CreateServer idempotent across a retried Create. It filters on the managed tag
-// so a name collision with a server BigFleet does not own can never be "adopted"
-// as an idempotent retry.
+// (so a name collision with a server BigFleet does not own can never be "adopted"
+// as an idempotent retry) and enumerates all power states via listManaged — a
+// Create that died before/at Poweron leaves a STOPPED server, which the API's
+// running-only default would hide, causing a duplicate billed server on retry.
 func (r *scwReal) serverByName(ctx context.Context, name string) *instance.Server {
-	res, err := r.api.ListServers(&instance.ListServersRequest{
-		Zone:    r.zone,
-		Name:    scw.StringPtr(name),
-		Tags:    []string{tagManaged},
-		Project: optStr(r.cfg.Creds.projectID),
-	}, scw.WithContext(ctx))
-	if err != nil || res == nil {
+	servers, err := r.listManaged(ctx, scw.StringPtr(name))
+	if err != nil {
 		return nil
 	}
-	for _, srv := range res.Servers {
+	for _, srv := range servers {
 		if srv.Name == name {
 			return srv
 		}

@@ -47,10 +47,10 @@ To run it against a real project, have these ready (the
 
 - **A Scaleway project** and the zone you want capacity in (one process per zone,
   one substrate per process).
-- **An IAM-application API key** — an access key + secret key scoped, least
-  privilege, to that one project (`InstancesFullAccess`, plus
-  `BareMetalFullAccess` for Elastic Metal). See
-  [Credentials](/providers/scaleway/credentials/).
+- **An IAM-application API key** — an access key + secret key scoped to that one
+  project (`InstancesFullAccess` + `BlockStorageFullAccess` — the latter is
+  required so Delete can remove the boot volume; plus `BareMetalFullAccess` for
+  Elastic Metal). See [Credentials](/providers/scaleway/credentials/).
 - **A base image** that joins your cluster (e.g. `ubuntu_jammy`). The provider
   creates a server from it with a generic pre-binding `user_data`, which installs
   a small on-host agent; at Configure that agent dials the provider's

@@ -23,10 +23,12 @@ The Terraform in
 creates the three pieces, least privilege:
 
 - an **IAM application** — the machine identity the provider runs as;
-- an **IAM policy** — granting only `InstancesFullAccess` (the Instances backend's
+- an **IAM policy** — granting `InstancesFullAccess` (the Instances backend's
   calls: create/get/list/delete servers, server actions, user-data, server
-  types/pricing), plus `BareMetalFullAccess` **only when**
-  `enable_elastic_metal=true`, scoped to the one `project_id`;
+  types/pricing) **and** `BlockStorageFullAccess` (required so Delete can remove
+  the boot Block Storage volume — without it every Delete leaks the boot volume),
+  plus `BareMetalFullAccess` **only when** `enable_elastic_metal=true`, all scoped
+  to the one `project_id`;
 - an **API key** for the application (the access key + secret key outputs).
 
 ```sh
