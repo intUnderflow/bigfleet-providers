@@ -37,6 +37,11 @@ type ovhBackend struct {
 }
 
 func newOVHBackend(providerName, region, image string, client ovhClient, offerings []offering, pr *pricing, baseUserData []byte, logger *slog.Logger) (*ovhBackend, error) {
+	if pr == nil {
+		// pricing is required: it feeds price_per_hour on every machine and the
+		// unpriced-flavor startup check, and is dereferenced unconditionally below.
+		return nil, fmt.Errorf("ovh backend: pricing must not be nil")
+	}
 	if len(offerings) == 0 {
 		return nil, fmt.Errorf("ovh backend: no offerings configured")
 	}
@@ -68,7 +73,7 @@ func newOVHBackend(providerName, region, image string, client ovhClient, offerin
 		// of the shard's cost-ranking signal, so that flavor would always win.
 		// Reject it at construction (a real correctness hazard, not cosmetic):
 		// add the flavor to the pinned table or set a price override.
-		if pr != nil && !pr.known(off.Flavor) {
+		if !pr.known(off.Flavor) {
 			return nil, fmt.Errorf("ovh backend: offering flavor %q has no pinned price (price_per_hour would be 0, which always wins cost ranking) — add it to the pinned table in pricing.go or pass --flavor-price %s=<USD/hour>", off.Flavor, off.Flavor)
 		}
 	}
