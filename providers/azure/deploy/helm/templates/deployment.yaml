@@ -26,6 +26,12 @@ spec:
         {{- if .Values.offerings.content }}
         checksum/offerings: {{ .Values.offerings.content | sha256sum }}
         {{- end }}
+        {{- if .Values.baseUserData.content }}
+        checksum/base-user-data: {{ .Values.baseUserData.content | sha256sum }}
+        {{- end }}
+        {{- if .Values.azure.sshPublicKey }}
+        checksum/ssh: {{ .Values.azure.sshPublicKey | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

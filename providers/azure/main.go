@@ -219,13 +219,8 @@ func run() error {
 		obs.start(logger)
 	}
 
-	// The Spot eviction-rate bands (interruption.go) are pinned approximations;
-	// warn when serving a region whose pricing table is the baseline.
-	if mode == "azure" && *location != "" {
-		if _, ok := onDemandByRegion[*location]; !ok {
-			logger.Warn("no pinned on-demand price table for this region; cost ranking uses baseline approximations", "location", *location)
-		}
-	}
+	// (newPricing already warns once when a region has no pinned on-demand table
+	// and falls back to the baseline; no need to repeat it here.)
 
 	// Background loops: spot price refresh + Azure->inventory reconcile.
 	go runPriceRefresher(ctx, backend, m, *priceRefresh)

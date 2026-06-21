@@ -97,12 +97,12 @@ func newPricing(region string, client azureClient, logger *slog.Logger) *pricing
 // state (never blocks on the network), so it is safe on the List/seed path.
 //
 // Contract: every offered VM size must appear in the pinned on-demand table
-// (onDemandByRegion). An unpinned size prices at 0 for ON_DEMAND/RESERVED, and a
-// spot size whose live price has not yet been fetched falls back to a fraction of
-// that on-demand price — so an unpinned spot size also prices at 0 until the
-// first refresh populates it from the API. A 0 reads as "free" and would be
-// over-preferred by cost ranking; pin the size to avoid that. Startup pre-warms
-// spot prices before serving, so the cold window does not exist for pinned sizes.
+// (onDemandByRegion), enforced at startup (hasPrice). A spot size whose live
+// price has not yet been fetched falls back to a fraction of its on-demand price;
+// startup pre-warms spot prices before serving, so that cold window does not
+// exist for pinned sizes. A size with no pinned entry at all (only reachable via
+// a recovered/orphan VM of an unpinned size) prices at a high sentinel rather
+// than 0, so cost ranking never treats it as "free".
 func (p *pricing) price(vmSize string, capacity providerkit.CapacityType) float64 {
 	switch capacity {
 	case providerkit.CapacityBareMetal:
@@ -115,11 +115,26 @@ func (p *pricing) price(vmSize string, capacity providerkit.CapacityType) float6
 			return v
 		}
 		// Cold cache: a conservative fraction of pay-as-you-go until refresh runs.
-		return 0.4 * p.onDemandUSD[vmSize]
+		return 0.4 * p.onDemand(vmSize)
 	default: // ON_DEMAND / RESERVED — reserved is a billing construct; price it at
 		// pay-as-you-go unless you model a real reservation discount.
-		return p.onDemandUSD[vmSize]
+		return p.onDemand(vmSize)
 	}
+}
+
+// unknownSizePriceUSD is a deliberately high per-hour price returned for a VM
+// size with no pinned on-demand entry. Offered sizes are rejected at startup
+// (hasPrice), so this only applies to a recovered/orphan VM of an unpinned size:
+// pricing it as expensive keeps cost ranking from treating it as "free".
+const unknownSizePriceUSD = 1000.0
+
+// onDemand returns the pinned pay-as-you-go price for vmSize, or a conservative
+// high sentinel when the size is unpinned (never 0, which would read as free).
+func (p *pricing) onDemand(vmSize string) float64 {
+	if v, ok := p.onDemandUSD[vmSize]; ok {
+		return v
+	}
+	return unknownSizePriceUSD
 }
 
 // hasPrice reports whether vmSize has a pinned on-demand price for this region

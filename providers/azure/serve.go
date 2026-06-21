@@ -23,7 +23,7 @@ import (
 // buildGRPCServer assembles a production gRPC server: keepalive tuning, a panic-
 // recovery + request-logging/metrics interceptor chain, the standard gRPC
 // health service, and (optionally) reflection for debugging.
-func buildGRPCServer(creds credentials.TransportCredentials, m *metrics, reflect bool, logger *slog.Logger) (*grpc.Server, *health.Server) {
+func buildGRPCServer(creds credentials.TransportCredentials, m *metrics, enableReflection bool, logger *slog.Logger) (*grpc.Server, *health.Server) {
 	opts := []grpc.ServerOption{
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			MaxConnectionIdle: 15 * time.Minute,
@@ -45,7 +45,7 @@ func buildGRPCServer(creds credentials.TransportCredentials, m *metrics, reflect
 	gs := grpc.NewServer(opts...)
 	hs := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(gs, hs)
-	if reflect {
+	if enableReflection {
 		reflection.Register(gs)
 	}
 	return gs, hs
