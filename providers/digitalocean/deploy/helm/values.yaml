@@ -1,0 +1,165 @@
+# Values for the bigfleet-digitalocean chart.
+#
+# One release per DigitalOcean region. To run several regions, install the chart
+# once per region with a distinct release name, region, and token, e.g.:
+#
+#   helm install digitalocean-nyc3 ./helm \
+#     --set region=nyc3 \
+#     --set provider=digitalocean-nyc3 \
+#     --set token.secretName=bigfleet-digitalocean-token \
+#     --set-file offerings.content=offerings.nyc3.json
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-digitalocean
+  tag: ""            # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Number of replicas. Keep at 1 per region: the provider holds region-scoped
+# state and is the single CapacityProvider process for its region.
+replicaCount: 1
+
+# --- core provider config ---------------------------------------------------
+# DigitalOcean region this process serves (--region), e.g. nyc3. Required for the
+# real backend; also the first default-offering region (--region-a).
+region: nyc3
+# Second region for the default offerings (--region-b).
+regionB: sfo3
+# HostRef provider label (--provider), e.g. digitalocean-nyc3.
+provider: ""
+# DigitalOcean backend mode: auto | digitalocean | fake (--do-backend). auto =
+# digitalocean when a token AND region are set, else fake.
+doBackend: auto
+
+ports:
+  # gRPC CapacityProvider (--addr).
+  grpc: 9000
+  # /metrics, /healthz, /readyz (--metrics-addr).
+  metrics: 9090
+  # On-host agent bootstrap channel (--bootstrap-addr), HTTPS; real backend only.
+  bootstrap: 9443
+
+# --- DigitalOcean Droplet parameters ----------------------------------------
+digitalocean:
+  image: ""                     # --image (base image/snapshot slug or id), REQUIRED for the real backend; ships the on-host agent
+  seedCount: 32                 # --seed-count (default offerings size)
+
+# --- API token --------------------------------------------------------------
+# The provider authenticates with a DigitalOcean Personal Access Token (PAT),
+# mounted as the DIGITALOCEAN_TOKEN env var from a Secret (key: token). Scope it
+# to read+write Droplets only. Create it with:
+#   kubectl create secret generic bigfleet-digitalocean-token --from-literal=token=$DIGITALOCEAN_TOKEN
+token:
+  secretName: ""                # Secret holding the PAT (key: token)
+  secretKey: token
+
+# --- on-host agent bootstrap channel ----------------------------------------
+# Configure/Drain deliver the cluster-specific bootstrap blob to the running
+# Droplet over an on-host agent on a TLS channel with mutual authentication
+# (pinned server CA + per-machine token, not mTLS; NOT user_data, which is
+# read-only after first boot). Provide the channel's server
+# cert/key in a Secret (tls.crt, tls.key, optional ca.crt the agent pins), an
+# externally-reachable endpoint the agent dials, and the HMAC secret that mints
+# per-machine agent tokens. Required for the real backend.
+bootstrap:
+  enabled: false
+  # Externally-reachable URL of the channel, injected into Droplet user_data
+  # (--bootstrap-endpoint), e.g. https://do-provider.example.com:9443
+  endpoint: ""
+  # Secret holding the channel server cert (tls.crt) and key (tls.key).
+  tlsSecretName: ""
+  # Set true only if tlsSecretName also carries a ca.crt the agent should pin
+  # (passes --bootstrap-ca). Leave false to let the agent pin the server cert
+  # itself — a standard kubernetes.io/tls Secret has no ca.crt, and pointing
+  # --bootstrap-ca at a missing file would crash the pod at startup.
+  ca: false
+  # Secret holding the HMAC secret (key: secret) for per-machine agent tokens,
+  # mounted as BIGFLEET_BOOTSTRAP_SECRET. Pin one so tokens survive restarts.
+  secretName: ""
+  secretKey: secret
+
+# --- offerings --------------------------------------------------------------
+# When content is set, it is rendered into a ConfigMap, mounted, and passed via
+# --offerings. Use --set-file offerings.content=offerings.json on install.
+offerings:
+  content: ""
+
+# Optional generic pre-binding cloud-init baked into Droplet create user_data
+# (--base-user-data); installs/starts the on-host agent. Set content to enable.
+baseUserData:
+  content: ""
+
+# --- background loops -------------------------------------------------------
+priceRefresh: 30m               # --price-refresh
+reconcileInterval: 2m           # --reconcile-interval
+
+# --- durable state ----------------------------------------------------------
+# When enabled, --state points at a file on a PersistentVolume so fence marks,
+# the idempotency map, inventory, and bindings survive restarts.
+state:
+  enabled: false
+  path: /var/lib/bigfleet-digitalocean/state.json
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+
+# --- TLS / mTLS (gRPC listener) ---------------------------------------------
+# Provide a Secret with tls.crt + tls.key (and optionally ca.crt for mTLS).
+# When ca.crt is present the provider requires + verifies client certs (mTLS).
+tls:
+  enabled: false
+  secretName: ""                 # Secret holding tls.crt, tls.key, [ca.crt]
+  mtls: false                   # mount ca.crt and pass --tls-ca
+
+# --- gRPC reflection (--reflection) -----------------------------------------
+reflection: true
+
+# Extra raw flags appended verbatim to the args.
+extraArgs: []
+
+# --- ServiceAccount ---------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# --- Service ----------------------------------------------------------------
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Scrape annotations added to the Service for the metrics port.
+metrics:
+  prometheusScrape: true
+
+# --- pod scheduling / resources ---------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# Hardened defaults to match the distroless/static:nonroot image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
