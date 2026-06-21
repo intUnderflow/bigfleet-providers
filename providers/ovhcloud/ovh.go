@@ -25,6 +25,11 @@ type ovhClient interface {
 	// slot returns to Speculative.
 	DeleteServer(ctx context.Context, serverID string) error
 
+	// StartServer powers on a SHUTOFF/stopped server and returns once it is
+	// running again. Used to heal a recovered-but-powered-off instance during
+	// Create, so a stopped server is never bound (Configure'd) while down.
+	StartServer(ctx context.Context, serverID string) error
+
 	// DescribeManaged returns every BigFleet-managed server in the project
 	// (servers carrying the bigfleet-managed=true metadata), so a provider with
 	// no persisted store can still rebuild inventory.

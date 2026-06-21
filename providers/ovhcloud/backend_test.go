@@ -282,10 +282,12 @@ func TestNewOVHBackend_RejectsForeignRegion(t *testing.T) {
 	}
 }
 
-// A powered-off (non-running) tagged server must NOT back its slot as a reachable
-// Idle host — the slot returns to Speculative for a fresh Create, and the dead
-// server is surfaced as an orphan for cleanup (consistent with serverByMachineID).
-func TestDescribe_NonRunningTaggedServerNotSlotBacking(t *testing.T) {
+// A powered-off (non-running) server must never be advertised as a schedulable
+// Idle host: Describe SKIPS it entirely (slot returns to Speculative, and it is
+// not surfaced as an Idle orphan either). The real client's Create guard recovers
+// and powers it back on by machine id — so this doesn't double-provision — but
+// that is real-only; here we assert Describe never publishes a bindable phantom.
+func TestDescribe_NonRunningServerSkipped(t *testing.T) {
 	b, fake := newTestBackend(t, 4)
 	ctx := context.Background()
 	slot := b.speculativeSlots()[0]
@@ -299,20 +301,15 @@ func TestDescribe_NonRunningTaggedServerNotSlotBacking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Describe: %v", err)
 	}
-	var slotInst, orphan *providerkit.Instance
 	for i := range got {
-		switch {
-		case got[i].ID == slot.ID:
-			slotInst = &got[i]
-		case got[i].Host.Ref == srv.ServerID:
-			orphan = &got[i]
+		if got[i].Host.Ref == srv.ServerID {
+			t.Errorf("powered-off server must not be published (got %s as %s)", got[i].ID, got[i].State)
 		}
-	}
-	if slotInst == nil || slotInst.State != providerkit.StateSpeculative || slotInst.Host.Ref != "" {
-		t.Errorf("slot should be Speculative with no host when its server is powered off, got %+v", slotInst)
-	}
-	if orphan == nil {
-		t.Error("powered-off server should be surfaced as an orphan for cleanup, not dropped")
+		if got[i].ID == slot.ID {
+			if got[i].State != providerkit.StateSpeculative || got[i].Host.Ref != "" {
+				t.Errorf("slot should be Speculative with no host when its server is off, got %+v", got[i])
+			}
+		}
 	}
 }
 

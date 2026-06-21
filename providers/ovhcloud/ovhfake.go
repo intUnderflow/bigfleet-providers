@@ -67,6 +67,17 @@ func (f *ovhFake) DeleteServer(_ context.Context, serverID string) error {
 	return nil
 }
 
+func (f *ovhFake) StartServer(_ context.Context, serverID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.servers[serverID]
+	if !ok {
+		return fmt.Errorf("ovhfake: start unknown server %q", serverID)
+	}
+	s.Running = true
+	return nil
+}
+
 func (f *ovhFake) DescribeManaged(_ context.Context) ([]serverInstance, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

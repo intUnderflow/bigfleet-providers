@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base32"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -168,20 +169,34 @@ func (r *ovhReal) CreateServer(ctx context.Context, spec serverSpec) (serverInst
 	// paid instance for the same slot. We key the check on the BigFleet machine id
 	// (stamped in metadata), which is stable across operations — so it covers both
 	// a lost-response retry of the SAME OperationID AND a Failed-then-reset re-Create
-	// that gets a FRESH OperationID (different name): if a live instance already
-	// backs this machine, recover it instead of double-provisioning. This is the
-	// OpenStack analogue of EC2's RunInstances ClientToken, widened to the slot.
-	// A re-Create after a real Delete launches fresh (the deleted server is gone,
-	// so nothing matches). The post-Create serverByName branch is a backstop for
-	// the narrow create-races-create same-name case.
-	if existingID, err := r.serverByMachineID(ctx, spec.MachineID); err != nil {
+	// that gets a FRESH OperationID (different name): if an instance already backs
+	// this machine — RUNNING OR POWERED OFF — recover it instead of
+	// double-provisioning. This is the OpenStack analogue of EC2's RunInstances
+	// ClientToken, widened to the slot. Matching a non-running server here is what
+	// lets Describe safely SKIP non-running servers (never advertising a
+	// powered-off host as Idle): ensureActive powers a recovered server back on
+	// (or deletes an ERROR remnant and falls through to a fresh create). A
+	// re-Create after a real Delete launches fresh (the deleted server is gone).
+	// The post-Create serverByName branch is a backstop for the narrow
+	// create-races-create same-name case.
+	existingID, err := r.serverByMachineID(ctx, spec.MachineID)
+	if err != nil {
 		// The lookup is the idempotency guard, so a failed lookup must ABORT the
 		// Create — proceeding on a transient list error could double-provision a
 		// paid instance. The kit re-dispatches the operation, so a later retry
 		// re-runs this pre-check cleanly.
 		return serverInstance{}, fmt.Errorf("create idempotency pre-check for machine %s: %w", spec.MachineID, err)
-	} else if existingID != "" {
-		return r.waitActive(ctx, existingID)
+	}
+	if existingID != "" {
+		inst, aerr := r.ensureActive(ctx, existingID)
+		if aerr == nil {
+			return inst, nil
+		}
+		if !errors.Is(aerr, errRecreate) {
+			return serverInstance{}, aerr
+		}
+		// errRecreate: the remnant was an unusable ERROR instance and has been
+		// deleted; fall through to launch a fresh one.
 	}
 	name := serverName(spec)
 
@@ -250,7 +265,12 @@ func (r *ovhReal) waitActive(ctx context.Context, id string) (serverInstance, er
 		case "ACTIVE":
 			return r.toServerInstance(srv), nil
 		case "ERROR":
-			return serverInstance{}, fmt.Errorf("server %s entered ERROR status while creating", id)
+			// Roll back the failed instance so it stops billing and a retry can
+			// launch a clean one, rather than leaking it alongside the retry.
+			if derr := servers.Delete(ctx, r.compute, id).ExtractErr(); derr != nil && r.logger != nil {
+				r.logger.Warn("failed to delete ERROR server during rollback", "server", id, "err", derr)
+			}
+			return serverInstance{}, fmt.Errorf("server %s entered ERROR status while creating (deleted)", id)
 		}
 		select {
 		case <-ctx.Done():
@@ -272,6 +292,53 @@ func (r *ovhReal) DeleteServer(ctx context.Context, serverID string) error {
 		return fmt.Errorf("delete server %s: %w", serverID, err)
 	}
 	return nil
+}
+
+func (r *ovhReal) StartServer(ctx context.Context, serverID string) error {
+	if err := servers.Start(ctx, r.compute, serverID).ExtractErr(); err != nil {
+		return fmt.Errorf("start server %s: %w", serverID, err)
+	}
+	if _, err := r.waitActive(ctx, serverID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// errRecreate signals that a recovered remnant was unusable (deleted) and the
+// caller should launch a fresh server instead of recovering.
+var errRecreate = fmt.Errorf("recovered server is unusable; recreate")
+
+// ensureActive brings a recovered server (matched by machine id during Create)
+// to a usable ACTIVE state: ACTIVE/BUILD is awaited; a stopped server is started;
+// an ERROR remnant is deleted and errRecreate is returned so Create launches a
+// fresh one. This is the power-on/heal path that lets Describe safely SKIP
+// non-running servers — they are recovered and powered on at the next Create
+// rather than ever advertised as a bindable Idle host.
+func (r *ovhReal) ensureActive(ctx context.Context, id string) (serverInstance, error) {
+	srv, err := servers.Get(ctx, r.compute, id).Extract()
+	if err != nil {
+		return serverInstance{}, fmt.Errorf("get server %s: %w", id, err)
+	}
+	switch strings.ToUpper(srv.Status) {
+	case "ACTIVE":
+		return r.toServerInstance(srv), nil
+	case "BUILD":
+		return r.waitActive(ctx, id)
+	case "ERROR":
+		if derr := servers.Delete(ctx, r.compute, id).ExtractErr(); derr != nil && r.logger != nil {
+			r.logger.Warn("failed to delete ERROR remnant during recovery", "server", id, "err", derr)
+		}
+		return serverInstance{}, errRecreate
+	default: // SHUTOFF / STOPPED / PAUSED / SUSPENDED — power it back on.
+		if err := r.StartServer(ctx, id); err != nil {
+			return serverInstance{}, err
+		}
+		fresh, err := servers.Get(ctx, r.compute, id).Extract()
+		if err != nil {
+			return serverInstance{}, fmt.Errorf("get server %s after start: %w", id, err)
+		}
+		return r.toServerInstance(fresh), nil
+	}
 }
 
 func (r *ovhReal) DescribeManaged(ctx context.Context) ([]serverInstance, error) {
@@ -506,12 +573,14 @@ func (r *ovhReal) serverByName(ctx context.Context, name string) (*servers.Serve
 	return nil, nil
 }
 
-// serverByMachineID returns the id of a LIVE managed server (ACTIVE/BUILD)
-// tagged with the given BigFleet machine id, or "" when none exists. It is the
-// Create idempotency guard: a non-nil error means the lookup itself failed and
-// the caller MUST NOT create (treat as "unknown", not "absent"). Only running
-// servers count — a dead remnant (ERROR/SHUTOFF) is surfaced by Describe as an
-// orphan for cleanup rather than recovered as a usable host.
+// serverByMachineID returns the id of a managed server tagged with the given
+// BigFleet machine id, or "" when none exists. It is the Create idempotency
+// guard: a non-nil error means the lookup itself failed and the caller MUST NOT
+// create (treat as "unknown", not "absent"). It matches a server REGARDLESS of
+// power state — a powered-off remnant must still be recovered (ensureActive
+// powers it on, or deletes an ERROR one) so a Create after a stop/ERROR never
+// double-provisions. A running server is preferred when both exist for the same
+// id (the duplicate case), so the healthy one is recovered.
 func (r *ovhReal) serverByMachineID(ctx context.Context, machineID string) (string, error) {
 	if machineID == "" {
 		return "", nil
@@ -520,12 +589,19 @@ func (r *ovhReal) serverByMachineID(ctx context.Context, machineID string) (stri
 	if err != nil {
 		return "", err
 	}
+	var fallback string
 	for _, s := range managed {
-		if s.MachineID == machineID && s.Running {
+		if s.MachineID != machineID {
+			continue
+		}
+		if s.Running {
 			return s.ServerID, nil
 		}
+		if fallback == "" {
+			fallback = s.ServerID
+		}
 	}
-	return "", nil
+	return fallback, nil
 }
 
 // ensureIPv4 returns srv with a populated reachable IPv4 (PublicIPv4 holds the

@@ -95,6 +95,12 @@ func (c *metricsOVHClient) DeleteServer(ctx context.Context, id string) error {
 	c.m.observeAPI("DeleteServer", start, err)
 	return err
 }
+func (c *metricsOVHClient) StartServer(ctx context.Context, id string) error {
+	start := time.Now()
+	err := c.inner.StartServer(ctx, id)
+	c.m.observeAPI("StartServer", start, err)
+	return err
+}
 func (c *metricsOVHClient) DescribeManaged(ctx context.Context) ([]serverInstance, error) {
 	start := time.Now()
 	out, err := c.inner.DescribeManaged(ctx)

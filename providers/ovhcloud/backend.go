@@ -64,13 +64,12 @@ func newOVHBackend(providerName, region, image string, client ovhClient, offerin
 		}
 		// Price comes from a pinned EUR table (OVH has no price API). A flavor
 		// absent from the table (and with no override) would publish
-		// price_per_hour=0 — i.e. effectively free — and always win the shard's
-		// cost ranking. Warn loudly so the operator adds a table entry or an
-		// override; not fatal, since price is a relative ranking signal and the
-		// override path exists.
-		if pr != nil && logger != nil && !pr.known(off.Flavor) {
-			logger.Warn("offering flavor has no pinned price and no override; price_per_hour will be 0 (add it to the pinned table or set a price override)",
-				"flavor", off.Flavor, "region", off.Region)
+		// price_per_hour=0 — i.e. effectively free — which is the global minimum
+		// of the shard's cost-ranking signal, so that flavor would always win.
+		// Reject it at construction (a real correctness hazard, not cosmetic):
+		// add the flavor to the pinned table or set a price override.
+		if pr != nil && !pr.known(off.Flavor) {
+			return nil, fmt.Errorf("ovh backend: offering flavor %q has no pinned price and no override (price_per_hour would be 0, which always wins cost ranking) — add it to the pinned table or set a price override", off.Flavor)
 		}
 	}
 	return &ovhBackend{
@@ -142,14 +141,16 @@ func slotLabels(off offering) map[string]string {
 // same machine id. A deleting server is releasing its slot and is correctly
 // absent (the slot returns to Speculative for re-provisioning).
 //
-// A NON-running tagged server (SHUTOFF/ERROR — a powered-off image-backed
-// instance can't be made Idle/reachable, and there is no power-on path) does NOT
-// back its slot: backing it would publish a powered-off host as a reachable Idle
-// node (Configure/Drain would then fail). It is instead surfaced as an orphan for
-// cleanup (the shard's idle-release can Delete it), and its slot returns to
-// Speculative for a fresh Create — consistent with serverByMachineID, the Create
-// guard, which likewise only recovers running servers. Untagged-but-running
-// managed servers are likewise surfaced as orphans so they are not lost.
+// A NON-running server (SHUTOFF/ERROR, tagged or not) is SKIPPED entirely:
+// Describe only ever reports Speculative or Idle, and a powered-off image-backed
+// instance is not a reachable Idle host — publishing it as Idle would let the
+// shard bind it and then fail Configure/Drain over SSH against a down host. So a
+// non-running server is never advertised here. Its slot returns to Speculative,
+// and the real client's Create guard (serverByMachineID) still matches the
+// powered-off server by machine id and recovers it — ensureActive powers it back
+// on (or deletes an ERROR remnant and launches fresh) — so this never
+// double-provisions. Untagged-but-running managed servers are surfaced as orphans
+// so they are not lost.
 func (b *ovhBackend) Describe(ctx context.Context) ([]providerkit.Instance, error) {
 	managed, err := b.client.DescribeManaged(ctx)
 	if err != nil {
@@ -159,7 +160,10 @@ func (b *ovhBackend) Describe(ctx context.Context) ([]providerkit.Instance, erro
 	var orphans []serverInstance
 	for _, srv := range managed {
 		switch {
-		case srv.MachineID != "" && srv.Running:
+		case !srv.Running:
+			// Powered-off / ERROR remnant — never advertise it as Idle (see above).
+			continue
+		case srv.MachineID != "":
 			if _, dup := bySlot[srv.MachineID]; dup {
 				// Two live servers carry the same machine id (e.g. a botched
 				// create that left a duplicate). Keep the first as the slot
@@ -170,14 +174,8 @@ func (b *ovhBackend) Describe(ctx context.Context) ([]providerkit.Instance, erro
 				continue
 			}
 			bySlot[srv.MachineID] = srv // owns its slot
-		case srv.Running:
-			orphans = append(orphans, srv) // managed + running, but untagged
 		default:
-			// Non-running (SHUTOFF/ERROR), tagged or not — a dead remnant. Surface
-			// it as an orphan for cleanup; it does NOT back a slot (a powered-off
-			// server is not a reachable Idle host), so its slot returns to
-			// Speculative for a fresh Create.
-			orphans = append(orphans, srv)
+			orphans = append(orphans, srv) // managed + running, but untagged
 		}
 	}
 

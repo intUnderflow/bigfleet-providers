@@ -62,7 +62,6 @@ helm install ovh-gra providers/ovhcloud/deploy/helm \
   --set image.repository=ghcr.io/intunderflow/bigfleet-ovhcloud \
   --set image.tag=0.1.0 \
   --set region=GRA \
-  --set regionB=SBG \
   --set provider=ovh-public-GRA \
   --set ovh.image=<BASE_IMAGE_UUID> \
   --set ovh.keyName=bigfleet-ovh \
