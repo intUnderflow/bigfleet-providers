@@ -89,6 +89,17 @@ certified AWS (SSM) and Hetzner (SSH) providers. Security implications:
   pin and aborts on mismatch (possible MITM). An instance with no pin (an orphan,
   or an image without cloud-init) is trust-on-first-used and the observed key
   pinned — the residual risk is confined to that first connection, logged at WARN.
+- **Host-key trust boundary (know this).** The injected host **private** key is
+  delivered via the instance's cloud-init `user-data` metadata, which is durable
+  and readable by any principal with `compute.instances.get` on the project — and
+  by workloads on the node via the metadata server. A reader of that metadata
+  could impersonate the host's SSH key, weakening the MITM protection above. Treat
+  it as a project-scoped trust boundary: restrict instance-metadata read (and
+  block the metadata server from untrusted pods), and prefer **Shielded VM** images
+  for the strongest host integrity. If you don't want any host private key at
+  rest, omit the cloud-init injection and rely on trust-on-first-use pinning
+  instead (one-connection window). This mirrors the certified Hetzner provider's
+  model; the trade-off is called out here rather than hidden.
 - **The client is authenticated.** The provider connects as `--ssh-user` with
   `--ssh-key`; only that key is authorised (via `ssh-keys` metadata, with
   `enable-oslogin=false`). Use a dedicated key for the provider, stored as its own

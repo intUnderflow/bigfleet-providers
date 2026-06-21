@@ -47,6 +47,7 @@ the provider makes is counted and timed.
 | Metric | Type | Labels | What it tells you |
 |---|---|---|---|
 | `bigfleet_gcp_reconcile_total` | counter | `outcome` | Background GCE→inventory reconcile runs by outcome. |
+| `bigfleet_gcp_spot_preemptions_total` | counter | — | Observed GCE Spot preemptions of managed instances (raises the affected slot's observed interruption probability). |
 
 ## Health vs readiness
 

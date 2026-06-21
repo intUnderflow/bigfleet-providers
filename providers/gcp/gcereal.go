@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base32"
 	"encoding/base64"
 	"errors"
@@ -360,9 +361,10 @@ func (r *gceReal) ApplyBootstrap(ctx context.Context, inst gceInstance, clusterI
 // reboot.
 func (r *gceReal) DrainNode(ctx context.Context, inst gceInstance, gracePeriodSeconds int64) error {
 	if r.cfg.SSHSigner == nil {
-		// No SSH path: at least clear the binding metadata so inventory reflects
-		// the unbound state.
-		return r.clearCluster(ctx, inst.Zone, inst.Name)
+		// Without SSH the provider cannot actually cordon/drain the kubelet, so
+		// fail honestly rather than clearing the binding and reporting a false
+		// Idle (symmetric with ApplyBootstrap).
+		return fmt.Errorf("drain: SSH delivery disabled (set --ssh-key); cannot cordon/drain %s", inst.Name)
 	}
 	live, err := r.ensureReachable(ctx, inst)
 	if err != nil {
@@ -370,7 +372,14 @@ func (r *gceReal) DrainNode(ctx context.Context, inst gceInstance, gracePeriodSe
 	}
 	grace := gracePeriodSeconds
 	if grace <= 0 {
-		grace = 1
+		grace = 30 // a sane default pod grace when the shard sends none
+	}
+	// --grace-period is the per-pod grace; --timeout is the overall drain
+	// deadline (a distinct concept) — floor it so a small grace doesn't abort the
+	// whole drain in ~1s. The kit's Drain transition timeout bounds the upper end.
+	drainTimeout := grace + 120
+	if drainTimeout < 300 {
+		drainTimeout = 300
 	}
 	// cordon tolerates a re-run (|| true); the DRAIN must NOT swallow its failure —
 	// an incomplete drain has to surface as FAILED rather than a false Idle.
@@ -379,7 +388,7 @@ func (r *gceReal) DrainNode(ctx context.Context, inst gceInstance, gracePeriodSe
 			"sudo kubectl cordon \"$node\" || true; "+
 			"sudo kubectl drain \"$node\" --ignore-daemonsets --delete-emptydir-data "+
 			"--grace-period=%d --timeout=%ds",
-		grace, grace)
+		grace, drainTimeout)
 	if err := r.runSSH(ctx, live, script); err != nil {
 		return err
 	}
@@ -388,12 +397,9 @@ func (r *gceReal) DrainNode(ctx context.Context, inst gceInstance, gracePeriodSe
 
 // recordCluster sets the bigfleet-cluster binding metadata, preserving the rest.
 func (r *gceReal) recordCluster(ctx context.Context, zone, name, clusterID string) error {
-	live, err := r.instances.Get(ctx, &computepb.GetInstanceRequest{Project: r.cfg.Project, Zone: zone, Instance: name})
-	if err != nil {
-		return fmt.Errorf("configure: get instance %s: %w", name, err)
-	}
-	md := setMetadataItem(live.GetMetadata(), metaCluster, clusterID)
-	if err := r.setMetadata(ctx, zone, name, md); err != nil {
+	if err := r.mutateMetadata(ctx, zone, name, func(md *computepb.Metadata) *computepb.Metadata {
+		return setMetadataItem(md, metaCluster, clusterID)
+	}); err != nil {
 		return fmt.Errorf("configure: record cluster binding %s: %w", name, err)
 	}
 	return nil
@@ -401,12 +407,9 @@ func (r *gceReal) recordCluster(ctx context.Context, zone, name, clusterID strin
 
 // clearCluster removes the bigfleet-cluster binding metadata, preserving the rest.
 func (r *gceReal) clearCluster(ctx context.Context, zone, name string) error {
-	live, err := r.instances.Get(ctx, &computepb.GetInstanceRequest{Project: r.cfg.Project, Zone: zone, Instance: name})
-	if err != nil {
-		return fmt.Errorf("drain: get instance %s: %w", name, err)
-	}
-	md := removeMetadataItem(live.GetMetadata(), metaCluster)
-	if err := r.setMetadata(ctx, zone, name, md); err != nil {
+	if err := r.mutateMetadata(ctx, zone, name, func(md *computepb.Metadata) *computepb.Metadata {
+		return removeMetadataItem(md, metaCluster)
+	}); err != nil {
 		return fmt.Errorf("drain: clear cluster binding %s: %w", name, err)
 	}
 	return nil
@@ -575,24 +578,42 @@ func (r *gceReal) runSSH(ctx context.Context, inst gceInstance, script string) e
 
 // setHostKeyFP persists a trust-on-first-use host-key fingerprint into metadata.
 func (r *gceReal) setHostKeyFP(ctx context.Context, zone, name, fp string) error {
-	live, err := r.instances.Get(ctx, &computepb.GetInstanceRequest{Project: r.cfg.Project, Zone: zone, Instance: name})
-	if err != nil {
-		return err
-	}
-	return r.setMetadata(ctx, zone, name, setMetadataItem(live.GetMetadata(), metaHostKeyFP, fp))
+	return r.mutateMetadata(ctx, zone, name, func(md *computepb.Metadata) *computepb.Metadata {
+		return setMetadataItem(md, metaHostKeyFP, fp)
+	})
 }
 
-func (r *gceReal) setMetadata(ctx context.Context, zone, name string, md *computepb.Metadata) error {
-	op, err := r.instances.SetMetadata(ctx, &computepb.SetMetadataInstanceRequest{
-		Project:          r.cfg.Project,
-		Zone:             zone,
-		Instance:         name,
-		MetadataResource: md,
-	})
-	if err != nil {
-		return err
+// mutateMetadata performs a read-modify-write of an instance's metadata, applying
+// mutate to the live metadata (which carries the fingerprint GCE requires on
+// update). It retries on a 412 (stale fingerprint) — the metadata changed between
+// the Get and the SetMetadata (e.g. a concurrent guest-agent update) — so the
+// non-atomic read-modify-write converges instead of failing the transition.
+func (r *gceReal) mutateMetadata(ctx context.Context, zone, name string, mutate func(*computepb.Metadata) *computepb.Metadata) error {
+	const attempts = 4
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		live, err := r.instances.Get(ctx, &computepb.GetInstanceRequest{Project: r.cfg.Project, Zone: zone, Instance: name})
+		if err != nil {
+			return fmt.Errorf("get instance %s: %w", name, err)
+		}
+		op, err := r.instances.SetMetadata(ctx, &computepb.SetMetadataInstanceRequest{
+			Project:          r.cfg.Project,
+			Zone:             zone,
+			Instance:         name,
+			MetadataResource: mutate(live.GetMetadata()),
+		})
+		if err == nil {
+			err = op.Wait(ctx)
+		}
+		if err == nil {
+			return nil
+		}
+		if apiErrorCode(err) != 412 {
+			return err
+		}
+		lastErr = err // stale fingerprint — re-read and retry
 	}
-	return op.Wait(ctx)
+	return fmt.Errorf("set metadata %s: %d conflicting attempts: %w", name, attempts, lastErr)
 }
 
 // metadataItem builds a single metadata key/value item.
@@ -653,7 +674,10 @@ func instanceName(spec instanceSpec) string {
 	}
 	name := "bf-" + strings.ToLower(nameEncoding.EncodeToString([]byte(token)))
 	if len(name) > 63 {
-		name = name[:63]
+		// Don't truncate (that could collide distinct tokens); derive a stable
+		// fixed-length name from the token's SHA-256 instead (3 + 52 = 55 ≤ 63).
+		sum := sha256.Sum256([]byte(token))
+		name = "bf-" + strings.ToLower(nameEncoding.EncodeToString(sum[:]))
 	}
 	return name
 }
