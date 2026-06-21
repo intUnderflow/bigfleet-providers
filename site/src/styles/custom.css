@@ -36,7 +36,7 @@
 }
 .provider-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* logo sits beside the title, not the middle */
   gap: 0.85rem;
   padding: 0.9rem 1rem;
   border: 1px solid var(--sl-color-gray-5);
@@ -51,20 +51,28 @@
   border-color: var(--sl-color-accent);
   background-color: var(--sl-color-gray-6);
 }
-.provider-logo {
+/* Uniform square logo tile: every mark occupies the same footprint (so titles
+   line up regardless of logo aspect ratio), and the white tile gives each brand
+   logo its intended background so wordmarks/dark marks stay legible on the dark
+   card. The SVG is centred inside via object-fit: contain. */
+.provider-logo,
+.provider-logo--fallback {
   flex: none;
-  height: 1.75rem;
-  width: auto;
-  max-width: 2.75rem;
+  box-sizing: border-box;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.5rem;
+  margin-top: 0.1rem;
+}
+.provider-logo {
+  padding: 0.4rem;
+  background-color: #fff;
   object-fit: contain;
 }
 .provider-logo--fallback {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 1.75rem;
-  width: 1.75rem;
-  border-radius: 0.375rem;
   background-color: var(--sl-color-gray-5);
   font-weight: 700;
   text-transform: uppercase;
@@ -83,6 +91,8 @@
   font-size: 0.8rem;
   color: var(--sl-color-gray-3);
   line-height: 1.4;
+  /* reserve exactly three lines so every card is the same height */
+  height: calc(0.8rem * 1.4 * 3);
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
