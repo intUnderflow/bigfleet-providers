@@ -21,9 +21,9 @@ moves.
 OVH Public Cloud is **OpenStack** under the hood, so the provider speaks the Nova
 compute API (via gophercloud) — the same contract any OpenStack cloud exposes.
 
-## Why you'd trust it in production
+## How it behaves
 
-- **Production-ready.** It ships as a hardened container image and a Helm chart,
+- **Hardened and operable.** It ships as a container image and a Helm chart,
   runs non-root on a distroless, read-only root filesystem, and exposes
   liveness/readiness probes, Prometheus metrics, and structured logs. See
   [Observability](/providers/ovhcloud/observability/).

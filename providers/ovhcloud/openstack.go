@@ -299,10 +299,29 @@ func (r *ovhReal) DeleteServer(ctx context.Context, serverID string) error {
 }
 
 func (r *ovhReal) StartServer(ctx context.Context, serverID string) error {
-	if err := servers.Start(ctx, r.compute, serverID).ExtractErr(); err != nil {
-		return fmt.Errorf("start server %s: %w", serverID, err)
+	return r.bringUp(ctx, serverID, powerStart)
+}
+
+// bringUp issues the Nova action that returns a non-running server to ACTIVE —
+// os-start for a stopped server, unpause for PAUSED, resume for SUSPENDED — and
+// waits for ACTIVE. Using the wrong one (e.g. os-start on a PAUSED server) is a
+// 409, which is exactly the bug this routing avoids.
+func (r *ovhReal) bringUp(ctx context.Context, id string, action powerAction) error {
+	var err error
+	switch action {
+	case powerStart:
+		err = servers.Start(ctx, r.compute, id).ExtractErr()
+	case powerUnpause:
+		err = servers.Unpause(ctx, r.compute, id).ExtractErr()
+	case powerResume:
+		err = servers.Resume(ctx, r.compute, id).ExtractErr()
+	default:
+		return fmt.Errorf("bringUp: server %s not in a startable state", id)
 	}
-	if _, err := r.waitActive(ctx, serverID); err != nil {
+	if err != nil {
+		return fmt.Errorf("power on server %s: %w", id, err)
+	}
+	if _, err := r.waitActive(ctx, id); err != nil {
 		return err
 	}
 	return nil
@@ -319,12 +338,17 @@ var errRecreate = fmt.Errorf("recovered server is unusable; recreate")
 type powerAction int
 
 const (
-	powerReady powerAction = iota // ACTIVE — usable now
-	powerWait                     // BUILD — await ACTIVE
-	powerStart                    // SHUTOFF/STOPPED/PAUSED/SUSPENDED — start, then await
-	powerError                    // ERROR — unusable
+	powerReady   powerAction = iota // ACTIVE — usable now
+	powerWait                       // BUILD — await ACTIVE
+	powerStart                      // SHUTOFF/STOPPED — Nova os-start
+	powerUnpause                    // PAUSED — Nova unpause (os-start would 409)
+	powerResume                     // SUSPENDED — Nova resume (os-start would 409)
+	powerError                      // ERROR — unusable
 )
 
+// powerActionFor picks the correct Nova action to bring a server back to ACTIVE:
+// os-start is only valid from stopped, while a PAUSED server needs unpause and a
+// SUSPENDED one needs resume (os-start against either returns 409 Conflict).
 func powerActionFor(status string) powerAction {
 	switch strings.ToUpper(strings.TrimSpace(status)) {
 	case "ACTIVE":
@@ -333,7 +357,11 @@ func powerActionFor(status string) powerAction {
 		return powerWait
 	case "ERROR":
 		return powerError
-	default:
+	case "PAUSED":
+		return powerUnpause
+	case "SUSPENDED":
+		return powerResume
+	default: // SHUTOFF / STOPPED / …
 		return powerStart
 	}
 }
@@ -361,8 +389,8 @@ func (r *ovhReal) ensureActive(ctx context.Context, id string) (serverInstance, 
 			r.logger.Warn("failed to delete ERROR remnant during recovery", "server", id, "err", derr)
 		}
 		return serverInstance{}, errRecreate
-	default: // powerStart
-		return r.startAndGet(ctx, id)
+	default: // powerStart / powerUnpause / powerResume
+		return r.upAndGet(ctx, id, powerActionFor(srv.Status))
 	}
 }
 
@@ -388,8 +416,8 @@ func (r *ovhReal) ensureRunning(ctx context.Context, srv serverInstance) (server
 		return r.ensureIPv4(ctx, inst)
 	case powerError:
 		return serverInstance{}, fmt.Errorf("server %s is in ERROR state; cannot reach it for configure/drain", srv.ServerID)
-	default: // powerStart
-		inst, serr := r.startAndGet(ctx, srv.ServerID)
+	default: // powerStart / powerUnpause / powerResume
+		inst, serr := r.upAndGet(ctx, srv.ServerID, powerActionFor(fresh.Status))
 		if serr != nil {
 			return serverInstance{}, serr
 		}
@@ -397,15 +425,15 @@ func (r *ovhReal) ensureRunning(ctx context.Context, srv serverInstance) (server
 	}
 }
 
-// startAndGet powers a stopped server on, waits for ACTIVE, and returns its fresh
-// substrate view.
-func (r *ovhReal) startAndGet(ctx context.Context, id string) (serverInstance, error) {
-	if err := r.StartServer(ctx, id); err != nil {
+// upAndGet brings a non-running server back to ACTIVE via the action appropriate
+// to its state, then returns its fresh substrate view.
+func (r *ovhReal) upAndGet(ctx context.Context, id string, action powerAction) (serverInstance, error) {
+	if err := r.bringUp(ctx, id, action); err != nil {
 		return serverInstance{}, err
 	}
 	fresh, err := servers.Get(ctx, r.compute, id).Extract()
 	if err != nil {
-		return serverInstance{}, fmt.Errorf("get server %s after start: %w", id, err)
+		return serverInstance{}, fmt.Errorf("get server %s after power-on: %w", id, err)
 	}
 	return r.toServerInstance(fresh), nil
 }

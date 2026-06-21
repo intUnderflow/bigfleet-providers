@@ -60,8 +60,9 @@ func TestPowerActionFor(t *testing.T) {
 		"ACTIVE": powerReady, "active": powerReady,
 		"BUILD": powerWait, " build ": powerWait,
 		"ERROR":   powerError,
-		"SHUTOFF": powerStart, "STOPPED": powerStart, "PAUSED": powerStart,
-		"SUSPENDED": powerStart, "anything-else": powerStart,
+		"SHUTOFF": powerStart, "STOPPED": powerStart, "anything-else": powerStart,
+		"PAUSED": powerUnpause, "paused": powerUnpause,
+		"SUSPENDED": powerResume, "suspended": powerResume,
 	}
 	for status, want := range cases {
 		if got := powerActionFor(status); got != want {
