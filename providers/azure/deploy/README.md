@@ -11,12 +11,12 @@ the chart once per region with a distinct release name, location, managed
 identity, and offerings file — never scale a single release past `replicas: 1`.
 
 > **Tooling note:** these artifacts were authored against the certified
-> `providers/aws/deploy` and `providers/hetzner/deploy` references. `helm`,
-> `terraform`/`tofu`, and a running Docker daemon were **not available** in the
-> authoring environment, so the chart/Terraform were not rendered/validated
-> there; the image's Go build path is the exact `go -C providers/azure build`
-> that `make build-azure` runs green. Run `helm template`, `tofu validate`, and
-> `docker build` in your environment before relying on them.
+> `providers/aws/deploy` and `providers/hetzner/deploy` references. CI's
+> `deploy (azure)` job lints the Helm chart and builds the container image on
+> every commit, so both are validated; the image's Go build path is the exact
+> `go -C providers/azure build` that `make build-azure` runs green. Still run
+> `helm template` and `tofu validate` against **your** values/backend before
+> relying on them in production.
 
 ## 1. Build the image
 
@@ -64,11 +64,11 @@ What the custom role grants, and why (each line maps to a call the code makes):
 |---|---|
 | `Microsoft.Compute/virtualMachines/{read,write,delete}` | Create / Delete / inventory |
 | `Microsoft.Compute/virtualMachines/start/action` | power on a stopped host at Configure |
-| `Microsoft.Compute/virtualMachines/extensions/{read,write,delete}` | Configure / Drain (CustomScript) |
+| `Microsoft.Compute/virtualMachines/extensions/write` | Configure / Drain (CustomScript) |
 | `Microsoft.Compute/disks/{read,write,delete}` | the OS managed disk |
 | `Microsoft.Compute/skus/read` | allocatable lookup (Resource SKUs) |
 | `Microsoft.Network/networkInterfaces/{read,write,delete}` | the VM's NIC |
-| `Microsoft.Network/virtualNetworks/subnets/{join/action,read}` | attach the NIC to the subnet |
+| `Microsoft.Network/virtualNetworks/subnets/join/action` | attach the NIC to the subnet |
 
 Set `-var use_custom_role=false` to assign the built-in **Contributor** role
 scoped to the resource group instead. The role is scoped to the **resource

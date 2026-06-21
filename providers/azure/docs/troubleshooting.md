@@ -165,8 +165,10 @@ The pinned on-demand prices and Spot eviction bands ship for `eastus` and
 eviction *forecast* are pinned.
 
 - **Symptom:** at startup, `no pinned on-demand price table for this region; cost
-  ranking uses baseline approximations` for an untabulated region. On-demand
-  `price_per_hour` looks off, or a size you offer reads 0.
+  ranking uses baseline approximations` for an untabulated region, so on-demand
+  `price_per_hour` looks off. (A size you offer that is missing from the table
+  entirely is rejected at startup — the provider refuses to start — rather than
+  pricing at 0.)
 - **Fix:** regenerate the on-demand table from the Retail Prices API per
   [Pricing & interruption](/providers/azure/pricing-and-interruption/), and add
   your sizes to `evictionBand`. These feed the engine's *relative* cost ranking,

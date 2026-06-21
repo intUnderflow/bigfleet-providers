@@ -33,11 +33,11 @@ your resource group:
 | `Microsoft.Compute/virtualMachines/write` | `Create` | Create the VM (size, zone, image, Spot priority, BigFleet tags). |
 | `Microsoft.Compute/virtualMachines/delete` | `Delete` | Tear the VM down. |
 | `Microsoft.Compute/virtualMachines/start/action` | `Configure` | Power on a stopped/deallocated managed VM before configuring it. |
-| `Microsoft.Compute/virtualMachines/extensions/*` | `Configure` / `Drain` | Run the CustomScript extension that delivers the bootstrap blob and drains the node. |
+| `Microsoft.Compute/virtualMachines/extensions/write` | `Configure` / `Drain` | Create-or-update the single CustomScript extension that delivers the bootstrap blob and drains the node (no read/delete). |
 | `Microsoft.Compute/disks/*` | `Create` / `Delete` | The OS managed disk the VM creates and releases. |
 | `Microsoft.Compute/skus/read` | startup | Resolve each offered size's real vCPU/memory (Resource SKUs) for `Machine.allocatable`. |
 | `Microsoft.Network/networkInterfaces/*` | `Create` / `Delete` | Create the VM's NIC and delete it on teardown. |
-| `Microsoft.Network/virtualNetworks/subnets/join/action`, `.../subnets/read` | `Create` | Attach the NIC to the configured subnet. |
+| `Microsoft.Network/virtualNetworks/subnets/join/action` | `Create` | Attach the NIC to the configured subnet (by id; never read). |
 
 The Retail Prices API the Spot price refresh reads is **public** (no Azure auth),
 so it needs no role. If you prefer the built-in **Contributor** role scoped to the

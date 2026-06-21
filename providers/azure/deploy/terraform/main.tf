@@ -8,9 +8,9 @@
 #     Kubernetes ServiceAccount on AKS (Workload Identity), the production path.
 #
 # The custom role mirrors the actions the provider actually calls:
-#   Microsoft.Compute/virtualMachines: read/write/delete + the
-#   virtualMachines/extensions it uses for Configure/Drain,
-#   Microsoft.Network/networkInterfaces: read/write/delete,
+#   Microsoft.Compute/virtualMachines: read/write/delete + start/action (power-on)
+#   + extensions/write (the single CustomScript extension for Configure/Drain),
+#   Microsoft.Network/networkInterfaces: read/write/delete + subnets/join/action,
 #   Microsoft.Compute/skus/read for the Resource SKUs (allocatable) lookup, and
 #   the disks the VM creates.
 #
@@ -97,9 +97,9 @@ resource "azurerm_role_definition" "provider" {
       "Microsoft.Compute/virtualMachines/write",
       "Microsoft.Compute/virtualMachines/delete",
       "Microsoft.Compute/virtualMachines/start/action",
-      "Microsoft.Compute/virtualMachines/extensions/read",
+      # Configure/Drain only create-or-update the single CustomScript extension
+      # (no read/delete), so only write is granted.
       "Microsoft.Compute/virtualMachines/extensions/write",
-      "Microsoft.Compute/virtualMachines/extensions/delete",
       "Microsoft.Compute/disks/read",
       "Microsoft.Compute/disks/write",
       "Microsoft.Compute/disks/delete",
@@ -107,9 +107,8 @@ resource "azurerm_role_definition" "provider" {
       "Microsoft.Network/networkInterfaces/read",
       "Microsoft.Network/networkInterfaces/write",
       "Microsoft.Network/networkInterfaces/delete",
-      # Join the configured subnet when attaching a NIC.
+      # Join the configured subnet when attaching a NIC (by id; never read).
       "Microsoft.Network/virtualNetworks/subnets/join/action",
-      "Microsoft.Network/virtualNetworks/subnets/read",
     ]
     not_actions = []
   }

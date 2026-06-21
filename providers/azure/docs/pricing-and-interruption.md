@@ -57,13 +57,14 @@ credentials) and paste the result into `onDemandByRegion`:
 
 ```sh
 curl -s "https://prices.azure.com/api/retail/prices?currencyCode=USD&\$filter=\
-armRegionName eq 'westus2' and armSkuName eq 'D4s_v5' and priceType eq 'Consumption'" \
+armRegionName eq 'westus2' and armSkuName eq 'Standard_D4s_v5' and priceType eq 'Consumption'" \
   | jq '.Items[] | select(.productName | test("Windows|Spot") | not) | .unitPrice'
 ```
 
-Filter to the Linux consumption meter (exclude Windows / Spot / low-priority). The
-API is public but rate-limited, so this is an occasional offline maintenance step,
-never a runtime dependency.
+Filter to the Linux consumption meter (exclude Windows / Spot / low-priority).
+`armSkuName` is the **full** size name including the `Standard_` prefix (the
+stripped form matches zero meters). The API is public but rate-limited, so this is
+an occasional offline maintenance step, never a runtime dependency.
 
 ### Spot: refreshed from the Retail Prices API
 
@@ -165,6 +166,7 @@ reflect reality.
 When the `azure` backend serves a region with no pinned price table, it logs a
 startup warning. Both the price table and the eviction bands drift over time;
 refresh them periodically. A size present in your offerings but absent from
-`onDemandByRegion` prices at the zero value of the map; absent from `evictionBand`
-it falls back to the non-zero middle band — so keep both tables in sync with your
-offerings.
+`onDemandByRegion` is **rejected at startup** (the provider refuses to serve an
+unpriced offering rather than publish a misleading price); absent from
+`evictionBand` it falls back to the non-zero middle band — so keep both tables in
+sync with your offerings.
