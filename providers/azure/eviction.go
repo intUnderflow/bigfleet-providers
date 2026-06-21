@@ -29,7 +29,7 @@ type evictionReporter struct {
 	backend *azureBackend
 	srv     *providerkit.Server // to propagate the raised value promptly
 	m       *metrics
-	token   string // shared bearer secret; empty = unauthenticated (in-cluster only)
+	token   string // required bearer secret; main.go only registers the endpoint when this is set (fail-closed), so in production it is never empty. The handler still skips auth when empty, which is used only by direct unit tests.
 	logger  *slog.Logger
 }
 
