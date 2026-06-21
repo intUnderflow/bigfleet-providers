@@ -60,7 +60,7 @@ func run() error {
 		baseUserData = flag.String("base-user-data", "", "path to the generic pre-binding cloud-init baked into customData at create")
 		priceRefresh = flag.Duration("price-refresh", time.Hour, "spot price refresh interval (0 = off)")
 		reconcile    = flag.Duration("reconcile-interval", 2*time.Minute, "background Azure->inventory reconcile interval (0 = off)")
-		evictionTok  = flag.String("eviction-token", "", "shared bearer token the node-side Scheduled Events agent presents to POST /internal/eviction (or set BIGFLEET_EVICTION_TOKEN, preferred — Secret-mounted; empty = unauthenticated, in-cluster only)")
+		evictionTok  = flag.String("eviction-token", "", "shared bearer token the node-side Scheduled Events agent presents to POST /internal/eviction (or set BIGFLEET_EVICTION_TOKEN, preferred — Secret-mounted). Empty = the endpoint is disabled (fail-closed), not unauthenticated")
 
 		metricsAddr = flag.String("metrics-addr", ":9090", "address for /metrics, /healthz, /readyz (empty = disabled)")
 		reflectFlag = flag.Bool("reflection", true, "register gRPC server reflection (for grpcurl/debugging)")

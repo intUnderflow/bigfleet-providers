@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
@@ -61,9 +62,12 @@ func (e *evictionReporter) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if e.token != "" {
-		// Constant-time compare so the endpoint doesn't leak the token byte-by-byte
-		// via response timing.
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+e.token)) != 1 {
+		// SHA-256 both sides first so the compared inputs are always equal length:
+		// subtle.ConstantTimeCompare short-circuits on a length mismatch, so hashing
+		// avoids leaking the token length (and keeps the compare constant-time).
+		want := sha256.Sum256([]byte("Bearer " + e.token))
+		got := sha256.Sum256([]byte(r.Header.Get("Authorization")))
+		if subtle.ConstantTimeCompare(want[:], got[:]) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
