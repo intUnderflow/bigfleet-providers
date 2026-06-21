@@ -1,0 +1,23 @@
+{{- if .Values.offerings.content }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bigfleet-proxmox.fullname" . }}-offerings
+  labels:
+    {{- include "bigfleet-proxmox.labels" . | nindent 4 }}
+data:
+  offerings.json: |
+    {{- .Values.offerings.content | nindent 4 }}
+{{- end }}
+{{- if .Values.instanceTypes.content }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bigfleet-proxmox.fullname" . }}-instance-types
+  labels:
+    {{- include "bigfleet-proxmox.labels" . | nindent 4 }}
+data:
+  instance-types.json: |
+    {{- .Values.instanceTypes.content | nindent 4 }}
+{{- end }}

@@ -1,0 +1,185 @@
+# Values for the bigfleet-proxmox chart.
+#
+# One release per Proxmox VE cluster. The provider manages qemu VMs across the
+# cluster's nodes (one BigFleet zone per node). Run several clusters by installing
+# the chart once each with a distinct release name, --proxmox-api-url, and token:
+#
+#   helm install proxmox-dc1 ./helm \
+#     --set provider=proxmox-dc1 \
+#     --set proxmox.apiURL=https://pve1.dc1.example:8006/api2/json \
+#     --set proxmox.tokenID='bigfleet@pve!autoscaler' \
+#     --set proxmox.nodes='pve-1,pve-2,pve-3' \
+#     --set proxmox.templateVMID=9000 \
+#     --set proxmox.pool=bigfleet \
+#     --set credentials.token.secretName=bigfleet-proxmox-token \
+#     --set credentials.ca.secretName=bigfleet-proxmox-ca
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-proxmox
+  tag: ""            # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Number of replicas. Keep at 1: the provider holds cluster-scoped state and is
+# the single CapacityProvider process for its Proxmox cluster.
+replicaCount: 1
+
+# --- core provider config ---------------------------------------------------
+# HostRef provider label (--provider), e.g. proxmox-dc1.
+provider: ""
+# Proxmox backend mode: auto | proxmox | fake (--proxmox-backend). auto = proxmox
+# when proxmox.apiURL is set, else fake.
+proxmoxBackend: auto
+# Zone seed for the fake backend's two synthetic zones (--default-zone).
+defaultZone: pve
+# Number of Speculative slots for the default offerings (--seed-count).
+seedCount: 32
+
+ports:
+  # gRPC CapacityProvider (--addr).
+  grpc: 9000
+  # /metrics, /healthz, /readyz (--metrics-addr).
+  metrics: 9090
+
+# --- Proxmox connection -----------------------------------------------------
+proxmox:
+  # The Proxmox API URL (--proxmox-api-url). REQUIRED for the real backend.
+  apiURL: ""
+  # The API token id (--proxmox-token-id): USER@REALM!TOKENID. The token SECRET
+  # is mounted from credentials.token (never inline). REQUIRED for the real backend.
+  tokenID: ""
+  # Comma-separated Proxmox node names (--nodes), each a BigFleet zone. REQUIRED
+  # for the real backend.
+  nodes: ""
+  # Default source template VMID the built-in catalog clones from (--template-vmid).
+  # Point it at your prepared template (qemu-guest-agent + kubelet installed).
+  templateVMID: 9000
+  # Optional resource pool clones are placed in (--proxmox-pool) — pair with a
+  # token scoped to this pool for least privilege.
+  pool: ""
+  # Pinned SHA-256 fingerprint of the Proxmox API cert (--proxmox-tls-fingerprint).
+  # An ALTERNATIVE to mounting the cluster CA (credentials.ca). TLS verification
+  # is mandatory: set EXACTLY ONE of credentials.ca or this.
+  tlsFingerprint: ""
+
+# --- Proxmox credentials / TLS trust ----------------------------------------
+# The provider connects to Proxmox with an API token over verified TLS. The
+# token secret and the cluster CA are mounted from Secrets (never inline args).
+credentials:
+  # Secret holding the API token SECRET (the UUID). Mounted at
+  # /etc/bigfleet/proxmox-token and passed via --proxmox-token-file.
+  token:
+    secretName: ""
+    secretKey: token
+  # Secret/ConfigMap-style Secret holding the Proxmox cluster CA PEM
+  # (/etc/pve/pve-root-ca.pem). Mounted at /etc/bigfleet/proxmox-ca and passed
+  # via --proxmox-ca-file. The TLS connection is the secret channel and MUST be
+  # verified — set this OR proxmox.tlsFingerprint. There is no skip-verify option.
+  ca:
+    secretName: ""
+    secretKey: ca.pem
+
+# --- bootstrap delivery -----------------------------------------------------
+# The cluster-join bootstrap blob is delivered over the qemu guest agent to an
+# already-running VM (never cloud-init). These tune the in-guest delivery.
+bootstrap:
+  # In-guest path the blob is written to before it is executed (--bootstrap-path).
+  path: /run/bigfleet-bootstrap
+  # Comma-separated argv that runs the bootstrap (--bootstrap-exec); the path is
+  # appended as the final arg.
+  exec: /bin/sh
+
+# --- instance-type catalog --------------------------------------------------
+# When content is set, it is rendered into a ConfigMap, mounted, and passed via
+# --instance-types (a JSON object of name -> {vcpu, memory_mib, template_vmid}).
+# Omit to use the built-in pve.* sizes (all cloning from proxmox.templateVMID).
+instanceTypes:
+  content: ""
+
+# --- pricing ----------------------------------------------------------------
+pricing:
+  # Explicit USD/hour per instance type as type=usd pairs (--prices). Empty =
+  # synthetic per-vCPU/GiB pricing.
+  prices: ""
+  perVCPUHour: 0.0030           # --price-per-vcpu-hour
+  perGiBHour: 0.0008            # --price-per-gib-hour
+
+# --- offerings --------------------------------------------------------------
+# When content is set, it is rendered into a ConfigMap, mounted, and passed via
+# --offerings. Use --set-file offerings.content=offerings.json on install.
+offerings:
+  content: ""
+
+# --- background loops -------------------------------------------------------
+reconcileInterval: 2m           # --reconcile-interval
+
+# --- durable state ----------------------------------------------------------
+# When enabled, --state points at a file on a PersistentVolume so fence marks,
+# the idempotency map, inventory, and bindings survive restarts.
+state:
+  enabled: false
+  path: /var/lib/bigfleet-proxmox/state.json
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+
+# --- TLS / mTLS (the gRPC listener BigFleet dials) --------------------------
+# Provide a Secret with tls.crt + tls.key (and optionally ca.crt for mTLS).
+# When mtls is set the provider requires + verifies client certs.
+tls:
+  enabled: false
+  secretName: ""                 # Secret holding tls.crt, tls.key, [ca.crt]
+  mtls: false                   # mount ca.crt and pass --tls-ca
+
+# --- gRPC reflection (--reflection) -----------------------------------------
+reflection: true
+
+# Extra raw flags appended verbatim to the args.
+extraArgs: []
+
+# --- ServiceAccount ---------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# --- Service ----------------------------------------------------------------
+service:
+  type: ClusterIP
+  annotations: {}
+
+# Scrape annotations added to the Service for the metrics port.
+metrics:
+  prometheusScrape: true
+
+# --- pod scheduling / resources ---------------------------------------------
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# Hardened defaults to match the distroless/static:nonroot image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
