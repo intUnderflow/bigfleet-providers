@@ -127,10 +127,11 @@ func (b *azureBackend) Describe(ctx context.Context) ([]providerkit.Instance, er
 	}
 	bySlot := make(map[string]vmInstance, len(managed))
 	var orphans []vmInstance
+	byMachine := make(map[string][]vmInstance)
 	for _, vm := range managed {
 		switch {
 		case vm.MachineID != "" && vm.Running:
-			bySlot[vm.MachineID] = vm // tagged + alive: owns its slot
+			byMachine[vm.MachineID] = append(byMachine[vm.MachineID], vm)
 		case vm.MachineID != "":
 			// Tagged but deleting/evicted: releasing its slot. Drop it so the slot
 			// returns to Speculative rather than seeding an Idle machine whose host
@@ -138,6 +139,24 @@ func (b *azureBackend) Describe(ctx context.Context) ([]providerkit.Instance, er
 			// Configure/Drain/Delete).
 		case vm.Running:
 			orphans = append(orphans, vm) // managed + running, but untagged
+		}
+	}
+	for mid, vms := range byMachine {
+		// Normally one VM per machine id. A re-driven Create after a partial failure
+		// can leave two running VMs sharing a machine id; pick a deterministic owner
+		// (smallest resource id) and surface the rest as orphans so they are tracked
+		// and reclaimable, never silently leaked.
+		owner := vms[0]
+		for _, vm := range vms[1:] {
+			if vm.ResourceID < owner.ResourceID {
+				owner = vm
+			}
+		}
+		bySlot[mid] = owner
+		for _, vm := range vms {
+			if vm.ResourceID != owner.ResourceID {
+				orphans = append(orphans, vm)
+			}
 		}
 	}
 

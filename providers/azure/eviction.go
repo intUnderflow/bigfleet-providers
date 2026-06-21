@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -57,9 +58,13 @@ func (e *evictionReporter) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if e.token != "" && r.Header.Get("Authorization") != "Bearer "+e.token {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
+	if e.token != "" {
+		// Constant-time compare so the endpoint doesn't leak the token byte-by-byte
+		// via response timing.
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+e.token)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 	var rep evictionReport
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&rep); err != nil {

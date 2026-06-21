@@ -206,7 +206,10 @@ cluster is only known when the shard binds it. The lifecycle:
    Configured.
 3. **Drain → CustomScript extension.** Runs the image hook's drain path
    (cordon/drain the kubelet within the grace period), then clears the
-   `bigfleet-cluster` tag. The VM is left running but unbound (Idle).
+   `bigfleet-cluster` tag. The VM is left running but unbound (Idle). Configure and
+   Drain reuse a **single** `CustomScript` extension (re-run via `forceUpdateTag`):
+   Azure allows only one extension per handler type per VM, so a second
+   differently-named CustomScript extension would be rejected.
 4. **Delete → `VirtualMachines.BeginDelete`.** Deletes the VM; its OS disk and
    NIC cascade away via `DeleteOption=Delete` (Delete also best-effort removes the
    NIC explicitly). The slot returns to Speculative.

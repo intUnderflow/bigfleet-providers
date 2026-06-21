@@ -221,6 +221,53 @@ func TestDescribe_DeletingVMReleasesSlot(t *testing.T) {
 	t.Fatalf("Describe did not return slot %s", slot.ID)
 }
 
+// Two running VMs sharing a machine id (e.g. a re-driven Create after a partial
+// failure) must not silently leak: one owns the slot (Idle) and the other is
+// surfaced as an orphan under its resource id so it stays tracked and reclaimable.
+func TestDescribe_DuplicateMachineIDSurfacesOrphan(t *testing.T) {
+	b, fake := newTestBackend(t, 4)
+	ctx := context.Background()
+
+	slot := b.speculativeSlots()[0]
+	vm1, err := fake.CreateVM(ctx, vmSpec{MachineID: slot.ID, VMSize: slot.InstanceType, Zone: slot.Zone, IdempotencyToken: "op-1"})
+	if err != nil {
+		t.Fatalf("seed vm1: %v", err)
+	}
+	vm2, err := fake.CreateVM(ctx, vmSpec{MachineID: slot.ID, VMSize: slot.InstanceType, Zone: slot.Zone, IdempotencyToken: "op-2"})
+	if err != nil {
+		t.Fatalf("seed vm2: %v", err)
+	}
+	owner, loser := vm1.ResourceID, vm2.ResourceID
+	if loser < owner { // deterministic owner = smallest resource id
+		owner, loser = loser, owner
+	}
+
+	got, err := b.Describe(ctx)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	var slotIdle bool
+	instanceIDs := map[string]bool{}
+	for _, inst := range got {
+		instanceIDs[inst.ID] = true
+		if inst.ID == slot.ID {
+			if inst.State != providerkit.StateIdle {
+				t.Errorf("slot state = %v, want Idle", inst.State)
+			}
+			if inst.Host.Ref != owner {
+				t.Errorf("slot host = %q, want deterministic owner %q", inst.Host.Ref, owner)
+			}
+			slotIdle = true
+		}
+	}
+	if !slotIdle {
+		t.Fatalf("slot %s not present as Idle", slot.ID)
+	}
+	if !instanceIDs[loser] {
+		t.Errorf("duplicate VM %q was not surfaced as an orphan — it would leak", loser)
+	}
+}
+
 // Create must be idempotent at the substrate level: a retried CreateVM with the
 // same operation id returns the same VM, never a duplicate.
 func TestCreateVM_IdempotentOnToken(t *testing.T) {

@@ -129,12 +129,12 @@ func (a *azureReal) CreateVM(ctx context.Context, spec vmSpec) (vmInstance, erro
 		// The NIC was created but the VM never will be under this name; clean it up
 		// best-effort so a permanently-failing Create doesn't leak NICs. A retried
 		// Create (same operation id → same name) is idempotent either way.
-		a.deleteNIC(ctx, name+"-nic")
+		a.cleanupNIC(ctx, name+"-nic")
 		return vmInstance{}, fmt.Errorf("begin create vm: %w", err)
 	}
 	res, err := poller.PollUntilDone(ctx, nil)
 	if err != nil {
-		a.deleteNIC(ctx, name+"-nic")
+		a.cleanupNIC(ctx, name+"-nic")
 		return vmInstance{}, fmt.Errorf("create vm poll: %w", err)
 	}
 	vm := a.toVMInstance(res.VirtualMachine)
@@ -308,7 +308,7 @@ func (a *azureReal) ApplyBootstrap(ctx context.Context, vm vmInstance, clusterID
 	// heredoc into the command stream.
 	script := fmt.Sprintf("base64 -d > /run/bigfleet-bootstrap <<'EOF'\n%s\nEOF\n%s /run/bigfleet-bootstrap; rc=$?; rm -f /run/bigfleet-bootstrap; exit $rc",
 		base64.StdEncoding.EncodeToString(bootstrap), a.cfg.BootstrapHookPath)
-	if err := a.runExtension(ctx, resourceName(vm.ResourceID), "bigfleet-configure", script); err != nil {
+	if err := a.runExtension(ctx, resourceName(vm.ResourceID), script); err != nil {
 		return fmt.Errorf("apply bootstrap: %w", err)
 	}
 	return a.setClusterTag(ctx, resourceName(vm.ResourceID), clusterID)
@@ -318,14 +318,22 @@ func (a *azureReal) ApplyBootstrap(ctx context.Context, vm vmInstance, clusterID
 // then clears the cluster binding tag (leaving the VM running but unbound).
 func (a *azureReal) DrainNode(ctx context.Context, vm vmInstance, gracePeriodSeconds int64) error {
 	script := fmt.Sprintf("%s --drain --grace=%d", a.cfg.BootstrapHookPath, gracePeriodSeconds)
-	if err := a.runExtension(ctx, resourceName(vm.ResourceID), "bigfleet-drain", script); err != nil {
+	if err := a.runExtension(ctx, resourceName(vm.ResourceID), script); err != nil {
 		return fmt.Errorf("drain node: %w", err)
 	}
 	return a.setClusterTag(ctx, resourceName(vm.ResourceID), "")
 }
 
-// runExtension creates/updates a Linux CustomScript extension that runs the
-// given inline command, polling to completion.
+// bigfleetHookExtension is the single CustomScript extension name reused for both
+// Configure and Drain. Azure permits only one extension per handler type per VM
+// (uniqueness is per publisher+handler, NOT per extension resource name), so a
+// separate bigfleet-drain extension would be rejected on a VM that already has
+// the configure one ("you cannot have ... handler CustomScript already added").
+// Reusing one name and re-running it (ForceUpdateTag) is the supported pattern.
+const bigfleetHookExtension = "bigfleet-hook"
+
+// runExtension creates/updates the single Linux CustomScript extension that runs
+// the given inline command, polling to completion.
 //
 // commandToExecute goes in ProtectedSettings, never Settings: Azure stores
 // extension Settings in cleartext in the ARM control plane and returns them on
@@ -333,8 +341,8 @@ func (a *azureReal) DrainNode(ctx context.Context, vm vmInstance, gracePeriodSec
 // viewer), whereas ProtectedSettings are encrypted at rest and never returned on
 // read. The configure command embeds the opaque cluster-join blob, so it must
 // stay confidential.
-func (a *azureReal) runExtension(ctx context.Context, vmNameStr, extName, command string) error {
-	poller, err := a.exts.BeginCreateOrUpdate(ctx, a.cfg.ResourceGroup, vmNameStr, extName, armcompute.VirtualMachineExtension{
+func (a *azureReal) runExtension(ctx context.Context, vmNameStr, command string) error {
+	poller, err := a.exts.BeginCreateOrUpdate(ctx, a.cfg.ResourceGroup, vmNameStr, bigfleetHookExtension, armcompute.VirtualMachineExtension{
 		Location: to.Ptr(a.cfg.Location),
 		Properties: &armcompute.VirtualMachineExtensionProperties{
 			Publisher:               to.Ptr("Microsoft.Azure.Extensions"),
@@ -499,14 +507,24 @@ func (a *azureReal) toVMInstance(vm armcompute.VirtualMachine) vmInstance {
 
 // --- helpers ---------------------------------------------------------------
 
-// deleteNIC deletes a NIC best-effort, polling to completion. Used both on VM
-// teardown and to clean up after a failed VM create. A missing NIC is success.
+// deleteNIC deletes a NIC best-effort, polling to completion. Used on VM
+// teardown. A missing NIC is success.
 func (a *azureReal) deleteNIC(ctx context.Context, nicNameStr string) {
 	poller, err := a.nics.BeginDelete(ctx, a.cfg.ResourceGroup, nicNameStr, nil)
 	if err != nil {
 		return
 	}
 	_, _ = poller.PollUntilDone(ctx, nil)
+}
+
+// cleanupNIC is deleteNIC for the failed-Create path. The common Create failure
+// is a context deadline/cancel, which would make a deleteNIC on the same ctx an
+// immediate no-op and leak the NIC — so detach from the caller's cancellation and
+// give the cleanup its own bounded budget.
+func (a *azureReal) cleanupNIC(ctx context.Context, nicNameStr string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
+	defer cancel()
+	a.deleteNIC(cleanupCtx, nicNameStr)
 }
 
 // vmName derives a valid, deterministic Azure VM name (≤ 64 chars,
