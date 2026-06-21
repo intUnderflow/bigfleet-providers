@@ -272,6 +272,16 @@ func (r *doReal) ApplyBootstrap(ctx context.Context, drv dropletInstance, cluste
 	if drv.MachineID == "" {
 		return fmt.Errorf("configure: droplet %s carries no machine id tag", drv.DropletID)
 	}
+	// The on-host agent only runs once the Droplet has booted. On the normal path
+	// Create already settled the machine Idle at 'active', but after a restart with
+	// an empty store Describe can surface a tagged-but-still-provisioning Droplet as
+	// Idle — so wait for 'active' before blocking on the agent ack, rather than
+	// waiting out the whole Configure timeout for an agent that isn't up yet.
+	if id, err := strconv.Atoi(drv.DropletID); err == nil {
+		if _, err := r.waitActive(ctx, id); err != nil {
+			return fmt.Errorf("configure: droplet %s not ready: %w", drv.DropletID, err)
+		}
+	}
 	// Deliver the opaque blob to the running Droplet over the agent channel and
 	// wait for the agent to apply it — a failed join surfaces as FAILED.
 	cmd := bootstrapCommand{

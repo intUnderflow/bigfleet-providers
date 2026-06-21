@@ -23,7 +23,8 @@ type pricing struct {
 	logger *slog.Logger
 
 	mu     sync.Mutex
-	hourly map[string]float64 // size slug -> last fetched USD/hr
+	hourly map[string]float64  // size slug -> last fetched USD/hr
+	warned map[string]struct{} // sizes we've already warned have no price (dedupe log spam)
 }
 
 // onDemandUSDHourly is a pinned snapshot of DigitalOcean hourly on-demand prices
@@ -62,6 +63,7 @@ func newPricing(client doClient, logger *slog.Logger) *pricing {
 		client: client,
 		logger: logger,
 		hourly: make(map[string]float64),
+		warned: make(map[string]struct{}),
 	}
 }
 
@@ -77,8 +79,28 @@ func (p *pricing) price(sizeSlug string, capacity providerkit.CapacityType) floa
 	if ok {
 		return v
 	}
-	// Cold cache: fall back to the pinned table.
-	return onDemandUSDHourly[sizeSlug]
+	if pinned, ok := onDemandUSDHourly[sizeSlug]; ok {
+		return pinned
+	}
+	// No live and no pinned price. Returning 0 would make the size look free and
+	// skew the engine's relative cost ranking, so warn once per size — an operator
+	// can add it to the pinned table or fix a failing refresh. (0 stays a valid,
+	// fleet-pessimistic price until a refresh fills it in.)
+	p.warnUnknown(sizeSlug)
+	return 0
+}
+
+// warnUnknown logs once per size that has no live or pinned price.
+func (p *pricing) warnUnknown(sizeSlug string) {
+	p.mu.Lock()
+	_, already := p.warned[sizeSlug]
+	if !already {
+		p.warned[sizeSlug] = struct{}{}
+	}
+	p.mu.Unlock()
+	if !already && p.logger != nil {
+		p.logger.Warn("pricing: no live or pinned price for size; reporting 0 until a refresh succeeds (skews cost ranking — add it to the pinned table or check --price-refresh)", "size", sizeSlug)
+	}
 }
 
 // refresh fetches the current hourly price for each size and caches it.
@@ -98,6 +120,7 @@ func (p *pricing) refresh(ctx context.Context, sizes []string) int {
 		}
 		p.mu.Lock()
 		p.hourly[size] = v
+		delete(p.warned, size) // a real price arrived; re-warn if it ever regresses
 		p.mu.Unlock()
 	}
 	return failures

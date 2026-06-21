@@ -66,7 +66,7 @@ spec:
             - --seed-count={{ .Values.digitalocean.seedCount }}
             {{- if .Values.bootstrap.enabled }}
             - --bootstrap-addr=:{{ .Values.ports.bootstrap }}
-            - --bootstrap-endpoint={{ .Values.bootstrap.endpoint }}
+            - --bootstrap-endpoint={{ required "bootstrap.endpoint is required when bootstrap.enabled=true (the externally-reachable URL the on-host agent dials)" .Values.bootstrap.endpoint }}
             - --bootstrap-tls-cert=/etc/bigfleet/bootstrap-tls/tls.crt
             - --bootstrap-tls-key=/etc/bigfleet/bootstrap-tls/tls.key
             {{- if .Values.bootstrap.ca }}
@@ -100,11 +100,11 @@ spec:
                   name: {{ .Values.token.secretName }}
                   key: {{ .Values.token.secretKey }}
             {{- end }}
-            {{- if and .Values.bootstrap.enabled .Values.bootstrap.secretName }}
+            {{- if .Values.bootstrap.enabled }}
             - name: BIGFLEET_BOOTSTRAP_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.bootstrap.secretName }}
+                  name: {{ required "bootstrap.secretName is required when bootstrap.enabled=true (Secret with the HMAC key that mints per-machine agent tokens)" .Values.bootstrap.secretName }}
                   key: {{ .Values.bootstrap.secretKey }}
             {{- end }}
           ports:
@@ -166,7 +166,7 @@ spec:
         {{- if .Values.bootstrap.enabled }}
         - name: bootstrap-tls
           secret:
-            secretName: {{ .Values.bootstrap.tlsSecretName }}
+            secretName: {{ required "bootstrap.tlsSecretName is required when bootstrap.enabled=true (Secret with tls.crt/tls.key for the channel)" .Values.bootstrap.tlsSecretName }}
             defaultMode: 0400
         {{- end }}
         {{- if .Values.offerings.content }}

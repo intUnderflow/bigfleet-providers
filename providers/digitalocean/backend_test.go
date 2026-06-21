@@ -253,6 +253,11 @@ func TestPricingAndAllocatable(t *testing.T) {
 	if got := pr.price("s-2vcpu-4gb", providerkit.CapacityOnDemand); got <= 0 {
 		t.Errorf("cold-cache price for s-2vcpu-4gb = %v, want the pinned fallback > 0", got)
 	}
+	// An unknown size has no live or pinned price → 0 (and warns once); a later
+	// refresh fills it in and clears the warn state.
+	if got := pr.price("s-99vcpu-unknown", providerkit.CapacityOnDemand); got != 0 {
+		t.Errorf("unknown-size price = %v, want 0", got)
+	}
 	res := newSizeResolver(fake, logger)
 	alloc := res.allocatable("s-4vcpu-8gb")
 	if alloc["cpu"] != "4" || alloc["memory"] != "8Gi" {
