@@ -98,6 +98,7 @@ func renderDomainXML(p domainParams) string {
       <model type='virtio'/>
     </interface>
     <channel type='unix'>
+      <source mode='bind'/>
       <target type='virtio' name='org.qemu.guest_agent.0'/>
     </channel>
     <console type='pty'/>
