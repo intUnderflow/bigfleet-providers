@@ -27,7 +27,7 @@ import (
 //     machine, a single pending command (configure-with-blob, or drain) and the
 //     waiter blocked in Enqueue.
 //   - Server side: a small agent, installed by the GENERIC pre-binding user_data
-//     baked in at Create. It long-polls GET /v1/command with its per-machine
+//     baked in at Create. It polls GET /v1/command (204 when none pending) with its per-machine
 //     bearer token, applies the returned command, and POSTs the result to
 //     /v1/ack.
 //
@@ -179,6 +179,9 @@ func (v *bootstrapVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (v *bootstrapVault) handleCommand(w http.ResponseWriter, r *http.Request) {
+	// The command response carries the cluster-join blob — never let a proxy or
+	// intermediary cache it.
+	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -200,6 +203,7 @@ func (v *bootstrapVault) handleCommand(w http.ResponseWriter, r *http.Request) {
 }
 
 func (v *bootstrapVault) handleAck(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

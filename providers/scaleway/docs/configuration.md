@@ -200,9 +200,11 @@ only known when the shard binds it. The lifecycle:
    `GET /v1/command` and `POST /v1/ack`. At Configure it queues the opaque
    `bootstrap_blob` (as a `configure` command) for this machine. The on-host
    agent **dials the provider** (the provider needs no inbound path to the server,
-   so no public IP / SSH is used): it long-polls `GET /v1/command?machine_id=…`
-   with `Authorization: Bearer <token>`, receives the command, applies the blob,
-   and POSTs the result to `/v1/ack`. Authentication is mutual — the agent
+   so no public IP / SSH is used): it polls `GET /v1/command?machine_id=…`
+   with `Authorization: Bearer <token>` (the endpoint returns `204 No Content`
+   when nothing is pending, so the agent polls on a short interval), receives the
+   command, applies the blob, and POSTs the result to `/v1/ack`. Authentication is
+   mutual — the agent
    verifies the provider via the pinned CA (TLS), and the provider authorises each
    agent with a per-machine bearer token =
    `base64(HMAC-SHA256(--bootstrap-secret, machine_id))`, which is re-derivable
@@ -231,9 +233,10 @@ Your base image must satisfy two things:
   `--bootstrap-endpoint`, the pinned CA, the machine id, and the per-machine
   bearer token), so the agent has everything it needs to reach the channel — but
   no cluster secret.
-- **Dial the channel, apply the blob, ack.** On Configure the agent long-polls the
+- **Dial the channel, apply the blob, ack.** On Configure the agent polls the
   provider's `GET /v1/command` over TLS (pinning the provided CA, presenting its
-  bearer token), applies the opaque blob it receives, and POSTs the result to
+  bearer token; `204` when nothing is pending), applies the opaque blob it
+  receives, and POSTs the result to
   `/v1/ack`. The command carries a `command_id` nonce that the agent **must echo**
   in its ack; the provider ignores an ack whose `command_id` does not match the
   currently-pending command, so a stale ack for a superseded command can never

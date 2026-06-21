@@ -760,6 +760,13 @@ func serverName(spec serverSpec) string {
 	if len(name) > 63 {
 		name = name[:63]
 	}
+	// A Scaleway server name must not end with '-' (truncation or an id ending in
+	// a non-alphanumeric can leave a trailing dash). The "bigfleet" prefix keeps it
+	// non-empty after trimming.
+	name = strings.TrimRight(name, "-")
+	if name == "" {
+		name = "bigfleet"
+	}
 	return name
 }
 

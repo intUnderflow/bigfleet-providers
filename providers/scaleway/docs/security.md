@@ -83,7 +83,7 @@ the Hetzner provider's SSH host-key-pinned delivery. The trust model:
   is present before a cluster is chosen, so a leaked image reveals nothing useful.
 - **Per-machine HMAC token (the analogue of host-key pinning).** At Configure the
   agent **dials** the provider's HTTPS bootstrap channel (`--bootstrap-addr`) and
-  long-polls for its own command; the provider authorises every request before any
+  polls for its own command (204 when none pending); the provider authorises every request before any
   command or blob is released. The agent presents a **per-machine bearer token =
   `base64(HMAC-SHA256(--bootstrap-secret, machine_id))`**, which the provider
   re-derives and compares in constant time, so an attacker who has neither the

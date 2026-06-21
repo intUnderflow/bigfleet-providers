@@ -115,7 +115,7 @@ launch from cluster-join:
   provider-served, **mutually-authenticated TLS** bootstrap channel
   (`--bootstrap-addr`, endpoints `GET /v1/command` + `POST /v1/ack`). The on-host
   agent **dials the provider** (no inbound path / public IP / SSH to the server),
-  long-polls for its OWN `configure` command, applies the blob, and acks. Mutual
+  polls for its OWN `configure` command (204 when none pending), applies the blob, and acks. Mutual
   auth: the agent verifies the provider via the pinned CA; the provider authorises
   each agent with a per-machine bearer token =
   `base64(HMAC-SHA256(--bootstrap-secret, machine_id))` (re-derivable, never

@@ -23,8 +23,9 @@ type pricing struct {
 	client   scwClient
 	logger   *slog.Logger
 
-	mu     sync.Mutex
-	hourly map[string]float64 // "commercialType|zone" -> last fetched USD/hr
+	mu         sync.Mutex
+	hourly     map[string]float64 // "commercialType|zone" -> last fetched USD/hr
+	warnedMiss map[string]bool    // commercial types we've already warned about (dedupe)
 }
 
 // defaultEURtoUSD is a reasonable fallback FX rate; operators should pin a
@@ -78,7 +79,32 @@ func (p *pricing) price(commercialType, zone string, capacity providerkit.Capaci
 		return v
 	}
 	// Cold cache: fall back to the pinned EUR table converted to USD.
-	return onDemandEURHourly[commercialType] * p.eurToUSD
+	eur, pinned := onDemandEURHourly[commercialType]
+	if !pinned {
+		// No live and no pinned price — returning 0 would make a paid VM look free
+		// (e.g. an orphan of an unpinned type discovered via Describe; offered types
+		// are rejected at construction). Warn once so it's visible, not silent.
+		p.warnMissing(commercialType)
+	}
+	return eur * p.eurToUSD
+}
+
+// warnMissing logs a missing-pinned-price warning once per commercial type.
+func (p *pricing) warnMissing(commercialType string) {
+	if p.logger == nil {
+		return
+	}
+	p.mu.Lock()
+	if p.warnedMiss == nil {
+		p.warnedMiss = make(map[string]bool)
+	}
+	first := !p.warnedMiss[commercialType]
+	p.warnedMiss[commercialType] = true
+	p.mu.Unlock()
+	if first {
+		p.logger.Warn("pricing: no pinned or live price for on-demand commercial type; reporting price_per_hour=0 (add it to onDemandEURHourly)",
+			"commercial_type", commercialType)
+	}
 }
 
 // refresh fetches the current hourly price for each (commercialType, zone) pair
