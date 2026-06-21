@@ -36,7 +36,7 @@ satisfy. For how the provider authenticates to libvirt see
 | `--price-per-vcpu-hour` | `0.0030` | Synthetic USD/hour per vCPU. |
 | `--price-per-gib-hour` | `0.0008` | Synthetic USD/hour per GiB RAM. |
 | `--state` | _(empty)_ | Durable state file. Empty = in-memory only (state is lost on restart). |
-| `--image` | _(empty)_ | Golden base-image volume the overlay disk backs onto. **Required** for the `libvirt` backend. |
+| `--image` | _(empty)_ | Golden base-image volume the overlay disk backs onto. **Required** for the `libvirt` backend. Its on-disk format (qcow2 or raw) is read from the volume and used to declare the overlay's backing format, so either works. |
 | `--storage-pool` | `default` | libvirt storage pool for the overlay + cloud-init volumes. |
 | `--network` | `default` | libvirt network the domain NIC attaches to. |
 | `--base-user-data` | _(empty)_ | Path to the generic, pre-binding cloud-init baked into the NoCloud datasource at define. |

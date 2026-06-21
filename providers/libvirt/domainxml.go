@@ -111,8 +111,10 @@ func renderDomainXML(p domainParams) string {
 // overlayVolumeXML builds the storage-volume definition for a copy-on-write
 // overlay disk backed by the golden base image. virStorageVolCreateXML with this
 // definition creates a thin qcow2 overlay, so each VM gets a writable disk
-// without copying the whole base image.
-func overlayVolumeXML(name, basePath string, capacityBytes uint64) string {
+// without copying the whole base image. backingFormat must be the actual format
+// of the base image (qcow2 or raw) — misdeclaring a raw base as qcow2 corrupts
+// the overlay's view of it.
+func overlayVolumeXML(name, basePath, backingFormat string, capacityBytes uint64) string {
 	return fmt.Sprintf(`<volume type='file'>
   <name>%[1]s</name>
   <capacity unit='bytes'>%[3]d</capacity>
@@ -121,9 +123,9 @@ func overlayVolumeXML(name, basePath string, capacityBytes uint64) string {
   </target>
   <backingStore>
     <path>%[2]s</path>
-    <format type='qcow2'/>
+    <format type='%[4]s'/>
   </backingStore>
-</volume>`, name, basePath, capacityBytes)
+</volume>`, name, basePath, capacityBytes, backingFormat)
 }
 
 // seedVolumeXML builds the storage-volume definition for the cloud-init NoCloud

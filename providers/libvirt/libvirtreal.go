@@ -206,6 +206,11 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 	if floor := uint64(r.cfg.OverlayGiB) * 1024 * 1024 * 1024; overlayBytes < floor {
 		overlayBytes = floor
 	}
+	// Declare the overlay's backing format as the base image's ACTUAL format
+	// (qcow2 or raw): a raw golden image misdeclared as qcow2 corrupts the
+	// overlay's view of it. Falls back to qcow2 (the common golden-image format)
+	// if the pool doesn't report a format.
+	backingFormat := r.volumeFormat(c, base)
 
 	// From here on we create overlay/seed volumes and define the domain. If a
 	// later step fails before the domain is started, roll back what we made so a
@@ -232,7 +237,7 @@ func (r *libvirtReal) createDomain(c *hostConnection, spec domainSpec) (_ domain
 
 	// Copy-on-write overlay disk backed by the golden base image.
 	overlayName := name + "-overlay.qcow2"
-	overlay, created, err := r.createOrAdoptVol(c, pool, overlayName, overlayVolumeXML(overlayName, basePath, overlayBytes))
+	overlay, created, err := r.createOrAdoptVol(c, pool, overlayName, overlayVolumeXML(overlayName, basePath, backingFormat, overlayBytes))
 	if created {
 		createdVols = append(createdVols, overlayName)
 	}
@@ -880,6 +885,36 @@ func isStorageVolNotFound(err error) bool {
 		return lerr.Code == uint32(libvirt.ErrNoStorageVol)
 	}
 	return false
+}
+
+// volumeFormat returns a storage volume's on-disk format ("qcow2"/"raw"/…) by
+// reading its libvirt XML (<volume><target><format type='…'/>). Falls back to
+// "qcow2" — the common golden-image format — when the pool doesn't report a
+// format or the XML can't be read/parsed, so a typical deployment is unaffected
+// while a raw base is declared correctly.
+func (r *libvirtReal) volumeFormat(c *hostConnection, vol libvirt.StorageVol) string {
+	const fallback = "qcow2"
+	xmlDesc, err := c.lv.StorageVolGetXMLDesc(vol, 0)
+	if err != nil {
+		if r.logger != nil {
+			r.logger.Warn("read base image format: defaulting to qcow2", "volume", vol.Name, "err", err)
+		}
+		return fallback
+	}
+	var v struct {
+		Target struct {
+			Format struct {
+				Type string `xml:"type,attr"`
+			} `xml:"format"`
+		} `xml:"target"`
+	}
+	if err := xml.Unmarshal([]byte(xmlDesc), &v); err != nil || v.Target.Format.Type == "" {
+		if r.logger != nil {
+			r.logger.Warn("parse base image format: defaulting to qcow2", "volume", vol.Name)
+		}
+		return fallback
+	}
+	return v.Target.Format.Type
 }
 
 // isStorageVolExist reports whether err is libvirt's ERR_STORAGE_VOL_EXIST

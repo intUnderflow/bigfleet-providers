@@ -624,6 +624,19 @@ func TestSplitHostRef(t *testing.T) {
 	}
 }
 
+func TestOverlayVolumeXML_BackingFormat(t *testing.T) {
+	// The overlay is always qcow2, but its backing-store format must reflect the
+	// actual base image format (a raw base misdeclared qcow2 corrupts the overlay).
+	raw := overlayVolumeXML("ov", "/base.img", "raw", 1<<30)
+	if !strings.Contains(raw, "<format type='raw'/>\n  </backingStore>") {
+		t.Errorf("raw base backing format not declared raw:\n%s", raw)
+	}
+	q := overlayVolumeXML("ov", "/base.qcow2", "qcow2", 1<<30)
+	if !strings.Contains(q, "<format type='qcow2'/>\n  </backingStore>") {
+		t.Errorf("qcow2 base backing format not declared qcow2:\n%s", q)
+	}
+}
+
 func TestValidateOfferingZones(t *testing.T) {
 	conns := []hostConn{{Zone: "rack1", URI: "qemu:///system"}, {Zone: "rack2", URI: "qemu:///system"}}
 	// Every offering zone is connected → OK.

@@ -28,7 +28,7 @@ as demand moves.
   [92 certified behaviors](/conformance/) — credential-free on every change, plus
   an extension suite that asserts stronger invariants. See
   [Certification](/providers/libvirt/certification/).
-- **Correct by construction.** A `Create` settles to Idle only once the domain is
+- **Conservative by default.** A `Create` settles to Idle only once the domain is
   actually running, a failed bootstrap or drain surfaces as a hard failure rather
   than a silently-broken node, and capacity it doesn't own it never touches. The
   whole BigFleet contract — fencing, idempotency, async transitions, restart

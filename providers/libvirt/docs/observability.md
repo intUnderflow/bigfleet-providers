@@ -31,7 +31,7 @@ call the provider makes is counted and timed.
 
 | Metric | Type | Labels | What it tells you |
 |---|---|---|---|
-| `bigfleet_libvirt_api_calls_total` | counter | `op`, `outcome` | libvirt API call volume, split by operation (`CreateDomain`, `DeleteDomain`, `DescribeManaged`, `Configure`, `Drain`) and `success`/`error`. The first place to look when creates or drains are failing. |
+| `bigfleet_libvirt_api_calls_total` | counter | `op`, `outcome` | libvirt API call volume, split by operation (`CreateDomain`, `DeleteDomain`, `DescribeManaged`, `EnsureRunning`, `Configure`, `Drain`) and `success`/`error`. The first place to look when creates or drains are failing. |
 | `bigfleet_libvirt_api_duration_seconds` | histogram | `op` | libvirt API latency by operation. |
 
 ### gRPC
