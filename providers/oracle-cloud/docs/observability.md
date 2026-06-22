@@ -30,6 +30,8 @@ All metrics are namespaced `bigfleet_oci_*`:
 | `bigfleet_oci_grpc_request_duration_seconds` | histogram | `method` | gRPC request latency by method. |
 | `bigfleet_oci_panics_total` | counter | — | Recovered panics in gRPC handlers. |
 | `bigfleet_oci_reconcile_total` | counter | `outcome` | Background OCI→inventory reconcile runs. |
+| `bigfleet_oci_price_refresh_total` | counter | `outcome` | Background live price-refresh runs by success/error. |
+| `bigfleet_oci_price_last_success_timestamp_seconds` | gauge | — | Unix time of the last successful price refresh; staleness = `time() - this`. |
 
 Plus the standard Go runtime and process collectors.
 
@@ -45,6 +47,10 @@ The `op` label on the API metrics covers `LaunchInstance`, `TerminateInstance`,
   permissions, throttling).
 - **`bigfleet_oci_reconcile_total{outcome="error"}`** — the background reconcile
   can't read OCI truth; inventory may drift until it recovers.
+- **`time() - bigfleet_oci_price_last_success_timestamp_seconds`** — price-table
+  staleness. A large/growing value (alongside `bigfleet_oci_price_refresh_total
+  {outcome="error"}`) means live price refreshes are failing; the provider keeps
+  serving the last live (or `prices.yaml` seed) prices meanwhile.
 - **gRPC latency histograms** — Create/Configure/Drain are asynchronous (they ack
   immediately), so their gRPC latency stays low; the real work shows up via `Get`
   reaching the target state and in the OCI API histograms.

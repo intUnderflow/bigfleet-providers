@@ -54,6 +54,16 @@ the control-plane analogue of AWS SSM `SendCommand`. The provider:
 > captured into the command record. Rotate/short-TTL the join material if your
 > threat model requires it.
 
+## Outbound: live price list
+
+The price refresher fetches the **public** OCI price list over HTTPS
+(`apexapps.oracle.com/.../cetools`, no credentials, read-only) on a timer. It is
+unauthenticated and carries no secrets — only product part numbers and USD rates
+flow back. If egress is locked down, allow this host (or point `--price-list-url`
+at a mirror); a blocked or failing fetch is non-fatal — the provider falls back to
+the `prices.yaml` seed and surfaces staleness via metrics. The fake backend uses a
+network-free source, so the certify/dev path makes no outbound call.
+
 ## Hardened runtime
 
 The image is `gcr.io/distroless/static:nonroot`: no shell, no package manager,

@@ -18,7 +18,7 @@ func quietLogger() *slog.Logger {
 
 func testPricing(t *testing.T) *pricing {
 	t.Helper()
-	pr, err := newPricing("")
+	pr, err := newPricing("", newFakePriceSource(), quietLogger())
 	if err != nil {
 		t.Fatalf("newPricing: %v", err)
 	}

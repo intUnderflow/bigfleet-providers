@@ -21,6 +21,9 @@ type metrics struct {
 	rpcDuration *prometheus.HistogramVec // bigfleet_oci_grpc_request_duration_seconds{method}
 	panics      prometheus.Counter       // bigfleet_oci_panics_total
 	reconcile   *prometheus.CounterVec   // bigfleet_oci_reconcile_total{outcome}
+
+	priceRefresh     *prometheus.CounterVec // bigfleet_oci_price_refresh_total{outcome}
+	priceLastSuccess prometheus.Gauge       // bigfleet_oci_price_last_success_timestamp_seconds
 }
 
 func newMetrics() *metrics {
@@ -54,6 +57,14 @@ func newMetrics() *metrics {
 			Name: "bigfleet_oci_reconcile_total",
 			Help: "Background reconcile runs by outcome.",
 		}, "outcome"),
+		priceRefresh: f.counterVec(prometheus.CounterOpts{
+			Name: "bigfleet_oci_price_refresh_total",
+			Help: "Background live price-refresh runs by outcome.",
+		}, "outcome"),
+		priceLastSuccess: f.gauge(prometheus.GaugeOpts{
+			Name: "bigfleet_oci_price_last_success_timestamp_seconds",
+			Help: "Unix time of the last successful live price refresh (0 = none yet; staleness = time() - this).",
+		}),
 	}
 	reg.MustRegister(collectors.NewGoCollector())
 	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
@@ -132,6 +143,11 @@ func (f promFactory) counter(o prometheus.CounterOpts) prometheus.Counter {
 	c := prometheus.NewCounter(o)
 	f.reg.MustRegister(c)
 	return c
+}
+func (f promFactory) gauge(o prometheus.GaugeOpts) prometheus.Gauge {
+	g := prometheus.NewGauge(o)
+	f.reg.MustRegister(g)
+	return g
 }
 func (f promFactory) counterVec(o prometheus.CounterOpts, labels ...string) *prometheus.CounterVec {
 	c := prometheus.NewCounterVec(o, labels)

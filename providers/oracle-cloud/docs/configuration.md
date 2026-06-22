@@ -21,7 +21,9 @@ sidebar:
 | `--offerings` | — | Path to a JSON offerings file (default: a built-in mix sized by `--seed-count`). |
 | `--seed-count` | `32` | Number of Speculative slots when using the default offerings. |
 | `--ad-a` / `--ad-b` | — | Availability domains for the default offerings. |
-| `--prices-file` | — | Override the embedded `prices.yaml` price table. |
+| `--prices-file` | — | Override the embedded `prices.yaml` seed/fallback price table. |
+| `--price-list-url` | — | OCI price-list API URL for the live price refresh (default: the public cost-estimator endpoint). |
+| `--price-refresh` | `45m` | Live price refresh interval (0 = off; seed/fallback prices only). |
 | `--bootstrap-hook` | `/opt/bigfleet/bootstrap` | Image path that applies the delivered bootstrap blob. |
 | `--base-user-data` | — | Path to the generic pre-binding cloud-init baked in at launch. |
 | `--reconcile-interval` | `2m` | Background OCI→inventory reconcile interval (0 = off). |

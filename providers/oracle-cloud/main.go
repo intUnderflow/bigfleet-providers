@@ -55,7 +55,9 @@ func run() error {
 		authMode     = flag.String("auth", "auto", "OCI auth: instance_principal | workload_identity | config_file | auto")
 		subnet       = flag.String("subnet", "", "subnet OCID for LaunchInstance (oci backend)")
 		image        = flag.String("image", "", "base image OCID for LaunchInstance (oci backend)")
-		pricesFile   = flag.String("prices-file", "", "path to a price table YAML (default: the embedded prices.yaml)")
+		pricesFile   = flag.String("prices-file", "", "path to a price table YAML used as the startup seed + fallback (default: the embedded prices.yaml)")
+		priceListURL = flag.String("price-list-url", "", "OCI price-list API URL for live price refresh (default: the public cost-estimator endpoint)")
+		priceRefresh = flag.Duration("price-refresh", 45*time.Minute, "live price refresh interval (0 = off; seed/fallback prices only)")
 		bootstrapHk  = flag.String("bootstrap-hook", "/opt/bigfleet/bootstrap", "image path that applies the delivered bootstrap blob")
 		baseUserData = flag.String("base-user-data", "", "path to the generic pre-binding cloud-init baked in at launch")
 		reconcile    = flag.Duration("reconcile-interval", 2*time.Minute, "background OCI->inventory reconcile interval (0 = off)")
@@ -124,13 +126,40 @@ func run() error {
 		userData = b
 	}
 
-	pr, err := newPricing(*pricesFile)
+	// Live price source: the fake backend (dev / credential-free certify) uses a
+	// deterministic, network-free source; the oci backend reads the public OCI
+	// price list over HTTP (no credentials). prices.yaml is the startup seed +
+	// fallback for both.
+	var priceSrc priceSource
+	if mode == "fake" {
+		priceSrc = newFakePriceSource()
+	} else {
+		priceSrc = newOCIPriceList(*priceListURL, logger)
+	}
+	pr, err := newPricing(*pricesFile, priceSrc, logger)
 	if err != nil {
 		return err
 	}
 	in := newInterruption()
 	backend, err := newOCIBackend(*providerLbl, client, offs, pr, in, userData, logger)
 	if err != nil {
+		return err
+	}
+
+	// Warm the price tables from the live source before serving (best-effort,
+	// bounded): on success List/Describe emit live prices from the first request;
+	// on failure they fall back to the prices.yaml seed.
+	warmCtx, cancelWarm := context.WithTimeout(ctx, 20*time.Second)
+	if err := backend.refreshPrices(warmCtx); err != nil {
+		logger.Warn("initial price refresh failed; using prices.yaml seed/fallback", "err", err)
+	} else {
+		m.priceLastSuccess.SetToCurrentTime()
+	}
+	cancelWarm()
+
+	// Fail closed: refuse to start if any hourly-billed offering would emit a
+	// price of 0 (it would rank as free). A bare_metal lane's 0 is honest.
+	if err := backend.validatePricing(); err != nil {
 		return err
 	}
 
@@ -175,7 +204,8 @@ func run() error {
 		obs.start(logger)
 	}
 
-	// Background loop: OCI->inventory reconcile.
+	// Background loops: live price refresh + OCI->inventory reconcile.
+	go runPriceRefresher(ctx, backend, m, *priceRefresh, logger)
 	go runReconciler(ctx, srv, m, *reconcile, logger)
 
 	// Mark ready: serving traffic + probes go green.
@@ -230,6 +260,37 @@ func runReconciler(ctx context.Context, srv *providerkit.Server, m *metrics, int
 				logger.Warn("reconcile failed", "err", err)
 			}
 			m.reconcile.WithLabelValues(outcome).Inc()
+		}
+	}
+}
+
+// runPriceRefresher periodically pulls the live OCI price list into the in-memory
+// price tables, off the List hot path (model: the hetzner provider). It records
+// success/failure and the last-success timestamp so an operator can alert on a
+// stale price table (staleness = time() - the timestamp gauge).
+func runPriceRefresher(ctx context.Context, backend *ociBackend, m *metrics, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err := backend.refreshPrices(rctx)
+			cancel()
+			outcome := "success"
+			if err != nil {
+				outcome = "error"
+				logger.Warn("price refresh failed; keeping previous prices",
+					"err", err, "staleness_seconds", backend.pricing.stalenessSeconds())
+			} else {
+				m.priceLastSuccess.SetToCurrentTime()
+			}
+			m.priceRefresh.WithLabelValues(outcome).Inc()
 		}
 	}
 }
