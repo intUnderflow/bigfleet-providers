@@ -21,6 +21,9 @@ type metrics struct {
 	rpcDuration *prometheus.HistogramVec // bigfleet_upcloud_grpc_request_duration_seconds{method}
 	panics      prometheus.Counter       // bigfleet_upcloud_panics_total
 	reconcile   *prometheus.CounterVec   // bigfleet_upcloud_reconcile_total{outcome}
+
+	priceRefresh     *prometheus.CounterVec // bigfleet_upcloud_price_refresh_total{outcome}
+	priceLastSuccess prometheus.Gauge       // bigfleet_upcloud_price_refresh_last_success_timestamp_seconds
 }
 
 func newMetrics() *metrics {
@@ -54,10 +57,31 @@ func newMetrics() *metrics {
 			Name: "bigfleet_upcloud_reconcile_total",
 			Help: "Background reconcile runs by outcome.",
 		}, "outcome"),
+		priceRefresh: f.counterVec(prometheus.CounterOpts{
+			Name: "bigfleet_upcloud_price_refresh_total",
+			Help: "Background live price-refresh runs by outcome.",
+		}, "outcome"),
+		priceLastSuccess: f.gauge(prometheus.GaugeOpts{
+			Name: "bigfleet_upcloud_price_refresh_last_success_timestamp_seconds",
+			Help: "Unix time of the last successful live price refresh (staleness age = now - this).",
+		}),
 	}
 	reg.MustRegister(collectors.NewGoCollector())
 	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return m
+}
+
+// recordPriceRefresh records a price-refresh outcome: a non-zero failure count is
+// an error (an API failure or a genuinely unpriced plan), otherwise success — and
+// a success stamps the last-success gauge so staleness (age = now - gauge) is
+// observable.
+func (m *metrics) recordPriceRefresh(failed int) {
+	if failed > 0 {
+		m.priceRefresh.WithLabelValues("error").Inc()
+		return
+	}
+	m.priceRefresh.WithLabelValues("success").Inc()
+	m.priceLastSuccess.SetToCurrentTime()
 }
 
 func (m *metrics) observeAPI(op string, start time.Time, err error) {
@@ -126,6 +150,12 @@ func (c *metricsUpcloudClient) DescribePlanCapacities(ctx context.Context, plans
 	c.m.observeAPI("Plans", start, err)
 	return out, err
 }
+func (c *metricsUpcloudClient) DescribePlanPrices(ctx context.Context, plans []string) (map[string]float64, error) {
+	start := time.Now()
+	out, err := c.inner.DescribePlanPrices(ctx, plans)
+	c.m.observeAPI("Prices", start, err)
+	return out, err
+}
 
 var _ upcloudClient = (*metricsUpcloudClient)(nil)
 
@@ -139,6 +169,11 @@ func (f promFactory) counter(o prometheus.CounterOpts) prometheus.Counter {
 	c := prometheus.NewCounter(o)
 	f.reg.MustRegister(c)
 	return c
+}
+func (f promFactory) gauge(o prometheus.GaugeOpts) prometheus.Gauge {
+	g := prometheus.NewGauge(o)
+	f.reg.MustRegister(g)
+	return g
 }
 func (f promFactory) counterVec(o prometheus.CounterOpts, labels ...string) *prometheus.CounterVec {
 	c := prometheus.NewCounterVec(o, labels)

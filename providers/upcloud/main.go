@@ -61,6 +61,7 @@ func run() error {
 		sshUser      = flag.String("ssh-user", "root", "SSH user for Configure/Drain delivery (upcloud backend)")
 		bootstrapHk  = flag.String("bootstrap-hook", "/opt/bigfleet/bootstrap", "image path that applies the delivered bootstrap blob")
 		baseUserData = flag.String("base-user-data", "", "path to the generic pre-binding cloud-init baked in at server create (installs the on-host hook ONLY — never the bootstrap secret)")
+		priceRefresh = flag.Duration("price-refresh", 45*time.Minute, "live price refresh interval (0 = off; the pinned table still seeds startup)")
 		reconcile    = flag.Duration("reconcile-interval", 2*time.Minute, "background UpCloud->inventory reconcile interval (0 = off)")
 
 		metricsAddr = flag.String("metrics-addr", ":9090", "address for /metrics, /healthz, /readyz (empty = disabled)")
@@ -144,7 +145,7 @@ func run() error {
 		userData = b
 	}
 
-	pr := newPricing(*eurUSD, logger)
+	pr := newPricing(*eurUSD, client, logger)
 	backend, err := newUpcloudBackend(*providerLbl, *template, client, offs, pr, userData, logger)
 	if err != nil {
 		return err
@@ -158,6 +159,17 @@ func run() error {
 		logger.Warn("some offered plans unresolved from UpCloud; using pinned table", "unresolved", missed)
 	}
 	cancelPL()
+
+	// Warm the live price cache before the first List (best-effort, bounded): live
+	// UpCloud prices overlay the pinned EUR table, which seeds the cache and is the
+	// fallback. Then fail closed — refuse to start if any offered plan would
+	// advertise a free (0.0) price, which would corrupt the engine's cost ranking.
+	prCtx, cancelPR := context.WithTimeout(ctx, 20*time.Second)
+	m.recordPriceRefresh(backend.refreshPrices(prCtx))
+	cancelPR()
+	if err := backend.requirePrices(); err != nil {
+		return err
+	}
 
 	store, err := buildStore(*statePath)
 	if err != nil {
@@ -200,7 +212,8 @@ func run() error {
 		obs.start(logger)
 	}
 
-	// Background loop: UpCloud->inventory reconcile.
+	// Background loops: live price refresh + UpCloud->inventory reconcile.
+	go runPriceRefresher(ctx, backend, m, *priceRefresh)
 	go runReconciler(ctx, srv, m, *reconcile, logger)
 
 	// Mark ready: serving traffic + probes go green.
@@ -255,6 +268,30 @@ func runReconciler(ctx context.Context, srv *providerkit.Server, m *metrics, int
 				logger.Warn("reconcile failed", "err", err)
 			}
 			m.reconcile.WithLabelValues(outcome).Inc()
+		}
+	}
+}
+
+// runPriceRefresher periodically refreshes the in-memory price table off the List
+// hot path (model: hetzner runPriceRefresher), so List/Describe always read cached
+// prices and the cost field tracks the live UpCloud bill rather than a frozen
+// snapshot. Each run records its outcome and stamps the last-success gauge for
+// staleness monitoring.
+func runPriceRefresher(ctx context.Context, backend *upcloudBackend, m *metrics, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			failed := backend.refreshPrices(rctx)
+			cancel()
+			m.recordPriceRefresh(failed)
 		}
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 
 	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
@@ -295,6 +297,47 @@ func (b *upcloudBackend) resolveHost(ctx context.Context, m providerkit.Machine)
 // table if present).
 func (b *upcloudBackend) refreshPlans(ctx context.Context) int {
 	return b.plans.resolve(ctx, b.offeredPlans())
+}
+
+// refreshPrices pulls live hourly prices for the offered plans into the price
+// cache. Call at startup (to seed live prices before the first List) and on a
+// timer; never on the List hot path. Returns the number of offered plans left
+// genuinely unpriced (an API failure, or a plan with neither a live price nor a
+// pinned fallback).
+func (b *upcloudBackend) refreshPrices(ctx context.Context) int {
+	return b.pricing.refresh(ctx, b.offeredPlans())
+}
+
+// requirePrices fails closed: after the startup price refresh, every offered slot
+// must resolve to a positive price_per_hour. A plan with no live price, no pinned
+// fallback, and no operator override would otherwise advertise a FREE (0.0)
+// machine and corrupt the engine's relative cost ranking, so refuse to boot and
+// name the offending plans instead. (Recovered orphans of an unknown plan can
+// still report 0 with a loud warning — they are not offerings the shard creates
+// against, and the alternative is dropping a billed server from inventory.)
+func (b *upcloudBackend) requirePrices() error {
+	seen := map[string]bool{}
+	var unpriced []string
+	for _, off := range b.offerings {
+		capacity, _ := off.capacityType() // validated in newUpcloudBackend
+		if b.pricing.price(off, capacity) > 0 {
+			continue
+		}
+		key := off.Plan + "/" + off.Zone
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unpriced = append(unpriced, key)
+	}
+	if len(unpriced) == 0 {
+		return nil
+	}
+	sort.Strings(unpriced)
+	return fmt.Errorf("refusing to start: no price for offered plan(s) %s — "+
+		"set price_usd_per_hour on the offering or add the plan to the pinned table; "+
+		"emitting price_per_hour=0 would advertise free capacity and corrupt the engine's cost ranking",
+		strings.Join(unpriced, ", "))
 }
 
 // offeredPlans returns the distinct plans across the configured offerings.

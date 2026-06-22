@@ -31,7 +31,7 @@ call the provider makes is counted and timed.
 
 | Metric | Type | Labels | What it tells you |
 |---|---|---|---|
-| `bigfleet_upcloud_api_calls_total` | counter | `op`, `outcome` | UpCloud API call volume, split by operation (`CreateServer`, `DeleteServer`, `DescribeManaged`, `EnsureRunning`, `Configure`, `Drain`, `Plans`) and `success`/`error`. The first place to look when creates or drains are failing. |
+| `bigfleet_upcloud_api_calls_total` | counter | `op`, `outcome` | UpCloud API call volume, split by operation (`CreateServer`, `DeleteServer`, `DescribeManaged`, `EnsureRunning`, `Configure`, `Drain`, `Plans`, `Prices`) and `success`/`error`. The first place to look when creates or drains are failing. |
 | `bigfleet_upcloud_api_duration_seconds` | histogram | `op` | UpCloud API latency by operation. |
 
 ### gRPC
@@ -47,6 +47,8 @@ call the provider makes is counted and timed.
 | Metric | Type | Labels | What it tells you |
 |---|---|---|---|
 | `bigfleet_upcloud_reconcile_total` | counter | `outcome` | Background UpCloud→inventory reconcile runs by outcome. |
+| `bigfleet_upcloud_price_refresh_total` | counter | `outcome` | Background live price-refresh runs by outcome (`error` = an API failure or a plan left genuinely unpriced). |
+| `bigfleet_upcloud_price_refresh_last_success_timestamp_seconds` | gauge | — | Unix time of the last successful live price refresh. Alert on staleness: `time() - this` climbing past a few refresh intervals means prices are drifting from the live bill. |
 
 ## Health vs readiness
 

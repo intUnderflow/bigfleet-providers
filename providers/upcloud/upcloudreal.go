@@ -89,7 +89,13 @@ type upcloudService interface {
 	DeleteServerAndStorages(ctx context.Context, r *request.DeleteServerAndStoragesRequest) error
 	ModifyServer(ctx context.Context, r *request.ModifyServerRequest) (*upcloud.ServerDetails, error)
 	GetPlans(ctx context.Context) (*upcloud.Plans, error)
+	GetPricesByZone(ctx context.Context) (*upcloud.PricesByZone, error)
 }
+
+// upcloudCreditsPerEUR converts UpCloud's quoted price (credits per hour, where 1
+// credit = one cent of the account currency) to whole currency units (EUR) per
+// hour.
+const upcloudCreditsPerEUR = 100.0
 
 // upcloudReal is the production upcloudClient, backed by upcloud-go-api. Inventory
 // and bindings are recovered from server labels; the cluster-specific bootstrap
@@ -374,6 +380,32 @@ func (r *upcloudReal) DescribePlanCapacities(ctx context.Context, plans []string
 			Cores:  p.CoreNumber,
 			MemMiB: int64(p.MemoryAmount), // UpCloud reports memory in MiB
 		}
+	}
+	return out, nil
+}
+
+// DescribePlanPrices returns the live hourly on-demand price (EUR/hour) of each
+// requested plan in this provider's zone, from the UpCloud /price endpoint. The
+// endpoint exposes one item per plan keyed "server_plan_<plan>", priced in
+// credits/hour (1 credit = one cent), so the credit figure is divided by 100 to
+// reach EUR/hour. Plans the endpoint does not price are omitted (the caller keeps
+// the pinned fallback).
+func (r *upcloudReal) DescribePlanPrices(ctx context.Context, plans []string) (map[string]float64, error) {
+	prices, err := r.svc.GetPricesByZone(ctx)
+	if err != nil {
+		return nil, err
+	}
+	zone, ok := (*prices)[r.cfg.Zone]
+	if !ok {
+		return nil, fmt.Errorf("no pricing for zone %q", r.cfg.Zone)
+	}
+	out := make(map[string]float64, len(plans))
+	for _, plan := range plans {
+		item, ok := zone["server_plan_"+plan]
+		if !ok {
+			continue // unpriced by UpCloud — caller keeps its pinned fallback
+		}
+		out[plan] = item.Price / upcloudCreditsPerEUR
 	}
 	return out, nil
 }

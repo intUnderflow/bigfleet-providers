@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Every flag, the offerings JSON schema, the backend modes, EUR→USD pricing, and the create-then-bootstrap (SSH host-key-pinned) model for the BigFleet UpCloud provider.
+description: Every flag, the offerings JSON schema, the backend modes, live-refreshed EUR→USD pricing, and the create-then-bootstrap (SSH host-key-pinned) model for the BigFleet UpCloud provider.
 sidebar:
   order: 2
   label: Configuration
@@ -38,7 +38,8 @@ API sub-account the flags imply, see [Credentials](credentials.md).
 | `--ssh-key` | _(empty)_ | SSH private key (PEM) used to deliver Configure/Drain over SSH. |
 | `--ssh-pubkey` | _(empty)_ | Authorized SSH public key injected into servers at create, so `--ssh-key` can authenticate. |
 | `--ssh-user` | `root` | SSH user for Configure/Drain delivery. |
-| `--eur-usd` | `1.08` | EUR→USD conversion rate applied to the pinned UpCloud price table. |
+| `--eur-usd` | `1.08` | EUR→USD conversion rate applied to UpCloud prices (live-refreshed and the pinned fallback table). |
+| `--price-refresh` | `45m` | Live price refresh interval (`0` = off; the pinned table still seeds startup). |
 | `--reconcile-interval` | `2m` | Background UpCloud→inventory reconcile interval (`0` = off). |
 | `--metrics-addr` | `:9090` | Address for `/metrics`, `/healthz`, `/readyz`. Empty = disabled. |
 | `--reflection` | `true` | Register gRPC server reflection (for `grpcurl`/debugging). |
@@ -102,7 +103,7 @@ Pass a JSON file with `--offerings`. The file is a JSON array of objects:
 | `count` | int | yes | Number of Speculative slots this offering provides. |
 | `resources` | map[string]string | no | The per-replica request shape the offering serves (the `Machine.resources`). Operator-declared. Distinct from `allocatable`, which the provider derives from the plan. |
 | `labels` | map[string]string | no | Extra labels carried on the slot. |
-| `price_usd_per_hour` | float | no | Operator override of the per-offering USD/hour price. Zero (the default) falls back to the pinned EUR table × `--eur-usd`. |
+| `price_usd_per_hour` | float | no | Operator override of the per-offering USD/hour price. Zero (the default) uses the live UpCloud price, falling back to the pinned EUR table × `--eur-usd`. |
 
 Example `offerings.json`:
 
@@ -159,21 +160,36 @@ process's `--zone`.
 `price_per_hour` is the published UpCloud hourly on-demand rate for a plan,
 reported to the engine in **USD/hour**. UpCloud bills in EUR or USD depending on
 the account, so the provider keeps the cost field currency-consistent by always
-emitting USD:
+emitting USD. Prices are **live-refreshed from the UpCloud API** — a frozen table
+would silently drift from the real bill — with the pinned table as seed and
+fallback. In precedence order:
 
 - **Per-offering override.** If an offering sets `price_usd_per_hour`, that exact
-  USD value is used. Use this for plans not in the pinned table, or to pin a rate
-  you've negotiated.
-- **Pinned EUR table × `--eur-usd`.** Otherwise the price comes from a pinned
-  per-plan **EUR** table (`pricing.go`) multiplied by the `--eur-usd` conversion
-  rate (default `1.08`). UpCloud prices a plan close to identically across zones,
-  so the table is keyed by plan name. Pin a current FX rate via `--eur-usd`; the
-  cost field is a *relative* ranking signal, so an approximate rate is acceptable,
-  but a stale one skews effective-cost.
+  USD value is used. Use this for plans not priced by the API/table, or to pin a
+  rate you've negotiated.
+- **Live UpCloud price × `--eur-usd`.** Otherwise the price comes from the UpCloud
+  `/price` endpoint (the plan/zone pricing exposed alongside `1.3/plan`),
+  refreshed off the `List` hot path every `--price-refresh` (default `45m`) into a
+  mutex-guarded map that `List`/`Describe` read. UpCloud quotes a plan in
+  account-currency credits per hour (1 credit = one cent); the provider converts
+  credits→EUR and applies the configurable `--eur-usd` rate (default `1.08`) so the
+  value reaches the engine as USD. This is the **source of truth**.
+- **Pinned EUR table × `--eur-usd`.** The pinned per-plan **EUR** table
+  (`pricing.go`) seeds the cache before the first refresh and is the fallback when
+  a refresh fails or UpCloud does not price a plan, so the provider produces a
+  roughly-correct price offline (the fake backend, a credential-free
+  conformance / certification run) and survives a pricing-API outage. Pin a
+  current FX rate via `--eur-usd`; the cost field is a *relative* ranking signal,
+  so an approximate rate is acceptable, but a stale one skews effective-cost.
 
-A plan that is neither in the pinned table nor given a `price_usd_per_hour`
-override reports `0.0` and logs a one-time warning — add it to the override or the
-table. (A `0` is a valid, fleet-pessimistic price, not a crash.)
+The provider **fails closed on an unpriced plan**: after the startup refresh, an
+offered plan with no live price, no pinned fallback, and no `price_usd_per_hour`
+override would advertise a free (`0.0`) machine and corrupt the engine's cost
+ranking, so the provider **refuses to start** and names the offending plan — add
+it to the override or the table. (A recovered orphan of a truly unknown plan can
+still report `0.0` with a loud warning, since dropping a billed server from
+inventory is worse.) Last-successful-refresh age and success/failure counts are
+exported as metrics (see [Observability](observability.md)).
 
 `interruption_probability` is a **genuine `0.0`**. UpCloud has **no
 spot/preemptible product** — it does not reclaim a running on-demand server to

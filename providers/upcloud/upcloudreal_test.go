@@ -97,6 +97,17 @@ func (m *mockService) GetPlans(_ context.Context) (*upcloud.Plans, error) {
 	return &upcloud.Plans{Plans: []upcloud.Plan{{Name: "2xCPU-4GB", CoreNumber: 2, MemoryAmount: 4096}}}, nil
 }
 
+// GetPricesByZone returns a /price-shaped response: one priced plan in fi-hel1,
+// quoted in credits/hour (1 credit = one cent), so the real client's credit→EUR
+// conversion is exercised.
+func (m *mockService) GetPricesByZone(_ context.Context) (*upcloud.PricesByZone, error) {
+	return &upcloud.PricesByZone{
+		"fi-hel1": {
+			"server_plan_2xCPU-4GB": {Amount: 1, Price: 2.9761},
+		},
+	}, nil
+}
+
 func newRealWithMock(m *mockService) *upcloudReal {
 	return &upcloudReal{cfg: upcloudRealConfig{Username: "u", Password: "p", Zone: "fi-hel1", Template: "tpl"}, svc: m, log: quietLogger()}
 }
@@ -186,5 +197,25 @@ func TestReal_DescribePlanCapacities(t *testing.T) {
 	}
 	if _, ok := caps["nope"]; ok {
 		t.Error("unknown plan should be omitted")
+	}
+}
+
+// DescribePlanPrices reads the /price endpoint, scopes to the provider's zone,
+// and converts UpCloud credits/hour (1 credit = one cent) to EUR/hour. An unpriced
+// plan is omitted so the caller keeps its pinned fallback.
+func TestReal_DescribePlanPrices(t *testing.T) {
+	m := newMockService()
+	r := newRealWithMock(m)
+	prices, err := r.DescribePlanPrices(context.Background(), []string{"2xCPU-4GB", "nope"})
+	if err != nil {
+		t.Fatalf("DescribePlanPrices: %v", err)
+	}
+	credits := 2.9761                      // as quoted by the /price endpoint
+	want := credits / upcloudCreditsPerEUR // credits/hour -> EUR/hour (runtime division matches the client)
+	if got, ok := prices["2xCPU-4GB"]; !ok || got != want {
+		t.Errorf("2xCPU-4GB price = %v (ok=%v), want %v EUR/hour", got, ok, want)
+	}
+	if _, ok := prices["nope"]; ok {
+		t.Error("unpriced plan should be omitted (caller keeps pinned fallback)")
 	}
 }
