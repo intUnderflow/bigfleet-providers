@@ -1,6 +1,6 @@
 ---
 title: Pricing & interruption
-description: How the OVHcloud provider sources price_per_hour (a pinned EUR table → USD) and why interruption_probability is a genuine zero on OVH Public Cloud.
+description: How the OVHcloud provider live-refreshes price_per_hour from OVH's public order catalog (EUR → USD), with a dated seed table as fallback, and why interruption_probability is a genuine zero on OVH Public Cloud.
 sidebar:
   order: 4
   label: Pricing & interruption
@@ -11,37 +11,56 @@ interruption_probability × penalty`. So a provider has to report both honestly.
 On OVH Public Cloud the story is unusually simple, and this page explains exactly
 why.
 
-## `price_per_hour` — a pinned EUR table, in USD
+## `price_per_hour` — live from the OVH order catalog, in USD
 
-OVH publishes a fixed hourly on-demand price per flavor, in **EUR**. Unlike a
-hyperscaler, **OVH exposes no reliable real-time pricing API** for v1, so the
-provider sources prices from a **pinned, version-controlled EUR table** in the
-repo (`pricing.go`), keyed by flavor, and converts it to **USD** with the
-`--eur-usd` rate:
+OVH publishes a fixed hourly on-demand price per flavor, in **EUR**. It turns out
+there **is** a usable, credential-free price source: the public **order catalog**
 
 ```
-price_per_hour (USD) = pinned_hourly_EUR[flavor] × --eur-usd
+GET https://api.ovh.com/1.0/order/catalog/public/cloud?ovhSubsidiary=<sub>
 ```
 
-- **Deterministic, no hot-path dependency.** The table is read in memory on
-  `List`/`Get`; there is no pricing call to block on. That is the right model for
-  a substrate with no price API.
+carries the Public Cloud instance hourly rate for each flavor as the addon with
+plan code `<flavor>.consumption` (the pricing entry with `intervalUnit: "hour"`
+and a `consumption` capacity, ex-VAT). The provider pulls those prices and
+converts to **USD** with the `--eur-usd` rate:
+
+```
+price_per_hour (USD) = catalog_hourly_EUR[flavor] × --eur-usd
+```
+
+- **Refreshed off the hot path.** A background loop refreshes the prices into a
+  mutex-guarded in-memory map every `--price-refresh` (default `45m`). `List`/`Get`
+  only ever read that map — the catalog is **never** fetched on the hot path.
+- **Seeded + fallback, never silently drifting.** A **dated EUR seed table** in
+  `pricing.go` warms the cache at startup and serves as the fallback if a refresh
+  fails or the catalog omits a flavor. It is *not* the source of truth — the live
+  refresh overlays it. Staleness is observable: the metric
+  `bigfleet_ovh_price_last_success_timestamp_seconds` records the last successful
+  refresh (alert on its age), and the provider logs a loud `source=manual` warning
+  whenever it falls back to the seed.
+- **EUR subsidiaries only.** `--price-subsidiary` (default `FR`) selects the
+  catalog subsidiary; it must be a **EUR** one (FR, DE, IE, ES, IT, NL, PT, FI, …)
+  because `--eur-usd` assumes EUR. A non-EUR catalog (GBP/PLN, or the separate
+  US/CA API roots) is **rejected** rather than mis-converted — price those flavors
+  with `--flavor-price` instead.
 - **The rate is configurable** (`--eur-usd`, default `1.08`). The cost field is a
   *relative* ranking signal, so an approximate rate is fine, but pin a current one
-  and refresh it periodically — a stale rate skews effective-cost across the whole
-  fleet. Set it per deployment.
-- **Refresh the table manually.** The pinned table is not load-bearing for
-  correctness (it feeds the engine's relative cost ranking), but keep it roughly
-  accurate. When OVH changes its catalogue, regenerate the table by hand from the
-  [public OVH Public Cloud price page](https://www.ovhcloud.com/en/public-cloud/prices/)
-  and bump the date in the table comment. An operator can also pin an explicit
-  per-flavor USD with **`--flavor-price flavor=USD/hour`** (e.g. a negotiated rate
-  or a flavor missing from the table) without touching the code.
+  — a stale rate skews effective-cost across the whole fleet. Set it per deployment.
+- **Overrides win.** An operator can pin an explicit per-flavor USD with
+  **`--flavor-price flavor=USD/hour`** (a negotiated rate, or a flavor the catalog
+  doesn't carry); it takes precedence over both the live and seed prices.
 
-A flavor that is in neither the pinned table nor a `--flavor-price` override would
+The **fake backend** (dev / credential-free conformance) makes **no live call** at
+all: it serves the deterministic seed table, so conformance is offline and
+reproducible.
+
+A flavor that has neither a seed-table entry nor a `--flavor-price` override would
 publish `price_per_hour = 0` — the global minimum of the cost-ranking signal, so
-it would always win. The provider therefore **refuses to start** if any offering
-references such a flavor: add it to the pinned table in `pricing.go`, or pass
+it would always win. The provider therefore **fails closed**: it refuses to start
+if any offering references such a flavor (checked against the guaranteed sources —
+seed + override — not the live catalog, which may be momentarily unreachable at
+startup). Add the flavor to the seed table in `pricing.go`, or pass
 `--flavor-price <flavor>=<USD/hour>`.
 
 ## `interruption_probability` — a genuine zero

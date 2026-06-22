@@ -23,7 +23,7 @@ func newTestBackend(t *testing.T, seedCount int) (*ovhBackend, *ovhFake) {
 	// One process per region: the backend is configured for GRA, so every
 	// offering must be in GRA (mismatched regions are rejected at construction).
 	offs := defaultOfferings(seedCount, "GRA", "GRA")
-	b, err := newOVHBackend("ovh-public-test", "GRA", "img-ubuntu-2404", fake, offs, newPricing(defaultEURtoUSD), nil, logger)
+	b, err := newOVHBackend("ovh-public-test", "GRA", "img-ubuntu-2404", fake, offs, newPricing(defaultEURtoUSD, nil, logger), nil, logger)
 	if err != nil {
 		t.Fatalf("newOVHBackend: %v", err)
 	}
@@ -273,11 +273,11 @@ func TestNewOVHBackend_RejectsForeignRegion(t *testing.T) {
 		{Flavor: "b2-7", Region: "GRA", Capacity: "on_demand", Count: 1, Resources: map[string]string{"cpu": "1", "memory": "2Gi"}},
 		{Flavor: "c2-15", Region: "SBG", Capacity: "on_demand", Count: 1, Resources: map[string]string{"cpu": "1", "memory": "2Gi"}},
 	}
-	if _, err := newOVHBackend("ovh-public-GRA", "GRA", "img", fake, offs, newPricing(1.08), nil, quietLogger()); err == nil {
+	if _, err := newOVHBackend("ovh-public-GRA", "GRA", "img", fake, offs, newPricing(1.08, nil, quietLogger()), nil, quietLogger()); err == nil {
 		t.Error("expected rejection of an SBG offering on a GRA-configured backend")
 	}
 	// Empty region (fake backend) accepts the multi-region mix.
-	if _, err := newOVHBackend("ovh-public", "", "img", fake, offs, newPricing(1.08), nil, quietLogger()); err != nil {
+	if _, err := newOVHBackend("ovh-public", "", "img", fake, offs, newPricing(1.08, nil, quietLogger()), nil, quietLogger()); err != nil {
 		t.Errorf("fake backend (empty region) should accept multi-region offerings: %v", err)
 	}
 }
