@@ -54,6 +54,12 @@ type azureClient interface {
 	// this.
 	SpotPriceUSD(ctx context.Context, vmSize string) (float64, error)
 
+	// OnDemandPriceUSD returns the current pay-as-you-go price for vmSize in the
+	// location, in USD/hour (Azure Retail Prices API, Linux Consumption meter,
+	// excluding Spot / Low Priority / Windows). The on-demand price table is
+	// refreshed live from this off the List hot path.
+	OnDemandPriceUSD(ctx context.Context, vmSize string) (float64, error)
+
 	// DescribeVMSizeCapacities resolves the hardware capacity (vCPU + memory) of
 	// the given VM sizes via the Resource SKUs API, for Machine.allocatable.
 	// Sizes Azure does not return are simply absent from the result (the caller

@@ -56,7 +56,8 @@ Recorded by the logging interceptor for every unary `CapacityProvider` call.
 |---|---|---|---|
 | `bigfleet_azure_panics_total` | counter | — | Recovered panics in gRPC handlers. The recovery interceptor turns a panic into `codes.Internal` rather than crashing; **any** increase warrants investigation. |
 | `bigfleet_azure_reconcile_total` | counter | `outcome` | Background Azure→inventory reconcile runs (`--reconcile-interval`, default 2m). A flatlining `success` rate means drift detection has stalled. |
-| `bigfleet_azure_price_refresh_total` | counter | `outcome` | Background Spot-price refresh runs (`--price-refresh`, default 1h). `error` means the cached Spot price is going stale; price is still served from cache. |
+| `bigfleet_azure_price_refresh_total` | counter | `outcome` | Background price refresh runs (on-demand + spot, `--price-refresh`, default 1h). `error` means at least one fetch failed and the cached price is going stale; price is still served from cache. |
+| `bigfleet_azure_price_last_success_timestamp_seconds` | gauge | — | Unix time of the last **fully-successful** price refresh (on-demand + spot). Alert on `time() - <this>` exceeding a few refresh intervals to catch a silently-stale cache. |
 | `bigfleet_azure_spot_evictions_total` | counter | — | Observed Spot eviction (Scheduled Events `Preempt`) notices acted on. |
 
 ### Runtime collectors
@@ -163,7 +164,13 @@ groups:
         expr: increase(bigfleet_azure_price_refresh_total{outcome="error"}[2h]) > 0
         for: 3h
         labels: { severity: warning }
-        annotations: { summary: "Spot-price refresh failing; served Spot prices are going stale" }
+        annotations: { summary: "Price refresh failing; served on-demand/spot prices are going stale" }
+
+      - alert: BigfleetAzurePriceCacheStale
+        expr: time() - bigfleet_azure_price_last_success_timestamp_seconds > 4 * 3600
+        for: 15m
+        labels: { severity: warning }
+        annotations: { summary: "No fully-successful price refresh in >4h; prices served from a stale cache" }
 
       - alert: BigfleetAzureReconcileStalled
         expr: increase(bigfleet_azure_reconcile_total{outcome="success"}[15m]) == 0

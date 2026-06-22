@@ -63,7 +63,7 @@ baseUserData:
   content: ""
 
 # --- background loops -------------------------------------------------------
-priceRefresh: 1h                # --price-refresh (Spot price refresh)
+priceRefresh: 1h                # --price-refresh (on-demand + spot price refresh)
 reconcileInterval: 2m           # --reconcile-interval
 
 # Shared bearer token the in-node Scheduled Events agent presents to the

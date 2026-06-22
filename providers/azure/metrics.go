@@ -22,6 +22,7 @@ type metrics struct {
 	panics        prometheus.Counter       // bigfleet_azure_panics_total
 	reconcile     *prometheus.CounterVec   // bigfleet_azure_reconcile_total{outcome}
 	priceRefresh  *prometheus.CounterVec   // bigfleet_azure_price_refresh_total{outcome}
+	priceFresh    prometheus.Gauge         // bigfleet_azure_price_last_success_timestamp_seconds
 	interrupts    prometheus.Counter       // bigfleet_azure_spot_evictions_total
 }
 
@@ -58,8 +59,12 @@ func newMetrics() *metrics {
 		}, "outcome"),
 		priceRefresh: f.counterVec(prometheus.CounterOpts{
 			Name: "bigfleet_azure_price_refresh_total",
-			Help: "Background spot-price refresh runs by outcome.",
+			Help: "Background price refresh runs (on-demand + spot) by outcome.",
 		}, "outcome"),
+		priceFresh: f.gauge(prometheus.GaugeOpts{
+			Name: "bigfleet_azure_price_last_success_timestamp_seconds",
+			Help: "Unix time of the last fully-successful background price refresh (on-demand + spot). Alert on time() minus this exceeding a few refresh intervals: served prices are going stale (still served from cache).",
+		}),
 		interrupts: f.counter(prometheus.CounterOpts{
 			Name: "bigfleet_azure_spot_evictions_total",
 			Help: "Observed Spot eviction (Scheduled Events Preempt) notices.",
@@ -135,6 +140,12 @@ func (c *metricsAzureClient) SpotPriceUSD(ctx context.Context, vmSize string) (f
 	c.m.observeAzure("RetailPrices", start, err)
 	return v, err
 }
+func (c *metricsAzureClient) OnDemandPriceUSD(ctx context.Context, vmSize string) (float64, error) {
+	start := time.Now()
+	v, err := c.inner.OnDemandPriceUSD(ctx, vmSize)
+	c.m.observeAzure("RetailPrices", start, err)
+	return v, err
+}
 func (c *metricsAzureClient) DescribeVMSizeCapacities(ctx context.Context, vmSizes []string) (map[string]vmCapacity, error) {
 	start := time.Now()
 	out, err := c.inner.DescribeVMSizeCapacities(ctx, vmSizes)
@@ -154,6 +165,11 @@ func (f promFactory) counter(o prometheus.CounterOpts) prometheus.Counter {
 	c := prometheus.NewCounter(o)
 	f.reg.MustRegister(c)
 	return c
+}
+func (f promFactory) gauge(o prometheus.GaugeOpts) prometheus.Gauge {
+	g := prometheus.NewGauge(o)
+	f.reg.MustRegister(g)
+	return g
 }
 func (f promFactory) counterVec(o prometheus.CounterOpts, labels ...string) *prometheus.CounterVec {
 	c := prometheus.NewCounterVec(o, labels)

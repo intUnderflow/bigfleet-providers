@@ -160,19 +160,23 @@ cache.
 
 ## Region-table mismatch
 
-The pinned on-demand prices and Spot eviction bands ship for `eastus` and
-`westeurope`. Spot prices and `allocatable` are **live**; on-demand prices and the
-eviction *forecast* are pinned.
+The on-demand **seed** prices and Spot eviction bands ship for `eastus` and
+`westeurope`. On-demand prices, Spot prices, and `allocatable` are all **live**;
+only the seed table (cold fallback) and the eviction *forecast* are pinned.
 
-- **Symptom:** at startup, `no pinned on-demand price table for this region; cost
-  ranking uses baseline approximations` for an untabulated region, so on-demand
-  `price_per_hour` looks off. (A size you offer that is missing from the table
-  entirely is rejected at startup — the provider refuses to start — rather than
-  pricing at 0.)
-- **Fix:** regenerate the on-demand table from the Retail Prices API per
-  [Pricing & interruption](/providers/azure/pricing-and-interruption/), and add
-  your sizes to `evictionBand`. These feed the engine's *relative* cost ranking,
-  so keep them roughly right.
+- **Symptom:** at startup, `no pinned on-demand seed table for region; using
+  baseline approximations until the live refresh populates` for an unseeded region,
+  so on-demand `price_per_hour` looks off **only in the brief window before the
+  first refresh**. (A size you offer that is missing from the seed table entirely
+  is rejected at startup — the provider refuses to start — rather than pricing at
+  0.) If on-demand prices stay wrong after the warm-up, check
+  `bigfleet_azure_price_last_success_timestamp_seconds` and egress to
+  `prices.azure.com`.
+- **Fix:** the live refresh self-heals the price on the next successful cycle. To
+  improve the cold window, refresh the on-demand seed table from the Retail Prices
+  API per [Pricing & interruption](/providers/azure/pricing-and-interruption/), and
+  add your sizes to `evictionBand`. These feed the engine's *relative* cost
+  ranking, so keep them roughly right.
 
 ## Readiness never goes green
 

@@ -58,7 +58,7 @@ func run() error {
 		sshPubKey    = flag.String("ssh-public-key", "", "path to the SSH public key authorised for the admin user (azure backend)")
 		bootstrapHk  = flag.String("bootstrap-hook", "/opt/bigfleet/bootstrap", "image path that applies the delivered bootstrap blob")
 		baseUserData = flag.String("base-user-data", "", "path to the generic pre-binding cloud-init baked into customData at create")
-		priceRefresh = flag.Duration("price-refresh", time.Hour, "spot price refresh interval (0 = off)")
+		priceRefresh = flag.Duration("price-refresh", time.Hour, "on-demand + spot price refresh interval (0 = off)")
 		reconcile    = flag.Duration("reconcile-interval", 2*time.Minute, "background Azure->inventory reconcile interval (0 = off)")
 		evictionTok  = flag.String("eviction-token", "", "shared bearer token the node-side Scheduled Events agent presents to POST /internal/eviction (or set BIGFLEET_EVICTION_TOKEN, preferred — Secret-mounted). Empty = the endpoint is disabled (fail-closed), not unauthenticated")
 
@@ -148,10 +148,14 @@ func run() error {
 		return err
 	}
 
-	// Warm the spot price cache before first List (best-effort, bounded).
+	// Warm the on-demand + spot price caches before first List (best-effort,
+	// bounded), so the live prices are in place before serving.
 	warmCtx, cancelWarm := context.WithTimeout(ctx, 20*time.Second)
 	backend.refreshPrices(warmCtx)
 	cancelWarm()
+	if ts := backend.lastPriceSuccess(); !ts.IsZero() {
+		m.priceFresh.Set(float64(ts.Unix()))
+	}
 
 	// Resolve allocatable (vCPU/memory) for the offered sizes from the Resource
 	// SKUs API (best-effort, bounded); the pinned table covers anything Azure
@@ -223,11 +227,11 @@ func run() error {
 		obs.start(logger)
 	}
 
-	// (newPricing already warns once when a region has no pinned on-demand table
+	// (newPricing already warns once when a region has no on-demand seed table
 	// and falls back to the baseline; no need to repeat it here.)
 
-	// Background loops: spot price refresh + Azure->inventory reconcile.
-	go runPriceRefresher(ctx, backend, m, *priceRefresh)
+	// Background loops: price refresh (on-demand + spot) + Azure->inventory reconcile.
+	go runPriceRefresher(ctx, backend, m, *priceRefresh, logger)
 	go runReconciler(ctx, srv, m, *reconcile, logger)
 
 	// Mark ready: serving traffic + probes go green.
@@ -286,7 +290,7 @@ func runReconciler(ctx context.Context, srv *providerkit.Server, m *metrics, int
 	}
 }
 
-func runPriceRefresher(ctx context.Context, backend *azureBackend, m *metrics, interval time.Duration) {
+func runPriceRefresher(ctx context.Context, backend *azureBackend, m *metrics, interval time.Duration, logger *slog.Logger) {
 	if interval <= 0 {
 		return
 	}
@@ -305,6 +309,15 @@ func runPriceRefresher(ctx context.Context, backend *azureBackend, m *metrics, i
 				outcome = "error"
 			}
 			m.priceRefresh.WithLabelValues(outcome).Inc()
+			// Surface staleness: publish the last fully-successful refresh time and
+			// warn when the cache has not refreshed cleanly for several intervals.
+			if ts := backend.lastPriceSuccess(); !ts.IsZero() {
+				m.priceFresh.Set(float64(ts.Unix()))
+				if age := time.Since(ts); age > 3*interval {
+					logger.Warn("pricing: price cache going stale; last fully-successful refresh is old (still serving cached prices)",
+						"age", age.Round(time.Second), "refresh_interval", interval)
+				}
+			}
 		}
 	}
 }

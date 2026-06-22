@@ -39,7 +39,7 @@ your resource group:
 | `Microsoft.Network/networkInterfaces/*` | `Create` / `Delete` | Create the VM's NIC and delete it on teardown. |
 | `Microsoft.Network/virtualNetworks/subnets/join/action` | `Create` | Attach the NIC to the configured subnet (by id; never read). |
 
-The Retail Prices API the Spot price refresh reads is **public** (no Azure auth),
+The Retail Prices API the on-demand + spot price refresh reads is **public** (no Azure auth),
 so it needs no role. If you prefer the built-in **Contributor** role scoped to the
 resource group, set `use_custom_role=false` in the Terraform — but the custom role
 above is the tighter, recommended grant.

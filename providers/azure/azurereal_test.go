@@ -46,6 +46,43 @@ func TestSpotPriceUSD_FullSkuNameAndExcludesWindows(t *testing.T) {
 	}
 }
 
+// onDemandStub returns a realistic mix of Consumption meters for one (region,
+// SKU): Linux + Windows on-demand, Spot, and the retired Low Priority tier.
+type onDemandStub struct{ lastFilter string }
+
+func (s *onDemandStub) RoundTrip(req *http.Request) (*http.Response, error) {
+	s.lastFilter = req.URL.Query().Get("$filter")
+	body := `{"Items":[
+		{"unitPrice":0.192,"meterName":"D4s_v5","productName":"Virtual Machines DSv5 Series","skuName":"D4s_v5"},
+		{"unitPrice":0.350,"meterName":"D4s_v5","productName":"Virtual Machines DSv5 Series Windows","skuName":"D4s_v5"},
+		{"unitPrice":0.040,"meterName":"D4s_v5 Spot","productName":"Virtual Machines DSv5 Series","skuName":"D4s_v5 Spot"},
+		{"unitPrice":0.030,"meterName":"D4s_v5 Low Priority","productName":"Virtual Machines DSv5 Series","skuName":"D4s_v5 Low Priority"}
+	]}`
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+}
+
+// OnDemandPriceUSD must return the Linux pay-as-you-go meter — never the cheaper
+// Spot / Low Priority meters (which would understate on-demand cost) nor the
+// Windows licence-surcharged meter — and filter on the full Standard_ armSkuName.
+func TestOnDemandPriceUSD_SelectsLinuxPayAsYouGo(t *testing.T) {
+	stub := &onDemandStub{}
+	a := &azureReal{
+		cfg:      azureRealConfig{Location: "eastus"},
+		priceAPI: "https://example.test/api",
+		http:     &http.Client{Transport: stub},
+	}
+	got, err := a.OnDemandPriceUSD(context.Background(), "Standard_D4s_v5")
+	if err != nil {
+		t.Fatalf("OnDemandPriceUSD: %v", err)
+	}
+	if got != 0.192 {
+		t.Errorf("price = %v, want 0.192 (Linux on-demand, not Spot/Low Priority/Windows)", got)
+	}
+	if !strings.Contains(stub.lastFilter, "armSkuName eq 'Standard_D4s_v5'") {
+		t.Errorf("filter %q must use the full Standard_ sku name", stub.lastFilter)
+	}
+}
+
 // toVMInstance must derive the real power state from the expanded instance view:
 // a deallocated VM is not Running even though provisioning Succeeded; a running
 // VM is; and with no instance view it falls back to the Deleting heuristic.
