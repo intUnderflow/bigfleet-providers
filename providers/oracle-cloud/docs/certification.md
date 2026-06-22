@@ -41,7 +41,7 @@ Run the bare extension suite with `make conformance-oracle-cloud`.
 
 ## The full multi-lane report
 
-The complete certification — all **92 behaviors** across every lane — runs through
+The complete certification — all **93 behaviors** across every lane — runs through
 the `bfconformance` runner and emits a JUnit + JSON report with a final verdict:
 
 ```sh
@@ -52,8 +52,8 @@ A representative run:
 
 ```
   baseline : 25 tests, 24 passed, 0 failed, 1 skipped
-  extension: 92 tests, 92 passed, 0 failed, 0 skipped
-  behaviors: 92 total — 92 passed, 0 failed, 0 skipped, 0 not-implemented
+  extension: 93 tests, 93 passed, 0 failed, 0 skipped
+  behaviors: 93 total — 93 passed, 0 failed, 0 skipped, 0 not-implemented
 >> VERDICT: CERTIFIED
 ```
 

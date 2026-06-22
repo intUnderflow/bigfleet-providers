@@ -1,13 +1,13 @@
 ---
 title: Conformance program
-description: The BigFleet provider conformance program — 92 certified behaviors across 11 areas, profiles, and the bfconformance runner.
+description: The BigFleet provider conformance program — 93 certified behaviors across 11 areas, profiles, and the bfconformance runner.
 ---
 
 # BigFleet provider conformance program
 
 :::note[Operators: you can stop here]
 If you are running a provider, all you need to know is that **"certified" means
-it passed every one of the 92 behaviors registered below** — the full
+it passed every one of the 93 behaviors registered below** — the full
 correctness, fault, durability, and scale bar. You do not need to read the
 registry; the trust signal is the verdict. The rest of this page is the
 developer-facing catalog for people **building or extending** providers.
@@ -97,7 +97,7 @@ cases and asserts stronger invariants under distinct behavior ids.
 
 ## The behaviors
 
-Total: **92 behaviors** across **11 areas**.
+Total: **93 behaviors** across **11 areas**.
 
 
 ### Lifecycle & State Machine
@@ -184,6 +184,7 @@ Total: **92 behaviors** across **11 areas**.
 | `B705` | fault | A FAILED machine is terminal-pending-cleanup: a re-issued mutation toward any target is rejected (non-FAILED_PRECONDITION) and the machine stays FAILED with last_error preserved verbatim (the shard recovers on a different slot, never in place) _(cap: Fault)_ |
 | `B706` | fault | A Drain with grace_period_seconds=0 against a failing actuator ends in Idle or FAILED-with-last_error, never stuck DRAINING and never a silent revert _(cap: Fault)_ |
 | `B707` | fault | A FAILED machine still answers Get/List and reports its FAILED state with last_error preserved verbatim across repeated reads _(cap: Fault)_ |
+| `B708` | fault | ADR-0056 node-join readiness gate: a machine is not reported CONFIGURED until its node is observed Ready — it stays CONFIGURING while readiness is unobserved, and if readiness never arrives within the Configure timeout it goes FAILED with non-empty last_error (never phantom-CONFIGURED) _(cap: Fault)_ |
 
 ### Field Shape & Cost
 

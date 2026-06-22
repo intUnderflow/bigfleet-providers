@@ -30,7 +30,7 @@ ignored by external consumers.
 ## Cutting a release
 
 1. Make sure `main` is green (the `ci-ok` gate — every provider's `certify` lane
-   passes all 92 conformance behaviors credential-free).
+   passes all 93 conformance behaviors credential-free).
 2. Update `CHANGELOG.md` with the new version (its top `## vX.Y.Z` section
    becomes the GitHub Release notes).
 3. Confirm the bigfleet proto pin is identical across modules:

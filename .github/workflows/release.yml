@@ -31,7 +31,7 @@ jobs:
           echo "list=$names" >> "$GITHUB_OUTPUT"
           echo "releasing providers: $names"
 
-  # Gate the release on full conformance certification (all 92 behaviors) of
+  # Gate the release on full conformance certification (all 93 behaviors) of
   # EVERY provider. The runner exits non-zero unless the verdict is CERTIFIED, so
   # a regression in any provider blocks the whole release.
   certify:

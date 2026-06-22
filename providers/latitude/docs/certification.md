@@ -15,7 +15,7 @@ production; this page exists if you want to reproduce that verdict yourself.
 "Certified" here means exactly what it means in the
 [conformance program](https://github.com/intUnderflow/bigfleet-providers/tree/main/conformance/docs/conformance.md):
 the provider passes **both** the upstream authoritative baseline **and** this
-repo's extension suite — 92 behaviors across 11 areas — with no failures and no
+repo's extension suite — 93 behaviors across 11 areas — with no failures and no
 skipped-as-failed behaviors.
 
 ## One command

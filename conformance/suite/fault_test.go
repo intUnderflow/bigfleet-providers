@@ -293,3 +293,30 @@ func TestB707_FailedStillReadable(t *testing.T) {
 		t.Errorf("B707: FAILED machine %s not present in List(FAILED)", id)
 	}
 }
+
+// B708 — ADR-0056 node-join readiness gate: a machine is not reported CONFIGURED
+// until its node is observed Ready. The faultprovider's ConfirmNodeReady blocks
+// for the "fault-readiness-block" cluster, so the kit must hold the machine at
+// CONFIGURING (NEVER CONFIGURED — that would be phantom capacity) and, when
+// readiness never arrives, time the transition out to FAILED with a non-empty
+// last_error.
+func TestB708_NodeReadinessGate(t *testing.T) {
+	behavior(t, "B708")
+	h := dial(t)
+
+	id := walkHealthyToIdle(t, h)
+	if _, err := h.Configure(id, "fault-readiness-block", faultMD()); err != nil {
+		t.Fatalf("Configure(fault-readiness-block): %v", err)
+	}
+
+	// While readiness is unobserved the machine must stay CONFIGURING and must
+	// NEVER be reported CONFIGURED. Watch for most of the transition window.
+	h.NeverReaches(id, pb.MachineState_MACHINE_STATE_CONFIGURED, transitionTimeout-500*time.Millisecond)
+
+	// Readiness never arrives, so the kit times the transition out to FAILED —
+	// it does not silently settle CONFIGURED on a node that never joined.
+	m := h.MustReach(id, pb.MachineState_MACHINE_STATE_FAILED, transitionTimeout+5*time.Second)
+	if m.GetLastError() == "" {
+		t.Errorf("B708: FAILED machine has empty last_error (readiness timeout)")
+	}
+}

@@ -68,7 +68,7 @@ make report-gcp PROFILE=core,cloud,spot,fault,durable,scale
 # -> VERDICT: CERTIFIED, writes conformance-report/gcp/{report.json,junit.xml}
 ```
 
-The certified run covers all **92 behaviors** across the 11 areas (lifecycle,
+The certified run covers all **93 behaviors** across the 11 areas (lifecycle,
 transition matrix/errors, fencing, concurrency & idempotency, metadata,
 field-shape & cost, list/revision/pagination, timeouts & failure,
 durability/restart, scale & soak, property/fuzz).

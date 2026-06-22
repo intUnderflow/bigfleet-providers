@@ -16,7 +16,7 @@ page exists if you want to reproduce that verdict yourself.
 [conformance program](https://github.com/intUnderflow/bigfleet-providers/tree/main/conformance/docs/conformance.md):
 the provider passes **both** the upstream authoritative baseline **and** this
 repo's extension suite, with no failures and no skipped-as-failed behaviors. The
-certified run: **baseline 25 tests (24 passed, 1 skipped), extension 92/92 passed,
+certified run: **baseline 25 tests (24 passed, 1 skipped), extension 93/93 passed,
 all 11 behavior areas green — VERDICT: CERTIFIED.**
 
 ## One command
@@ -56,8 +56,8 @@ run it verbatim and never modify it; it is the floor every certified provider
 clears.
 
 **Extension suite** — the BigFleet conformance program: a frozen registry of
-**92 behaviors across 11 areas** that deepens the baseline (stronger invariants
-under distinct, append-only ids). All 92 pass, all 11 areas green:
+**93 behaviors across 11 areas** that deepens the baseline (stronger invariants
+under distinct, append-only ids). All 93 pass, all 11 areas green:
 
 | Area | What it certifies |
 |---|---|
@@ -73,7 +73,7 @@ under distinct, append-only ids). All 92 pass, all 11 areas green:
 | Scale & soak | large inventory, churn-soak, latency budgets, parallel throughput |
 | Property / fuzz | seeded-random lifecycle / fencing / metadata oracles |
 
-The full, frozen registry of all 92 behaviors is the
+The full, frozen registry of all 93 behaviors is the
 [conformance program](/conformance/). This provider clears every one.
 
 ## Profiles the Scaleway provider claims

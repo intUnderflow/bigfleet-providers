@@ -25,7 +25,7 @@ moves.
   liveness/readiness probes, Prometheus metrics, and structured logs. See
   [Observability](/providers/gcp/observability/).
 - **Certified.** It passes the full BigFleet provider conformance program —
-  [92 certified behaviors](/conformance/) — credential-free on every change, plus
+  [93 certified behaviors](/conformance/) — credential-free on every change, plus
   an extension suite that asserts stronger invariants. See
   [Certification](/providers/gcp/certification/).
 - **Conservative by default.** A `Create` blocks until the instance is actually

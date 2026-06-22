@@ -1,6 +1,6 @@
 # bigfleet-providers
 
-[![conformance](https://img.shields.io/badge/bigfleet%20conformance-92%20behaviors%20CERTIFIED-brightgreen)](https://bigfleet-providers.lucy.sh/conformance/)
+[![conformance](https://img.shields.io/badge/bigfleet%20conformance-93%20behaviors%20CERTIFIED-brightgreen)](https://bigfleet-providers.lucy.sh/conformance/)
 
 Out-of-tree **capacity providers** for [BigFleet](https://github.com/intUnderflow/bigfleet), and the shared library every provider is built on.
 

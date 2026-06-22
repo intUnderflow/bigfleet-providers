@@ -135,7 +135,7 @@ make test-ovhcloud                                          # unit tests (race)
 The OVHcloud provider claims the **core** and **cloud** profiles (it implements
 `Delete`); it does **not** claim `spot` (no OVH spot market). The fault, durable,
 and scale lanes pass by construction on `providerkit`. A full run reports
-**92/92 behaviors** — **VERDICT: CERTIFIED**.
+**93/93 behaviors** — **VERDICT: CERTIFIED**.
 
 Everything cross-cutting — fencing, idempotency, async dispatch, transition
 timeouts, the `shard_metadata` lifecycle, field-shape — is handled by
