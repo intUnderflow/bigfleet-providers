@@ -67,7 +67,12 @@ backend, so everything above runs without credentials.
   OCPU→vCPU convention (x86 = 2 vCPU/OCPU, Ampere = 1) feeds `allocatable`.
 - **Preemptible** machines always declare a non-zero `interruption_probability`
   (forecast prior, raised on observed preemption) — never a falsely-cheap zero.
-- **price_per_hour** comes from a pinned, embedded `prices.yaml`; it is `0` only for `capacity_type=bare_metal` (held capacity), while a `BM.*` shape declared `on_demand` is priced at its real hourly rate.
+- **price_per_hour** is **live-refreshed** from the public OCI price list (the
+  cost-estimator API, no credentials) on a timer, off the `List` hot path;
+  `prices.yaml` is the startup seed + fallback. It is `0` only for
+  `capacity_type=bare_metal` (held capacity), while a `BM.*` shape declared
+  `on_demand` is priced at its real hourly rate. Startup **fails closed** if any
+  hourly-billed offering would price at 0.
 
 ## Layout
 
@@ -79,8 +84,9 @@ ocireal.go        production client (oci-go-sdk: Compute + Run Command)
 ocifake.go        in-memory fake backend for credential-free certify
 offering.go       offerings: shape/AD/capacity, default mix, labels
 instancetypes.go  shape → allocatable (OCPU→vCPU, GPU)
-pricing.go        prices.yaml loader + lookup (go:embed)
-prices.yaml       pinned price table
+pricing.go        seed/fallback loader + live-refreshed price table + lookup (go:embed)
+ociprices.go      live price source: OCI price-list (HTTP) + deterministic fake
+prices.yaml       seed + fallback price table
 interruption.go   preemptible interruption forecaster/observer
 metrics.go        Prometheus instrumentation + client decorator
 serve.go          gRPC server (interceptors, health, reflection) + /metrics,/healthz,/readyz

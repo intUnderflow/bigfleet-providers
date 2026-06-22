@@ -62,8 +62,20 @@ That is correct and required — see
 SPOT machine with `0` would be a correctness bug; the kit rejects such a seed at
 startup.
 
-## Prices look wrong
+## Prices look wrong / stale
 
-`price_per_hour` comes from the pinned `prices.yaml` (embedded, or `--prices-file`).
-It is a relative ranking signal; refresh the table from Oracle's published price
-list and re-deploy. Bare-metal always reports `0`.
+`price_per_hour` is **live-refreshed** from the public OCI price list on a timer
+(`--price-refresh`, default 45m); `prices.yaml` (embedded, or `--prices-file`) is
+only the startup seed + fallback. It is a relative ranking signal. Bare-metal
+(`capacity_type=bare_metal`) always reports `0`.
+
+- **Check freshness:** `bigfleet_oci_price_last_success_timestamp_seconds`
+  (staleness = `time() - this`) and `bigfleet_oci_price_refresh_total{outcome}`.
+  A growing `error` count or a stale timestamp means refreshes are failing — the
+  provider keeps serving the last live (or seed) prices and logs a warning.
+- **Refresh failing?** Confirm egress to the cost-estimator API (or set
+  `--price-list-url`). With the fake backend the refresh uses a deterministic,
+  network-free source.
+- **Won't start, "has no price":** an hourly-billed offering priced at 0 is
+  rejected (fail closed). Add a `prices.yaml` entry / SKU mapping for the shape,
+  or declare the lane `capacity_type=bare_metal` if it really is held capacity.

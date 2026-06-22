@@ -202,6 +202,32 @@ func (b *ociBackend) instanceToIdle(machineID string, inst ociInstance) provider
 	}
 }
 
+// refreshPrices pulls the live OCI price list into the in-memory price tables.
+// Call it once at startup and on a timer (runPriceRefresher); never on the List
+// hot path. A fetch error leaves the prior (seed/last-live) prices in place.
+func (b *ociBackend) refreshPrices(ctx context.Context) error {
+	return b.pricing.refresh(ctx)
+}
+
+// validatePricing fails closed on an unpriced offering: after the seed and the
+// initial live refresh, every offered shape that bills hourly (capacity_type is
+// not bare_metal) must carry a non-zero price, so the provider never emits
+// price_per_hour=0 for capacity that actually costs money (it would rank as free
+// and be handed every workload). A genuine bare_metal lane is exempt — its 0 is
+// honest (held, already-paid-for capacity).
+func (b *ociBackend) validatePricing() error {
+	for _, off := range b.offerings {
+		capacity, _ := off.capacityType() // validated in newOCIBackend
+		if capacity == providerkit.CapacityBareMetal {
+			continue
+		}
+		if p := b.pricing.price(off.Shape, off.OCPUs, off.MemoryGB, capacity); p <= 0 {
+			return fmt.Errorf("oci backend: offering %s in %s (capacity %s) has no price; refusing to emit price_per_hour=0 (add a prices.yaml entry or a live SKU mapping)", off.Shape, off.AvailabilityDomain, capacity)
+		}
+	}
+	return nil
+}
+
 // resourcesForShape returns the per-replica resources of an offering matching the
 // given shape, preferring an exact (shape, AD) match and falling back to the same
 // shape in any AD. Nil when no offering covers the shape.

@@ -1,9 +1,12 @@
-# Pinned OCI Compute price table for the BigFleet oracle-cloud provider.
+# Seed + fallback OCI Compute price table for the BigFleet oracle-cloud provider.
 #
-# OCI does not expose a clean per-shape hourly price via a simple Compute API
-# call, so prices come from this versioned table (deterministic, no runtime
-# pricing dependency on the List hot path). Refresh it out-of-band from Oracle's
-# published Compute price list; pin priced_at + source on every edit.
+# This file is NOT the source of truth. The provider live-refreshes prices from
+# the public OCI price list (the cost-estimator API; see source URL below) into an
+# in-memory table on a timer, off the List hot path. This table only:
+#   - SEEDS prices before the first live refresh, and
+#   - is the FALLBACK for any shape a refresh cannot price.
+# Keep it roughly accurate so the fallback doesn't drift; pin priced_at + source
+# on every edit. (Refresh out-of-band from Oracle's published Compute price list.)
 #
 # price_per_hour is a RELATIVE ranking signal for the shard's cost formula
 # (effective_cost = price + interruption_probability × penalty), so approximate
