@@ -42,6 +42,13 @@ type ec2Client interface {
 	// in USD/hour (DescribeSpotPriceHistory, newest entry).
 	SpotPriceUSD(ctx context.Context, instanceType, zone string) (float64, error)
 
+	// OnDemandPricesUSD returns current on-demand hourly prices (USD/hour) for
+	// the given instance types, fetched from the public AWS Price List Bulk API
+	// (the region offer JSON — no credentials). It is one bulk fetch regardless
+	// of how many types are asked for; types the source does not price are
+	// simply absent from the result (the caller keeps the pinned fallback).
+	OnDemandPricesUSD(ctx context.Context, instanceTypes []string) (map[string]float64, error)
+
 	// DescribeInstanceCapacities resolves the hardware capacity (vCPU + memory)
 	// of the given instance types via ec2:DescribeInstanceTypes, for
 	// Machine.allocatable. Types AWS does not return are simply absent from the

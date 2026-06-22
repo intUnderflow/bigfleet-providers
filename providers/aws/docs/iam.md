@@ -86,6 +86,7 @@ and the `iam:PassRole` statement if you are not setting `--iam-instance-profile`
 | `ec2:DescribeInstances` | List / reconcile | Recovers inventory and bindings from the `bigfleet:managed` tag; also the "running" waiter `Create` blocks on. |
 | `ec2:DescribeInstanceTypes` | startup | Resolves each offered type's real vCPU/memory for `Machine.allocatable` (cached once; a pinned table covers anything unresolved). |
 | `ec2:DescribeSpotPriceHistory` | spot refresh | The live spot price, fetched on the `--spot-refresh` loop — never on the List hot path. |
+| _(none)_ | on-demand refresh | Live on-demand prices come from the **public** AWS Price List Bulk API over plain HTTPS (`--ondemand-refresh`) — no credentials and **no IAM action**; the node just needs egress to `pricing.us-east-1.amazonaws.com`. |
 | `ec2:CreateTags` | `Create` / `Configure` | Stamps `bigfleet:managed`, `machine-id`, `capacity` at launch and `bigfleet:cluster` on bind. |
 | `ec2:DeleteTags` | `Drain` | Removes the `bigfleet:cluster` binding tag. |
 | `ssm:SendCommand` | `Configure` / `Drain` | Delivers the opaque `bootstrap_blob` to the node's `--bootstrap-hook`, and runs cordon/drain. |

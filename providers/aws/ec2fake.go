@@ -108,6 +108,21 @@ func (f *ec2Fake) SpotPriceUSD(_ context.Context, _, _ string) (float64, error) 
 	return f.spotUSD, nil
 }
 
+// OnDemandPricesUSD returns deterministic on-demand prices from the pinned
+// baseline table, so the simulator (and credential-free conformance) exercises
+// the on-demand refresh path with no network call. Types absent from the table
+// are omitted, exactly as a real offer file omits a type the region does not
+// offer (the caller then keeps its pinned fallback).
+func (f *ec2Fake) OnDemandPricesUSD(_ context.Context, instanceTypes []string) (map[string]float64, error) {
+	out := make(map[string]float64, len(instanceTypes))
+	for _, t := range instanceTypes {
+		if v, ok := onDemandUSEast1[t]; ok {
+			out[t] = v
+		}
+	}
+	return out, nil
+}
+
 // DescribeInstanceCapacities resolves capacities from the pinned table, so the
 // simulator (and credential-free conformance) exercises the resolve path
 // deterministically. Types absent from the table are omitted, exactly as a real

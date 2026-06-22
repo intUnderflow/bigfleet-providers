@@ -39,6 +39,7 @@ sourced see [Pricing & interruption](/providers/aws/pricing-and-interruption/).
 | `--bootstrap-hook` | `/opt/bigfleet/bootstrap` | AMI path that consumes the delivered bootstrap blob and joins the cluster. See [the AMI contract](#the-ami-hook-contract). |
 | `--base-user-data` | _(empty)_ | Path to the generic, pre-binding bootstrap baked into user-data at launch. |
 | `--spot-refresh` | `5m` | Spot price refresh interval (never on the List hot path). |
+| `--ondemand-refresh` | `60m` | On-demand price refresh interval from the public AWS Price List Bulk API (never on the List hot path; `0` = seed/fallback table only). |
 | `--spot-interruption-queue` | _(empty)_ | SQS queue URL fed by an EventBridge spot-interruption/rebalance rule. Enables observed-interruption escalation + `sqs:ReceiveMessage`/`sqs:DeleteMessage`. |
 | `--reconcile-interval` | `2m` | Background EC2→inventory reconcile interval (`0` = off). |
 | `--metrics-addr` | `:9090` | Address for `/metrics`, `/healthz`, `/readyz`. Empty = disabled. |

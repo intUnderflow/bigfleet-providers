@@ -59,6 +59,7 @@ backend — which is exactly how `make conformance-aws` runs credential-free.
 | `--state` | durable state file (empty = in-memory) |
 | `--tls-cert/--tls-key/--tls-ca` | TLS / mTLS |
 | `--spot-refresh` | spot price refresh interval (default 5m) |
+| `--ondemand-refresh` | on-demand price refresh interval from the AWS Price List Bulk API (default 60m; 0 = seed table only) |
 
 ### Offerings
 
@@ -113,11 +114,17 @@ tag conditions in production.
 
 ## Pricing
 
-- **On-demand**: a pinned, region-keyed table (`pricing.go`, `onDemandByRegion`).
-  Deterministic and off the `List` hot path. `us-east-1`/`us-west-2` are
-  tabulated; other regions fall back to the baseline with a warning. Regenerate a
-  region's table with `go run ./cmd/genpricing` (public AWS Price List API, no
-  credentials).
+Both prices are live-refreshed on background timers into in-memory caches; the
+`List`/seed path only ever reads the cache, never the network.
+
+- **On-demand**: live from the **public AWS Price List Bulk API** (region offer
+  JSON, no credentials), refreshed on `--ondemand-refresh` (default `60m`). The
+  pinned `onDemandByRegion` table (`pricing.go`) is the **seed/fallback** —
+  it floors a price before the first refresh and backstops a failed/missing one,
+  so a successful refresh never zeroes a price. An `on_demand`/`reserved`
+  offering whose type has no live **and** no seed price makes the provider
+  **fail closed at startup** (a `0` would win the cost ranking). Regenerate the
+  seed table with `go run ./cmd/genpricing`.
 - **Spot**: the current price from `ec2:DescribeSpotPriceHistory`, cached and
   refreshed on `--spot-refresh`, never fetched per `List`. Cold-cache reads fall
   back to a conservative fraction of on-demand until the first refresh.

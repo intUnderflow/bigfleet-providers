@@ -1,6 +1,6 @@
 ---
 title: Pricing & interruption
-description: How the AWS provider sources price_per_hour and SPOT interruption_probability, why spot is never zero, and how to refresh and regenerate the pinned tables.
+description: How the AWS provider live-refreshes price_per_hour (on-demand and spot) and SPOT interruption_probability off the List hot path, why prices never read zero, and how the pinned table backs it up.
 sidebar:
   order: 4
   label: Pricing & interruption
@@ -34,29 +34,56 @@ Price is sourced per capacity type (`pricing.go`):
 
 | Capacity type | Source |
 |---|---|
-| `on_demand` | Pinned per-region on-demand table (`onDemandByRegion`). |
+| `on_demand` | Live from the public AWS Price List Bulk API, cached + refreshed on a timer; pinned table is the seed/fallback. |
 | `reserved` | Priced at on-demand unless you model a real reservation discount. |
 | `spot` | Current price from `ec2:DescribeSpotPriceHistory`, cached + refreshed on a timer. |
 | `bare_metal` | `0` — already paid for. |
 
-### On-demand: a pinned, region-keyed table
+### On-demand: live-refreshed, table as fallback
 
-On-demand prices come from `onDemandByRegion`, a pinned table keyed by region
-then instance type. On-demand prices are stable, so a pinned table is the right
-model: it is deterministic and has no runtime pricing-API dependency on the
-`List` hot path. It is **not** load-bearing for correctness — it feeds the
-engine's *relative* cost ranking — but keep it roughly accurate.
+On-demand prices are **live-refreshed** from the **public AWS Price List Bulk
+API** (the per-region offer JSON — no credentials), into a mutex-guarded
+in-memory map. This is the same source `cmd/genpricing` reads offline, now read
+at runtime on a timer (`--ondemand-refresh`, default `60m`) instead of pinned
+once and left to drift from the bill. One bulk fetch per refresh covers every
+offered type; it runs on a background goroutine, never on the `List`/seed path.
 
-`us-east-1` is the authoritative baseline, and `us-west-2` is priced identically
-for these families. A region with **no** pinned table of its own falls back to
-the baseline and logs a warning (the prices are then approximate). The empty
-region — the fake/dev backend, which does not price-rank — falls back silently.
+The pinned `onDemandByRegion` table is now the **startup seed and fallback**,
+not the source of truth: it floors a price before the first refresh and is kept
+whenever a refresh fails or omits a type, so a successful refresh never zeroes an
+on-demand price. Pricing is **not** load-bearing for correctness — it feeds the
+engine's *relative* cost ranking — but a `0` would falsely read as the cheapest
+capacity, so the provider never serves it for a priced offering (see
+[Fail-closed](#fail-closed-on-unpriced-offerings)).
 
-#### Regenerating a region's table
+`us-east-1` is the seed baseline, and `us-west-2` is seeded identically for these
+families. A region with **no** seed table of its own falls back to the baseline
+seed and logs a warning; the live refresh is still authoritative for that region
+once it runs. The empty region — the fake/dev backend, which does not price-rank
+— falls back silently.
 
-Rather than hand-editing prices, regenerate a region's table with the
-`genpricing` tool. It reads the **public** AWS Price List Bulk API — no AWS
-credentials — and prints a Go map literal you paste into `onDemandByRegion`:
+The refresher's outcome is recorded on
+`bigfleet_aws_ondemand_refresh_total{outcome}`, and the time of the last
+successful refresh on `bigfleet_aws_ondemand_price_last_success_timestamp_seconds`
+(staleness = `now - that`); each underlying fetch shows up as
+`bigfleet_aws_ec2_api_calls_total{op="PriceListBulk"}`. See
+[Observability](/providers/aws/observability/).
+
+#### Fail-closed on unpriced offerings
+
+At startup, after the first on-demand warm, the provider checks every
+`on_demand` / `reserved` offering: if an instance type has **neither** a live
+price **nor** a pinned seed, it would emit `price_per_hour = 0`, which wins the
+cost ranking. Rather than mis-rank silently, the provider **refuses to start**
+and names the offending types — add them to `onDemandByRegion` (regenerate with
+`genpricing`, below) or drop them from your offerings.
+
+#### Seeding / refreshing the fallback table
+
+The pinned seed table only needs updating occasionally (it is just the
+backstop). Regenerate a region's seed with the `genpricing` tool — it reads the
+same public AWS Price List Bulk API and prints a Go map literal you paste into
+`onDemandByRegion`:
 
 ```sh
 cd providers/aws
@@ -71,8 +98,8 @@ go run ./cmd/genpricing -region eu-west-1 \
 
 It selects the plain on-demand SKU (Linux, Shared tenancy, no pre-installed
 software), so Windows / Dedicated / Reserved SKUs for the same type are ignored.
-The offer files are large (tens of MB), so this is an occasional offline
-maintenance step, never a runtime dependency.
+The offer files are large (tens of MB); the runtime refresher streams the same
+file on its timer.
 
 ### Spot: refreshed from the price history
 
@@ -169,7 +196,7 @@ Three substrate facts could be region-shaped. Where they stand now:
 |---|---|---|
 | `allocatable` (vCPU/mem) | `ec2:DescribeInstanceTypes` | **Authoritative** — resolved live for any region; the pinned table is only an offline fallback. |
 | Spot `price_per_hour` | `ec2:DescribeSpotPriceHistory` | **Authoritative** — fetched live per region, correct everywhere. |
-| On-demand `price_per_hour` | `onDemandByRegion` table | Tabulated for `us-east-1`/`us-west-2`; other regions fall back to the baseline (approximate) until you regenerate. |
+| On-demand `price_per_hour` | AWS Price List Bulk API (region offer JSON) | **Authoritative** — fetched live per region on `--ondemand-refresh`; the `onDemandByRegion` table is only the seed/fallback. |
 | Spot `interruption_probability` buckets | `advisorBucket` (`interruption.go`) | **Still pinned us-east-1 approximations** for every region. |
 
 So the only genuinely us-east-1-shaped table left is the interruption advisor
@@ -181,18 +208,22 @@ spot interruption-probability buckets are us-east-1 approximations; verify advis
 ```
 
 and `newPricing` logs its own warning if the region has no pinned on-demand
-table. Both values drift over time even within us-east-1.
+seed table (the live refresh is still authoritative). Both the seed prices and
+the advisor buckets drift over time even within us-east-1.
 
 ### How to regenerate
 
-- **On-demand prices** — run the `genpricing` tool (see
-  [above](#regenerating-a-regions-table)); it reads the public AWS Price List
-  Bulk API and prints a Go map literal for `onDemandByRegion`.
+- **On-demand seed prices** — run the `genpricing` tool (see
+  [above](#seeding--refreshing-the-fallback-table)); it reads the public AWS
+  Price List Bulk API and prints a Go map literal for `onDemandByRegion`. This is
+  only the fallback; the runtime refresher reads the same source live.
 - **Advisor buckets** (`advisorBucket` in `interruption.go`): refresh from the
   Spot Instance Advisor JSON feed for your region. Keep the bucket index in the
   `0`–`4` range; any type you drop falls back to the non-zero middle bucket
   rather than to `0`.
 
-A type present in your offerings but absent from `onDemandByRegion` prices at the
-zero value of the map; absent from `advisorBucket` it falls back to the middle
-SPOT bucket — so keep both tables in sync with your offerings.
+A type present in your `on_demand` / `reserved` offerings but absent from both
+the live offer file and the `onDemandByRegion` seed makes the provider
+**fail closed at startup** (it would otherwise price at `0`); a SPOT type absent
+from `advisorBucket` falls back to the non-zero middle bucket. Keep the seed
+table and advisor buckets in sync with your offerings.

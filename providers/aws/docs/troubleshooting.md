@@ -16,7 +16,7 @@ EC2/SSM call counters are the fastest way to see *which* AWS API is unhappy:
 
 ```sh
 # What's the provider doing right now?
-curl -s localhost:9090/metrics | grep -E 'bigfleet_aws_(ec2_api_calls|grpc_requests|reconcile|spot_refresh|spot_interruptions|panics)_total'
+curl -s localhost:9090/metrics | grep -E 'bigfleet_aws_(ec2_api_calls|grpc_requests|reconcile|spot_refresh|ondemand_refresh|spot_interruptions|panics)_total'
 
 # gRPC error rate, by method and code:
 curl -s localhost:9090/metrics | grep bigfleet_aws_grpc_requests_total
@@ -203,26 +203,33 @@ never blocks on the network on the List hot path, so a cold pair reports a
   has recent history — `no spot price history for <type> in <zone>` means AWS
   returned none in the 6h window (often a zone where that type isn't offered).
 
-## Region-table mismatch
+## On-demand price won't refresh / startup refuses to start
 
-The pinned on-demand prices, advisor interruption buckets, and instance-type
-resources are **us-east-1 approximations**. Spot prices are live
-(`DescribeSpotPriceHistory`), but on-demand and the interruption *forecast* are
-pinned.
+On-demand prices are **live-refreshed** from the public AWS Price List Bulk API
+(`--ondemand-refresh`, default 60m); the pinned `onDemandByRegion` table is only
+the seed/fallback. The refresh is best-effort, but an offering with **no** price
+at all is rejected at startup.
 
-- **Symptom:** at startup, `pinned pricing/interruption/instance-type tables are
-  us-east-1 approximations; verify them for this region` whenever `--region` is
-  not `us-east-1`. On-demand `price_per_hour` looks off for your region, or a
-  type you offer isn't in the table (its on-demand price reads 0 / its spot
-  fallback is 0).
-- **Diagnose:** compare your offered types against the pinned tables; an
-  unpinned spot type also falls back to the non-zero **middle** advisor bucket
-  for its forecast — never 0, but generic.
-- **Fix:** regenerate the on-demand table and advisor buckets for your region
-  (an offline script feeding the pinned maps) per
-  [Pricing & interruption](/providers/aws/pricing-and-interruption/). These feed
-  the engine's *relative* cost ranking, so keep them roughly right even though
-  they aren't strictly load-bearing.
+- **Symptom A (won't start):** `on-demand pricing: instance types have no live or
+  pinned price (would emit price_per_hour=0, winning the cost signal): <types>`.
+  A named `on_demand`/`reserved` offering type has neither a live offer-file
+  price nor a pinned seed.
+- **Symptom B (stale):** `on-demand price refresh failed; serving last-known
+  on-demand prices from cache/seed`, `bigfleet_aws_ondemand_refresh_total{outcome="error"}`
+  rising, or `time() - bigfleet_aws_ondemand_price_last_success_timestamp_seconds`
+  growing past a few intervals.
+- **Diagnose:** the startup warm is best-effort and bounded (90s); a failed
+  refresh logs `pricing: on-demand price fetch failed; keeping last-known
+  prices`. The provider needs egress to `pricing.us-east-1.amazonaws.com` (no
+  credentials) — check NAT/proxy. For Symptom A, the offer file simply doesn't
+  price that type in this region.
+- **Fix:** for Symptom A, add the types to `onDemandByRegion` (regenerate the
+  seed with `cmd/genpricing`) or remove them from your offerings. For Symptom B,
+  it self-heals on the next successful refresh; staleness only degrades the
+  engine's *relative* cost ranking, never correctness (last-known prices keep
+  serving). The advisor interruption buckets and instance-type resources are
+  separately us-east-1 approximations — see
+  [Pricing & interruption](/providers/aws/pricing-and-interruption/).
 
 ## Readiness never goes green
 

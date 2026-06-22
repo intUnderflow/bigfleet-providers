@@ -284,6 +284,43 @@ func TestInterruption_MarkWarningClampsToOne(t *testing.T) {
 	}
 }
 
+// Fail closed: an on-demand offering whose instance type has neither a live
+// price nor a pinned seed must be reported as unpriced, so startup can reject it
+// rather than emit price_per_hour=0 (which would win the shard's cost ranking).
+func TestUnpricedOnDemand_FailsClosed(t *testing.T) {
+	fake := newEC2Fake()
+	logger := quietLogger()
+	offs := []offering{
+		// Seeded type: priced from the pinned table.
+		{InstanceType: "m6i.large", Zone: "us-east-1a", Capacity: "on_demand", Count: 1},
+		// Not in the seed table and not returned by the fake's price source.
+		{InstanceType: "z9.mega", Zone: "us-east-1a", Capacity: "on_demand", Count: 1},
+		// Bare metal is legitimately 0 — must NOT be flagged.
+		{InstanceType: "z9.metal", Zone: "us-east-1a", Capacity: "bare_metal", Count: 1},
+	}
+	b, err := newAWSBackend("aws-test", "us-east-1", fake, offs, newPricing("us-east-1", fake, logger), newInterruption(), nil, logger)
+	if err != nil {
+		t.Fatalf("newAWSBackend: %v", err)
+	}
+	// Warm from the (fake) live source first: z9.mega still resolves nowhere.
+	b.refreshOnDemandPrices(context.Background())
+
+	bad := b.unpricedOnDemand()
+	if len(bad) != 1 || bad[0] != "z9.mega" {
+		t.Fatalf("unpricedOnDemand = %v, want [z9.mega] (seeded + bare-metal excluded)", bad)
+	}
+}
+
+// A fully-seeded offering set must report nothing unpriced (the default fake
+// path stays green and credential-free).
+func TestUnpricedOnDemand_AllPricedIsEmpty(t *testing.T) {
+	b, _ := newTestBackend(t, 8)
+	b.refreshOnDemandPrices(context.Background())
+	if bad := b.unpricedOnDemand(); len(bad) != 0 {
+		t.Fatalf("unpricedOnDemand = %v, want empty", bad)
+	}
+}
+
 func TestPricing_OnDemandFromTableSpotFromCache(t *testing.T) {
 	fake := newEC2Fake()
 	fake.spotUSD = 0.0123

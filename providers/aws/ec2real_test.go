@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
@@ -124,7 +126,7 @@ func (f *fakeSSM) sentScript() string {
 func newTestReal(e ec2API, s ssmAPI) *ec2Real {
 	cfg := ec2RealConfig{Region: "us-east-1", AMI: "ami-123", SSMPollInterval: time.Millisecond, RunWaitTimeout: 5 * time.Second}
 	cfg.withDefaults()
-	return &ec2Real{cfg: cfg, ec2: e, ssm: s, logger: quietLogger()}
+	return &ec2Real{cfg: cfg, ec2: e, ssm: s, http: &http.Client{}, logger: quietLogger()}
 }
 
 func runningInstance(id, az, privateDNS string, tags []ec2types.Tag, spot bool) ec2types.Instance {
@@ -260,6 +262,59 @@ func TestSpotPriceUSD_NewestEntry(t *testing.T) {
 	empty := newTestReal(&fakeEC2{spot: &ec2.DescribeSpotPriceHistoryOutput{}}, &fakeSSM{})
 	if _, err := empty.SpotPriceUSD(context.Background(), "x", "z"); err == nil {
 		t.Error("empty spot history should error")
+	}
+}
+
+// The on-demand refresher reads the live offer file over HTTP. Serve a trimmed
+// offer file from an httptest server and assert the real client fetches and
+// extracts the plain on-demand price for the requested region.
+func TestOnDemandPricesUSD_FetchesAndExtracts(t *testing.T) {
+	const offer = `{
+      "products": {
+        "SKU_M6I": {"attributes": {
+          "instanceType": "m6i.large", "operatingSystem": "Linux", "tenancy": "Shared",
+          "preInstalledSw": "NA", "capacitystatus": "Used", "operation": "RunInstances"}}
+      },
+      "terms": {"OnDemand": {
+        "SKU_M6I": {"SKU_M6I.T": {"priceDimensions": {
+          "SKU_M6I.T.D": {"pricePerUnit": {"USD": "0.0975000000"}}}}}
+      }}
+    }`
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(offer))
+	}))
+	defer srv.Close()
+
+	r := newTestReal(&fakeEC2{}, &fakeSSM{})
+	r.cfg.Region = "eu-west-1"
+	r.cfg.PriceListBaseURL = srv.URL
+
+	got, err := r.OnDemandPricesUSD(context.Background(), []string{"m6i.large", "absent.type"})
+	if err != nil {
+		t.Fatalf("OnDemandPricesUSD: %v", err)
+	}
+	want := map[string]float64{"m6i.large": 0.0975}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("prices = %v, want %v", got, want)
+	}
+	// The region must be reflected in the offer-file path.
+	if !strings.Contains(gotPath, "eu-west-1") {
+		t.Errorf("offer path %q does not carry the region", gotPath)
+	}
+}
+
+func TestOnDemandPricesUSD_HTTPErrorPropagates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	r := newTestReal(&fakeEC2{}, &fakeSSM{})
+	r.cfg.PriceListBaseURL = srv.URL
+	if _, err := r.OnDemandPricesUSD(context.Background(), []string{"m6i.large"}); err == nil {
+		t.Fatal("expected an error for a non-200 price-list response")
 	}
 }
 
