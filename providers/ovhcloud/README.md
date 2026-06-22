@@ -62,6 +62,9 @@ backend — exactly how `make conformance-ovhcloud` runs credential-free.
 | `--ssh-key` / `--ssh-user` | SSH key + user for Configure/Drain delivery |
 | `--bootstrap-hook` | image path that applies the delivered bootstrap blob |
 | `--eur-usd` | EUR→USD rate applied to OVH prices (default `1.08`) |
+| `--price-refresh` | live OVH-catalog price-refresh interval (default `45m`; `0` = off, seed only) |
+| `--price-subsidiary` | EUR subsidiary for the live price catalog (default `FR`) |
+| `--flavor-price` | `flavor=USD/hour` overrides (win over live + seed), comma-separated |
 | `--offerings` / `--seed-count` | offerings JSON file (or a default mix sized by seed-count) |
 | `--region-a` / `--region-b` | regions for the default offerings (`GRA`/`SBG`) |
 | `--state` | durable state file; empty = in-memory only |
@@ -108,9 +111,14 @@ because it breaks that invariant.
 
 ## Pricing & interruption
 
-`price_per_hour` is OVH's published **hourly** on-demand rate from a pinned,
-version-controlled **EUR table** (OVH exposes no reliable price API for v1)
-converted to **USD** with `--eur-usd`, read in memory off the hot path.
+`price_per_hour` is OVH's published **hourly** on-demand rate, live-refreshed
+from OVH's public **order catalog** (`<flavor>.consumption`, credential-free) into
+a mutex-guarded map every `--price-refresh` (default `45m`) and converted to
+**USD** with `--eur-usd` — read in memory off the hot path, never fetched on
+`List`. A dated **EUR seed table** warms the cache and is the fallback if a
+refresh fails (logged loudly as `source=manual`; last-success is on a metric); an
+offering whose flavor has no seed price or `--flavor-price` override is rejected at
+startup (fail closed, never `price_per_hour=0`).
 `interruption_probability` is a **genuine `0.0`**: OVH Public Cloud is on-demand
 only, with no spot market, so the provider declares `ON_DEMAND` for every machine
 and does not claim the `spot` conformance profile. A `spot` offering is rejected

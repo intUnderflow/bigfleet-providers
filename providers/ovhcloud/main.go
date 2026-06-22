@@ -58,7 +58,9 @@ func run() error {
 		keyName      = flag.String("key-name", "", "OpenStack keypair name injected for SSH access (ovh backend)")
 		network      = flag.String("network", "Ext-Net", "OpenStack network name/id to attach (ovh backend; empty = project default)")
 		eurUSD       = flag.Float64("eur-usd", defaultEURtoUSD, "EUR->USD conversion rate applied to OVH prices")
-		flavorPrice  = flag.String("flavor-price", "", "comma list of flavor=USD/hour overrides for flavors missing from the pinned price table (e.g. b2-7=0.03,custom=0.5)")
+		flavorPrice  = flag.String("flavor-price", "", "comma list of flavor=USD/hour overrides (win over live + seed prices) for flavors the catalog omits or with a negotiated rate (e.g. b2-7=0.03,custom=0.5)")
+		priceRefresh = flag.Duration("price-refresh", 45*time.Minute, "live OVH catalog price-refresh interval (0 = off; prices then stay on the dated seed table)")
+		priceSub     = flag.String("price-subsidiary", "FR", "OVH subsidiary whose public order catalog supplies live hourly prices; must be a EUR subsidiary (FR, DE, IE, ES, IT, NL, PT, FI, ...) since --eur-usd assumes EUR")
 		sshKey       = flag.String("ssh-key", "", "path to the SSH private key used for Configure/Drain delivery (ovh backend)")
 		sshUser      = flag.String("ssh-user", "ubuntu", "SSH user for Configure/Drain delivery (ovh backend)")
 		bootstrapHk  = flag.String("bootstrap-hook", "/opt/bigfleet/bootstrap", "image path that applies the delivered bootstrap blob")
@@ -140,13 +142,40 @@ func run() error {
 		userData = b
 	}
 
-	pr := newPricing(*eurUSD)
+	// Live pricing: the public OVH order catalog (credential-free) supplies hourly
+	// flavor prices, refreshed off the List hot path into the pricing cache. Only
+	// the real backend wires it — the fake backend stays offline and deterministic
+	// (no live calls), so credential-free conformance reproduces, and prices there
+	// come from the dated seed table.
+	var priceSrc priceSource
+	if mode == "ovh" {
+		priceSrc = newCatalogPriceSource(ovhCatalogEndpoint, *priceSub, logger, m.observeAPI)
+	}
+	pr := newPricing(*eurUSD, priceSrc, logger)
 	if err := applyPriceOverrides(pr, *flavorPrice); err != nil {
 		return err
 	}
 	backend, err := newOVHBackend(*providerLbl, *region, *image, client, offs, pr, userData, logger)
 	if err != nil {
 		return err
+	}
+
+	// Warm the price cache from the live catalog before the first List (best-effort,
+	// bounded). On failure the dated seed table still serves a sane price — the
+	// fail-closed startup check guaranteed every offered flavor has one.
+	if priceSrc != nil {
+		warmCtx, cancelWarm := context.WithTimeout(ctx, 30*time.Second)
+		if missing, perr := backend.refreshPrices(warmCtx); perr != nil {
+			logger.Warn("pricing: initial live catalog refresh failed; serving the dated seed table (source=manual) until a refresh succeeds", "err", perr)
+		} else {
+			m.priceLastSuccess.SetToCurrentTime()
+			if missing > 0 {
+				logger.Warn("pricing: some offered flavors are absent from the OVH catalog; they use the dated seed/override (source=manual)", "missing", missing)
+			}
+		}
+		cancelWarm()
+	} else {
+		logger.Warn("pricing: no live OVH catalog source (fake backend / dev); prices come from the dated seed table (source=manual)")
 	}
 
 	// Resolve allocatable (vCPU/memory) for the offered flavors from the Nova
@@ -199,8 +228,11 @@ func run() error {
 		obs.start(logger)
 	}
 
-	// Background loop: OpenStack->inventory reconcile.
+	// Background loops: OpenStack->inventory reconcile + live catalog price refresh.
 	go runReconciler(ctx, srv, m, *reconcile, logger)
+	if priceSrc != nil {
+		go runPriceRefresher(ctx, backend, m, *priceRefresh, logger)
+	}
 
 	// Mark ready: serving traffic + probes go green.
 	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
@@ -254,6 +286,36 @@ func runReconciler(ctx context.Context, srv *providerkit.Server, m *metrics, int
 				logger.Warn("reconcile failed", "err", err)
 			}
 			m.reconcile.WithLabelValues(outcome).Inc()
+		}
+	}
+}
+
+// runPriceRefresher periodically pulls live hourly prices from the OVH catalog
+// into the pricing cache (off the List hot path). A fetch error keeps the prior
+// live/seed prices (source=manual) and records an error outcome; a success
+// stamps the last-success gauge so staleness is alertable.
+func runPriceRefresher(ctx context.Context, backend *ovhBackend, m *metrics, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			rctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			_, err := backend.refreshPrices(rctx)
+			cancel()
+			outcome := "success"
+			if err != nil {
+				outcome = "error"
+				logger.Warn("price refresh failed", "err", err)
+			} else {
+				m.priceLastSuccess.SetToCurrentTime()
+			}
+			m.priceRefresh.WithLabelValues(outcome).Inc()
 		}
 	}
 }

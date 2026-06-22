@@ -32,12 +32,14 @@ global default), plus the standard Go/process collectors.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `bigfleet_ovh_api_calls_total` | counter | `op`, `outcome` | OpenStack API calls by operation (`CreateServer`, `DeleteServer`, `StartServer`, `DescribeManaged`, `Configure`, `Drain`, `Flavors`) and `success`/`error`. |
-| `bigfleet_ovh_api_duration_seconds` | histogram | `op` | OpenStack API call latency by operation. |
+| `bigfleet_ovh_api_calls_total` | counter | `op`, `outcome` | OpenStack/OVH API calls by operation (`CreateServer`, `DeleteServer`, `StartServer`, `DescribeManaged`, `Configure`, `Drain`, `Flavors`, `Catalog`) and `success`/`error`. |
+| `bigfleet_ovh_api_duration_seconds` | histogram | `op` | OpenStack/OVH API call latency by operation. |
 | `bigfleet_ovh_grpc_requests_total` | counter | `method`, `code` | CapacityProvider gRPC requests by method and gRPC status code. |
 | `bigfleet_ovh_grpc_request_duration_seconds` | histogram | `method` | gRPC request latency by method. |
 | `bigfleet_ovh_panics_total` | counter | — | Recovered panics in gRPC handlers (should stay 0). |
 | `bigfleet_ovh_reconcile_total` | counter | `outcome` | Background OpenStack→inventory reconcile runs by outcome. |
+| `bigfleet_ovh_price_refresh_total` | counter | `outcome` | Background live-catalog price-refresh runs by outcome. |
+| `bigfleet_ovh_price_last_success_timestamp_seconds` | gauge | — | Unix time of the last successful live price refresh (`0` = never; prices on the dated seed table, `source=manual`). Alert on age. |
 
 ### Useful queries
 
@@ -53,6 +55,10 @@ histogram_quantile(0.99, sum by (le) (rate(bigfleet_ovh_grpc_request_duration_se
 
 # Reconcile failures
 sum(rate(bigfleet_ovh_reconcile_total{outcome="error"}[15m]))
+
+# Stale pricing: hours since the last successful live price refresh
+# (high / ever-growing => prices are drifting on the seed table, source=manual)
+(time() - bigfleet_ovh_price_last_success_timestamp_seconds) / 3600
 ```
 
 A `FailedPrecondition` on a mutating RPC is **always** a fencing rejection (the

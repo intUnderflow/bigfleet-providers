@@ -67,14 +67,15 @@ func newOVHBackend(providerName, region, image string, client ovhClient, offerin
 		if region != "" && off.Region != region {
 			return nil, fmt.Errorf("ovh backend: offering %s is in region %q but the provider is configured for region %q (one process per region; every offering must match --region)", off.Flavor, off.Region, region)
 		}
-		// Price comes from a pinned EUR table (OVH has no price API). A flavor
-		// absent from the table (and with no override) would publish
-		// price_per_hour=0 — i.e. effectively free — which is the global minimum
-		// of the shard's cost-ranking signal, so that flavor would always win.
-		// Reject it at construction (a real correctness hazard, not cosmetic):
-		// add the flavor to the pinned table or set a price override.
+		// Prices are refreshed live from the OVH order catalog, but the catalog may
+		// be unreachable at startup, so fail closed against the GUARANTEED price
+		// sources only: the dated EUR seed table and operator overrides. A flavor
+		// with neither would publish price_per_hour=0 — i.e. effectively free —
+		// which is the global minimum of the shard's cost-ranking signal, so that
+		// flavor would always win. Reject it at construction (a real correctness
+		// hazard, not cosmetic): add the flavor to the seed table or set an override.
 		if !pr.known(off.Flavor) {
-			return nil, fmt.Errorf("ovh backend: offering flavor %q has no pinned price (price_per_hour would be 0, which always wins cost ranking) — add it to the pinned table in pricing.go or pass --flavor-price %s=<USD/hour>", off.Flavor, off.Flavor)
+			return nil, fmt.Errorf("ovh backend: offering flavor %q has no seed price or override (price_per_hour would be 0, which always wins cost ranking) — add it to the seed table in pricing.go or pass --flavor-price %s=<USD/hour>", off.Flavor, off.Flavor)
 		}
 	}
 	return &ovhBackend{
@@ -331,6 +332,16 @@ func (b *ovhBackend) resolveHost(ctx context.Context, m providerkit.Machine) (se
 // pinned table if present).
 func (b *ovhBackend) refreshFlavors(ctx context.Context) int {
 	return b.flavors.resolve(ctx, b.offeredFlavors())
+}
+
+// refreshPrices pulls current hourly prices from the live OVH catalog into the
+// pricing cache for the offered flavors. Call once at startup (to warm the cache
+// before the first List) and on a timer; never on the List hot path. Returns the
+// number of offered flavors the catalog did not price (each still covered by the
+// dated seed/override) and any fetch error. A no-op when no live source is wired
+// (fake backend / dev), where prices stay on the deterministic seed table.
+func (b *ovhBackend) refreshPrices(ctx context.Context) (int, error) {
+	return b.pricing.refresh(ctx, b.offeredFlavors())
 }
 
 // offeredFlavors returns the distinct flavors across the configured offerings.

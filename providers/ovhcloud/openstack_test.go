@@ -72,7 +72,7 @@ func TestPowerActionFor(t *testing.T) {
 }
 
 func TestApplyPriceOverrides(t *testing.T) {
-	p := newPricing(1.0)
+	p := newPricing(1.0, nil, quietLogger())
 	if err := applyPriceOverrides(p, "custom-1=0.5, b2-7=0.03"); err != nil {
 		t.Fatalf("applyPriceOverrides: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestApplyPriceOverrides(t *testing.T) {
 		t.Errorf("empty spec should be a no-op, got %v", err)
 	}
 	for _, bad := range []string{"noequals", "flav=", "flav=abc", "flav=-1", "flav=0"} {
-		if err := applyPriceOverrides(newPricing(1.0), bad); err == nil {
+		if err := applyPriceOverrides(newPricing(1.0, nil, quietLogger()), bad); err == nil {
 			t.Errorf("expected error for %q", bad)
 		}
 	}
@@ -102,7 +102,7 @@ func TestShellQuote_EscapesSingleQuote(t *testing.T) {
 // price uses the pinned table (EUR→USD), an override when set, and reports 0 +
 // not-known for an unpriced flavor (which startup warns about).
 func TestPricing_TableOverrideAndUnknown(t *testing.T) {
-	p := newPricing(1.10)
+	p := newPricing(1.10, nil, quietLogger())
 	if v := p.price("b2-7"); v <= 0 {
 		t.Errorf("on-demand b2-7 price = %v, want > 0", v)
 	}
