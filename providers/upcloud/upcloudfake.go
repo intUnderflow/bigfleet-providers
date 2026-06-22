@@ -21,13 +21,19 @@ type upcloudFake struct {
 	servers  map[string]*serverInstance // keyed by server UUID
 	storages map[string]string          // server UUID -> attached storage UUID (the leak-free Delete must clear this)
 	byToken  map[string]string          // idempotency token -> server UUID
+	// priceFactor scales the pinned EUR table to synthesize a deterministic LIVE
+	// price per plan, so a credential-free run exercises the live-refresh path and
+	// tests can assert the refresher overlays the table. Defaults to 1.0 (live ==
+	// pinned baseline); a test sets a distinct factor to prove the live value flows.
+	priceFactor float64
 }
 
 func newUpcloudFake() *upcloudFake {
 	return &upcloudFake{
-		servers:  make(map[string]*serverInstance),
-		storages: make(map[string]string),
-		byToken:  make(map[string]string),
+		servers:     make(map[string]*serverInstance),
+		storages:    make(map[string]string),
+		byToken:     make(map[string]string),
+		priceFactor: 1.0,
 	}
 }
 
@@ -138,6 +144,27 @@ func (f *upcloudFake) DescribePlanCapacities(_ context.Context, plans []string) 
 	for _, p := range plans {
 		if c, ok := planTable[p]; ok {
 			out[p] = c
+		}
+	}
+	return out, nil
+}
+
+// DescribePlanPrices synthesizes a deterministic live price (EUR/hour) for each
+// requested plan from the pinned table scaled by priceFactor, so the simulator
+// (and credential-free conformance) exercises the live-refresh path
+// reproducibly. Plans absent from the table are omitted, exactly as the real
+// /price endpoint omits a plan it does not price.
+func (f *upcloudFake) DescribePlanPrices(_ context.Context, plans []string) (map[string]float64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	factor := f.priceFactor
+	if factor <= 0 {
+		factor = 1.0
+	}
+	out := make(map[string]float64, len(plans))
+	for _, p := range plans {
+		if eur, ok := onDemandEURHourly[p]; ok {
+			out[p] = eur * factor
 		}
 	}
 	return out, nil

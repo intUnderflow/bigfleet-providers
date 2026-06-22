@@ -21,7 +21,7 @@ func newTestBackend(t *testing.T, seedCount int) (*upcloudBackend, *upcloudFake)
 	fake := newUpcloudFake()
 	logger := quietLogger()
 	offs := defaultOfferings(seedCount, "fi-hel1", "de-fra1")
-	b, err := newUpcloudBackend("upcloud-test", "01000000-0000-4000-8000-000000000000", fake, offs, newPricing(defaultEURtoUSD, logger), nil, logger)
+	b, err := newUpcloudBackend("upcloud-test", "01000000-0000-4000-8000-000000000000", fake, offs, newPricing(defaultEURtoUSD, fake, logger), nil, logger)
 	if err != nil {
 		t.Fatalf("newUpcloudBackend: %v", err)
 	}

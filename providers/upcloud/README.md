@@ -59,7 +59,8 @@ backend — exactly how `make conformance-upcloud` runs credential-free.
 | `--template` | OS template storage UUID cloned at create (required for the real backend) |
 | `--ssh-key` / `--ssh-pubkey` / `--ssh-user` | SSH key, injected public key, and user for Configure/Drain delivery |
 | `--bootstrap-hook` | image path that applies the delivered bootstrap blob |
-| `--eur-usd` | EUR→USD rate applied to the pinned price table (default `1.08`) |
+| `--eur-usd` | EUR→USD rate applied to UpCloud prices, live and pinned (default `1.08`) |
+| `--price-refresh` | live price refresh interval (default `45m`; `0` = off) |
 | `--offerings` / `--seed-count` | offerings JSON file (or a default mix sized by seed-count) |
 | `--zone-a` / `--zone-b` | zones for the default offerings (`fi-hel1`/`de-fra1`) |
 | `--state` | durable state file; empty = in-memory only |
@@ -109,9 +110,14 @@ confidential channel.
 
 ## Pricing & interruption
 
-`price_per_hour` is UpCloud's published **hourly** plan rate from a pinned EUR
-table converted to **USD** with `--eur-usd` (or an operator-declared
-`price_usd_per_hour` per offering). `interruption_probability` is a **genuine
+`price_per_hour` is UpCloud's published **hourly** plan rate, reported in
+**USD**. It is **live-refreshed from the UpCloud `/price` API** off the `List`
+hot path (every `--price-refresh`, default `45m`), with a pinned EUR table as the
+startup seed and outage fallback — both converted with `--eur-usd` (or an
+operator-declared `price_usd_per_hour` per offering, which wins). The provider
+**fails closed**: an offered plan with no price (live, pinned, or override) would
+advertise free capacity, so the provider refuses to start rather than emit
+`0.0`. `interruption_probability` is a **genuine
 `0.0`**: UpCloud cloud servers are on-demand only, with no spot market, so the
 provider declares `ON_DEMAND` for every machine and does not claim the `spot`
 conformance profile. A `spot` offering is rejected at startup.

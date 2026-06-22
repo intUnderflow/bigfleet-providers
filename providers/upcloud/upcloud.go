@@ -67,6 +67,16 @@ type upcloudClient interface {
 	// Plans UpCloud does not return are simply absent from the result (the caller
 	// falls back to the pinned table).
 	DescribePlanCapacities(ctx context.Context, plans []string) (map[string]planCapacity, error)
+
+	// DescribePlanPrices resolves the live hourly on-demand price of the given
+	// plan names IN THIS PROVIDER'S ZONE via the UpCloud /price endpoint, in
+	// account-currency units (EUR) per hour. UpCloud quotes plan prices in credits
+	// (1 credit = one cent); the real client converts credits→EUR, and the pricing
+	// layer applies the configurable EUR→USD rate. Plans UpCloud does not price are
+	// simply absent from the result (the caller keeps its pinned fallback). This is
+	// the live source of truth that overlays the pinned EUR table; never call it on
+	// the List hot path.
+	DescribePlanPrices(ctx context.Context, plans []string) (map[string]float64, error)
 }
 
 // serverSpec is the launch request handed to CreateServer.
