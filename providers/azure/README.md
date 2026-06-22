@@ -62,7 +62,7 @@ backend — exactly how `make certify-azure` runs credential-free.
 | `--bootstrap-hook` | image path that applies the delivered bootstrap blob |
 | `--offerings` / `--seed-count` | offerings JSON file (or a default mix sized by seed-count) |
 | `--zone-a` / `--zone-b` | zones for the default offerings (`<location>-1`/`-2`) |
-| `--price-refresh` | Spot price refresh interval (default `1h`) |
+| `--price-refresh` | On-demand + spot price refresh interval (default `1h`) |
 | `--state` | durable state file; empty = in-memory only |
 | `--tls-cert` / `--tls-key` / `--tls-ca` | TLS / mTLS |
 
@@ -104,9 +104,10 @@ reachable host.
 
 ## Pricing & interruption
 
-`price_per_hour` is pay-as-you-go from a pinned, region-keyed table for
-`on_demand`/`reserved`, and the current **Spot** price from the public Azure
-Retail Prices API for `spot` (cached + refreshed off the hot path). SPOT
+`price_per_hour` is sourced **live** from the public Azure Retail Prices API —
+pay-as-you-go for `on_demand`/`reserved` and the current **Spot** price for
+`spot`, both cached and refreshed off the hot path (the pinned, region-keyed
+table is only a startup seed/fallback). SPOT
 `interruption_probability` is a **real, non-zero** value: Azure's per-(size,
 region) eviction-rate band converted to an hourly probability via
 `p = 1 - (1 - m)^(1/720)`, raised toward `1.0` by an observed Scheduled Events

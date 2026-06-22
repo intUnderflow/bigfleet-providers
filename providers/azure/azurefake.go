@@ -19,13 +19,18 @@ type azureFake struct {
 	// spotUSD is the deterministic Spot price the simulator reports, so
 	// conformance and tests are reproducible.
 	spotUSD float64
+	// onDemandUSD is the deterministic on-demand price reported for any VM size
+	// the seed table does not cover, so the live on-demand refresh path is
+	// exercised credential-free and reproducibly.
+	onDemandUSD float64
 }
 
 func newAzureFake() *azureFake {
 	return &azureFake{
-		vms:     make(map[string]*vmInstance),
-		byToken: make(map[string]string),
-		spotUSD: 0.0412,
+		vms:         make(map[string]*vmInstance),
+		byToken:     make(map[string]string),
+		spotUSD:     0.0412,
+		onDemandUSD: 0.10,
 	}
 }
 
@@ -117,6 +122,19 @@ func (f *azureFake) SpotPriceUSD(_ context.Context, _ string) (float64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.spotUSD, nil
+}
+
+// OnDemandPriceUSD reports a deterministic pay-as-you-go price so the live
+// on-demand refresh runs credential-free. It mirrors the pinned eastus seed for
+// known sizes (keeping fake/conformance pricing stable and size-differentiated)
+// and a fixed default for anything else.
+func (f *azureFake) OnDemandPriceUSD(_ context.Context, vmSize string) (float64, error) {
+	if v, ok := onDemandEastUS[vmSize]; ok {
+		return v, nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.onDemandUSD, nil
 }
 
 // DescribeVMSizeCapacities resolves capacities from the pinned table, so the

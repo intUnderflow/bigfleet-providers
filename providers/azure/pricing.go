@@ -4,45 +4,53 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
 
-// pricing supplies Machine.price_per_hour (USD/hour). On-demand (pay-as-you-go)
-// comes from a pinned, region-keyed table (deterministic, no runtime
-// pricing-API dependency on the List hot path); Spot comes from the Azure Retail
-// Prices API, cached and refreshed on a timer rather than per-List.
+// pricing supplies Machine.price_per_hour (USD/hour). Both on-demand
+// (pay-as-you-go) and Spot prices are sourced live from the Azure Retail Prices
+// API (https://prices.azure.com/api/retail/prices — no credentials), cached and
+// refreshed on a timer rather than per-List. The pinned, region-keyed table is a
+// startup seed and a fallback only — once the background refresh runs, the live
+// price is the source of truth.
 //
-// On-demand prices are stable, so a pinned table is the right model: regenerate
-// a region's table offline from the public Retail Prices API
-// (https://prices.azure.com/api/retail/prices — no credentials) rather than
-// calling it on the hot path. The table is not load-bearing for correctness (it
-// feeds the engine's relative cost ranking), but keep it roughly accurate.
+// The seed table is not load-bearing for correctness (it feeds the engine's
+// relative cost ranking, and only until the first refresh populates the live
+// cache), but keep it roughly accurate so the cold window before the first
+// refresh ranks sensibly. Regenerate a region's seed offline from the public
+// Retail Prices API and drop it into onDemandByRegion.
 type pricing struct {
-	region      string
-	onDemandUSD map[string]float64 // vmSize -> USD/hr, resolved for `region`
-	client      azureClient
-	logger      *slog.Logger
+	region       string
+	seedOnDemand map[string]float64 // vmSize -> seed/fallback USD/hr, resolved for `region`
+	client       azureClient
+	logger       *slog.Logger
 
-	mu   sync.Mutex
-	spot map[string]float64 // vmSize -> last fetched USD/hr (Spot, region-scoped client)
+	mu           sync.Mutex
+	liveOnDemand map[string]float64 // vmSize -> last fetched USD/hr (on-demand, region-scoped client)
+	spot         map[string]float64 // vmSize -> last fetched USD/hr (Spot, region-scoped client)
+	lastSuccess  time.Time          // wall-clock of the last fully-successful refresh (staleness signal)
 }
 
-// onDemandBaselineRegion supplies on-demand prices when a region has no pinned
-// table of its own (the prices are then approximate — regenerate per region).
+// onDemandBaselineRegion supplies seed on-demand prices when a region has no
+// pinned table of its own (the seed is then approximate until the live refresh
+// populates — regenerate per region).
 const onDemandBaselineRegion = "eastus"
 
-// onDemandByRegion holds pinned on-demand prices (USD/hr) per region for the
+// onDemandByRegion holds pinned on-demand seed prices (USD/hr) per region for the
 // pinned VM sizes. eastus is the authoritative baseline; westeurope is priced
-// from its own snapshot. Add a region by generating its table from the Retail
-// Prices API and dropping it in here.
+// from its own snapshot. These are the seed/fallback until the live refresh runs;
+// add a region by generating its table from the Retail Prices API and dropping it
+// in here.
 var onDemandByRegion = map[string]map[string]float64{
 	"eastus":     onDemandEastUS,
 	"westeurope": onDemandWestEurope,
 }
 
 // onDemandEastUS is a pinned snapshot of East US pay-as-you-go Linux prices for
-// the pinned VM sizes (USD/hr).
+// the pinned VM sizes (USD/hr). Seed/fallback only — the live refresh is the
+// source of truth once it runs.
 var onDemandEastUS = map[string]float64{
 	"Standard_D2s_v5": 0.096, "Standard_D4s_v5": 0.192, "Standard_D8s_v5": 0.384,
 	"Standard_D16s_v5": 0.768, "Standard_D32s_v5": 1.536, "Standard_D48s_v5": 2.304, "Standard_D64s_v5": 3.072,
@@ -56,7 +64,7 @@ var onDemandEastUS = map[string]float64{
 }
 
 // onDemandWestEurope is a pinned snapshot of West Europe pay-as-you-go Linux
-// prices for the pinned VM sizes (USD/hr).
+// prices for the pinned VM sizes (USD/hr). Seed/fallback only.
 var onDemandWestEurope = map[string]float64{
 	"Standard_D2s_v5": 0.107, "Standard_D4s_v5": 0.214, "Standard_D8s_v5": 0.428,
 	"Standard_D16s_v5": 0.856, "Standard_D32s_v5": 1.712, "Standard_D48s_v5": 2.568, "Standard_D64s_v5": 3.424,
@@ -74,35 +82,39 @@ func newPricing(region string, client azureClient, logger *slog.Logger) *pricing
 		// Normalise once so refresh and the region warning below never nil-panic.
 		logger = slog.New(slog.DiscardHandler)
 	}
-	table, ok := onDemandByRegion[region]
+	seed, ok := onDemandByRegion[region]
 	if !ok {
-		// No pinned table for this region; fall back to the baseline. Stay quiet
-		// for the empty region (the fake/dev backend doesn't price-rank).
-		table = onDemandByRegion[onDemandBaselineRegion]
+		// No pinned seed table for this region; fall back to the baseline. Stay quiet
+		// for the empty region (the fake/dev backend doesn't price-rank). The live
+		// refresh will replace these approximations with the region's real prices.
+		seed = onDemandByRegion[onDemandBaselineRegion]
 		if region != "" {
-			logger.Warn("pricing: no pinned on-demand table for region; using baseline approximations — regenerate from the Retail Prices API",
+			logger.Warn("pricing: no pinned on-demand seed table for region; using baseline approximations until the live refresh populates — regenerate from the Retail Prices API",
 				"region", region, "baseline", onDemandBaselineRegion)
 		}
 	}
 	return &pricing{
-		region:      region,
-		onDemandUSD: table,
-		client:      client,
-		logger:      logger,
-		spot:        make(map[string]float64),
+		region:       region,
+		seedOnDemand: seed,
+		client:       client,
+		logger:       logger,
+		liveOnDemand: make(map[string]float64),
+		spot:         make(map[string]float64),
 	}
 }
 
 // price returns USD/hour for a machine of the given shape. Reads only cached
 // state (never blocks on the network), so it is safe on the List/seed path.
 //
-// Contract: every offered VM size must appear in the pinned on-demand table
-// (onDemandByRegion), enforced at startup (hasPrice). A spot size whose live
-// price has not yet been fetched falls back to a fraction of its on-demand price;
-// startup pre-warms spot prices before serving, so that cold window does not
-// exist for pinned sizes. A size with no pinned entry at all (only reachable via
-// a recovered/orphan VM of an unpinned size) prices at a high sentinel rather
-// than 0, so cost ranking never treats it as "free".
+// Contract: every offered VM size must appear in the on-demand seed table
+// (onDemandByRegion), enforced at startup (hasPrice), so a cold cache still
+// prices it before the first refresh. The live on-demand price (refreshed from
+// the Retail Prices API on the timer) is preferred once present. A spot size
+// whose live price has not yet been fetched falls back to a fraction of its
+// on-demand price; startup pre-warms prices before serving, so that cold window
+// does not exist for pinned sizes. A size with no seed entry at all (only
+// reachable via a recovered/orphan VM of an unpinned size) prices at a high
+// sentinel rather than 0, so cost ranking never treats it as "free".
 func (p *pricing) price(vmSize string, capacity providerkit.CapacityType) float64 {
 	switch capacity {
 	case providerkit.CapacityBareMetal:
@@ -123,35 +135,66 @@ func (p *pricing) price(vmSize string, capacity providerkit.CapacityType) float6
 }
 
 // unknownSizePriceUSD is a deliberately high per-hour price returned for a VM
-// size with no pinned on-demand entry. Offered sizes are rejected at startup
+// size with no seed on-demand entry. Offered sizes are rejected at startup
 // (hasPrice), so this only applies to a recovered/orphan VM of an unpinned size:
 // pricing it as expensive keeps cost ranking from treating it as "free".
 const unknownSizePriceUSD = 1000.0
 
-// onDemand returns the pinned pay-as-you-go price for vmSize, or a conservative
-// high sentinel when the size is unpinned (never 0, which would read as free).
+// onDemand returns the pay-as-you-go price for vmSize: the live refreshed price
+// when present, else the pinned seed, else a conservative high sentinel when the
+// size is unseeded (never 0, which would read as free).
 func (p *pricing) onDemand(vmSize string) float64 {
-	if v, ok := p.onDemandUSD[vmSize]; ok {
+	p.mu.Lock()
+	v, ok := p.liveOnDemand[vmSize]
+	p.mu.Unlock()
+	if ok {
 		return v
+	}
+	if seed, ok := p.seedOnDemand[vmSize]; ok {
+		return seed
 	}
 	return unknownSizePriceUSD
 }
 
-// hasPrice reports whether vmSize has a pinned on-demand price for this region
-// (the baseline table when the region itself is unpinned). Used to fail startup
-// loudly on a coverage gap rather than publish a misleading 0.
+// hasPrice reports whether vmSize has a seed on-demand price for this region (the
+// baseline table when the region itself is unseeded). Used to fail startup loudly
+// on a coverage gap rather than publish a misleading 0 — the live refresh keys
+// off the same offered sizes, so a seeded size is also a refreshed one.
 func (p *pricing) hasPrice(vmSize string) bool {
-	_, ok := p.onDemandUSD[vmSize]
+	_, ok := p.seedOnDemand[vmSize]
 	return ok
 }
 
-// refresh fetches the current Spot price for each VM size and caches it.
-// Best-effort: a fetch error leaves the prior (or fallback) value. Call it once
-// at startup and on a timer; never on the List hot path. Returns the number of
-// sizes that failed to refresh.
-func (p *pricing) refresh(ctx context.Context, vmSizes []string) int {
+// lastRefreshSuccess reports the wall-clock time of the last fully-successful
+// refresh (zero until the first one completes). The caller surfaces its age as a
+// staleness signal (metric/log).
+func (p *pricing) lastRefreshSuccess() time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastSuccess
+}
+
+// refresh fetches the current on-demand price for every VM size and the Spot
+// price for the Spot sizes, caching each. Best-effort: a fetch error leaves the
+// prior (seed or last-good) value rather than zeroing it. Call it once at startup
+// and on a timer; never on the List hot path. Returns the number of fetches that
+// failed; on a fully-successful cycle (zero failures) it stamps the
+// last-success time for staleness reporting.
+func (p *pricing) refresh(ctx context.Context, onDemandSizes, spotSizes []string) int {
 	failures := 0
-	for _, size := range dedupeNonEmpty(vmSizes) {
+	for _, size := range dedupeNonEmpty(onDemandSizes) {
+		v, err := p.client.OnDemandPriceUSD(ctx, size)
+		if err != nil {
+			failures++
+			p.logger.Warn("pricing: on-demand price fetch failed; keeping fallback",
+				"vm_size", size, "err", err)
+			continue
+		}
+		p.mu.Lock()
+		p.liveOnDemand[size] = v
+		p.mu.Unlock()
+	}
+	for _, size := range dedupeNonEmpty(spotSizes) {
 		v, err := p.client.SpotPriceUSD(ctx, size)
 		if err != nil {
 			failures++
@@ -161,6 +204,11 @@ func (p *pricing) refresh(ctx context.Context, vmSizes []string) int {
 		}
 		p.mu.Lock()
 		p.spot[size] = v
+		p.mu.Unlock()
+	}
+	if failures == 0 {
+		p.mu.Lock()
+		p.lastSuccess = time.Now()
 		p.mu.Unlock()
 	}
 	return failures

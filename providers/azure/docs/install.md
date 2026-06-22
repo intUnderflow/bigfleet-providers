@@ -150,7 +150,7 @@ reference (defaults, semantics, the bootstrap model) is in
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--price-refresh` | `1h` | Spot price refresh interval (`0` = off) |
+| `--price-refresh` | `1h` | On-demand + spot price refresh interval (`0` = off) |
 | `--reconcile-interval` | `2m` | Background Azure→inventory reconcile interval (`0` = off) |
 
 **Observability & TLS**

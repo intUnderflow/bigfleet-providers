@@ -416,12 +416,21 @@ func (a *azureReal) setClusterTag(ctx context.Context, vmNameStr, clusterID stri
 	return err
 }
 
-// SpotPriceUSD queries the public Retail Prices API for the current Spot
-// consumption price of a VM size in the configured region.
-func (a *azureReal) SpotPriceUSD(ctx context.Context, vmSize string) (float64, error) {
+// retailItem is one priced meter returned by the Retail Prices API.
+type retailItem struct {
+	UnitPrice   float64 `json:"unitPrice"`
+	MeterName   string  `json:"meterName"`
+	ProductName string  `json:"productName"`
+	SKUName     string  `json:"skuName"`
+}
+
+// retailConsumptionMeters queries the public Retail Prices API for every
+// Consumption meter of a VM size in the configured region. Spot and on-demand
+// both filter the returned set; the HTTP round-trip is shared.
+func (a *azureReal) retailConsumptionMeters(ctx context.Context, vmSize string) ([]retailItem, error) {
 	// armSkuName in the Retail Prices API is the full VM size name including the
 	// "Standard_" prefix (e.g. "Standard_D4s_v5") — do NOT strip it, or the filter
-	// matches zero meters and live Spot pricing silently never populates.
+	// matches zero meters and live pricing silently never populates.
 	filter := fmt.Sprintf("armRegionName eq '%s' and armSkuName eq '%s' and priceType eq 'Consumption'",
 		a.cfg.Location, vmSize)
 	q := url.Values{}
@@ -431,36 +440,41 @@ func (a *azureReal) SpotPriceUSD(ctx context.Context, vmSize string) (float64, e
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	resp, err := a.http.Do(req)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("retail prices: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("retail prices: status %d", resp.StatusCode)
 	}
 	var body struct {
-		Items []struct {
-			UnitPrice   float64 `json:"unitPrice"`
-			MeterName   string  `json:"meterName"`
-			ProductName string  `json:"productName"`
-			SKUName     string  `json:"skuName"`
-		} `json:"Items"`
+		Items []retailItem `json:"Items"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return 0, fmt.Errorf("retail prices decode: %w", err)
+		return nil, fmt.Errorf("retail prices decode: %w", err)
+	}
+	return body.Items, nil
+}
+
+// SpotPriceUSD queries the public Retail Prices API for the current Spot
+// consumption price of a VM size in the configured region.
+func (a *azureReal) SpotPriceUSD(ctx context.Context, vmSize string) (float64, error) {
+	items, err := a.retailConsumptionMeters(ctx, vmSize)
+	if err != nil {
+		return 0, err
 	}
 	best := -1.0
-	for _, it := range body.Items {
+	for _, it := range items {
 		if !isSpotMeter(it.MeterName, it.SKUName, it.ProductName) {
 			continue
 		}
 		// The Retail Prices API returns both Linux and Windows meters for the same
 		// (region, SKU); Windows carries a licence surcharge, so include only the
 		// Linux meter (Windows productName ends in " Windows").
-		if strings.Contains(strings.ToLower(it.ProductName), "windows") {
+		if isWindowsMeter(it.ProductName) {
 			continue
 		}
 		if it.UnitPrice <= 0 {
@@ -472,6 +486,41 @@ func (a *azureReal) SpotPriceUSD(ctx context.Context, vmSize string) (float64, e
 	}
 	if best < 0 {
 		return 0, fmt.Errorf("no spot consumption meter for %s in %s", vmSize, a.cfg.Location)
+	}
+	return best, nil
+}
+
+// OnDemandPriceUSD queries the public Retail Prices API for the current
+// pay-as-you-go (on-demand) consumption price of a VM size in the configured
+// region: the Linux Consumption meter that is NOT Spot and NOT Low Priority.
+func (a *azureReal) OnDemandPriceUSD(ctx context.Context, vmSize string) (float64, error) {
+	items, err := a.retailConsumptionMeters(ctx, vmSize)
+	if err != nil {
+		return 0, err
+	}
+	best := -1.0
+	for _, it := range items {
+		// Pay-as-you-go = the plain Consumption meter: exclude Spot and Low Priority
+		// (their own cheaper meters), and Windows (a licence surcharge), leaving the
+		// Linux on-demand meter.
+		if isSpotMeter(it.MeterName, it.SKUName, it.ProductName) {
+			continue
+		}
+		if isLowPriorityMeter(it.MeterName, it.SKUName) {
+			continue
+		}
+		if isWindowsMeter(it.ProductName) {
+			continue
+		}
+		if it.UnitPrice <= 0 {
+			continue
+		}
+		if best < 0 || it.UnitPrice < best {
+			best = it.UnitPrice
+		}
+	}
+	if best < 0 {
+		return 0, fmt.Errorf("no on-demand consumption meter for %s in %s", vmSize, a.cfg.Location)
 	}
 	return best, nil
 }
@@ -693,6 +742,21 @@ func isSpotMeter(meterName, skuName, productName string) bool {
 	return strings.Contains(strings.ToLower(meterName), "spot") ||
 		strings.Contains(strings.ToLower(skuName), "spot") ||
 		strings.Contains(strings.ToLower(productName), "spot")
+}
+
+// isWindowsMeter reports whether a meter carries the Windows licence surcharge
+// (Windows productName ends in " Windows"), so on-demand and Spot both price off
+// the Linux meter.
+func isWindowsMeter(productName string) bool {
+	return strings.Contains(strings.ToLower(productName), "windows")
+}
+
+// isLowPriorityMeter reports whether a meter is a Low Priority meter (the
+// retired interruptible tier, distinct from Spot), excluded from the on-demand
+// pay-as-you-go price.
+func isLowPriorityMeter(meterName, skuName string) bool {
+	return strings.Contains(strings.ToLower(meterName), "low priority") ||
+		strings.Contains(strings.ToLower(skuName), "low priority")
 }
 
 // isNotFound reports whether err is an Azure 404 (resource already gone), so a

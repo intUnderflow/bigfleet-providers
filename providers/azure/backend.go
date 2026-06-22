@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
@@ -54,11 +55,13 @@ func newAzureBackend(providerName, location string, client azureClient, offering
 		if off.Zone == "" {
 			return nil, fmt.Errorf("azure backend: offering %s with empty zone", off.VMSize)
 		}
-		// An offering whose size has no pinned on-demand price would publish
-		// PricePerHour=0 (read as "free" and over-preferred by cost ranking). Reject
-		// it up front so coverage gaps fail loudly at startup, not silently at runtime.
+		// An offering whose size has no seed on-demand price would price at the high
+		// sentinel before the first live refresh and risks a silent gap, so reject it
+		// up front: coverage gaps fail loudly at startup, not silently at runtime. The
+		// live refresh keys off the same offered sizes, so a seeded size is a
+		// refreshed one.
 		if pr != nil && !pr.hasPrice(off.VMSize) {
-			return nil, fmt.Errorf("azure backend: offering %s has no pinned on-demand price for region %q (add it to onDemandByRegion)", off.VMSize, location)
+			return nil, fmt.Errorf("azure backend: offering %s has no seed on-demand price for region %q (add it to onDemandByRegion)", off.VMSize, location)
 		}
 	}
 	return &azureBackend{
@@ -337,10 +340,19 @@ func (b *azureBackend) resolveHost(_ context.Context, m providerkit.Machine) (vm
 	return vmInstance{ResourceID: m.Host.Ref, VMSize: m.InstanceType, Zone: m.Zone}, nil
 }
 
-// refreshPrices warms / refreshes the Spot price cache. Call at startup and on a
-// timer. Returns the number of sizes that failed to refresh.
+// refreshPrices warms / refreshes the on-demand and Spot price caches from the
+// Retail Prices API. On-demand covers every offered size (pay-as-you-go feeds
+// on_demand/reserved pricing and the Spot cold-cache fallback); Spot covers the
+// Spot sizes. Call at startup and on a timer. Returns the number of fetches that
+// failed.
 func (b *azureBackend) refreshPrices(ctx context.Context) int {
-	return b.pricing.refresh(ctx, b.spotSizes())
+	return b.pricing.refresh(ctx, b.offeredSizes(), b.spotSizes())
+}
+
+// lastPriceSuccess reports when prices were last fully refreshed (zero until the
+// first successful cycle), so the caller can surface staleness.
+func (b *azureBackend) lastPriceSuccess() time.Time {
+	return b.pricing.lastRefreshSuccess()
 }
 
 // spotSizes lists the distinct VM sizes of SPOT offerings, to drive
