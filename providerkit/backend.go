@@ -65,6 +65,40 @@ type Deleter interface {
 	DeleteInstance(ctx context.Context, req DeleteInstanceRequest) error
 }
 
+// ReadinessChecker is an optional Backend capability for ADR-0056: confirm a
+// node has joined and reached Ready on its target cluster before the kit reports
+// the machine MACHINE_STATE_CONFIGURED. A Configured machine is counted as
+// delivered capacity, so reporting it on VM-boot — before kubelet registration,
+// pod-CIDR assignment and CNI — creates phantom capacity (the shard credits
+// coverage that isn't schedulable and shortfalls read zero).
+//
+// A backend that implements this gets the gate centrally: after ConfigureInstance
+// succeeds the kit calls ConfirmNodeReady under the remaining Configure timeout,
+// holds the machine at Configuring until it returns nil, and drives it to Failed
+// (last_error) on error or timeout. A backend that does NOT implement it keeps
+// the previous behaviour (Configured set as soon as ConfigureInstance returns)
+// and the kit logs once at startup that the readiness gate is unenforced — such
+// a provider is ADR-0056-correct only if ConfigureInstance itself blocks until
+// the node is Ready.
+//
+// BigFleet never hands the provider cluster credentials (ConfigureRequest carries
+// only cluster_id, a name), so a ReadinessChecker observes readiness via cluster
+// read-access granted out-of-band, or a substrate signal that reliably implies
+// kubelet registration.
+type ReadinessChecker interface {
+	ConfirmNodeReady(ctx context.Context, req ConfirmNodeReadyRequest) error
+}
+
+// ConfirmNodeReadyRequest is handed to ReadinessChecker.ConfirmNodeReady after
+// ConfigureInstance succeeds, while the machine is held at Configuring.
+type ConfirmNodeReadyRequest struct {
+	// Machine is the record as the kit holds it at Configuring, with the cluster
+	// binding already attached.
+	Machine     Machine
+	ClusterID   string
+	OperationID string
+}
+
 // Instance is the substrate truth the Backend reports for one machine via
 // Describe. It carries no lifecycle/binding/metadata bookkeeping — only what
 // the substrate knows.

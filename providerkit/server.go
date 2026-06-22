@@ -136,6 +136,13 @@ func New(backend Backend, store Store, opts Options) (*Server, error) {
 		lastMod:  make(map[string]int64),
 	}
 	s.deleter, s.canDelete = backend.(Deleter)
+	if _, ok := backend.(ReadinessChecker); !ok {
+		// ADR-0056: without a readiness gate the kit reports Configured as soon
+		// as ConfigureInstance returns. That is correct only if ConfigureInstance
+		// itself blocks until the node is Ready; otherwise the provider can credit
+		// phantom capacity. Surface it once so the operator knows the posture.
+		s.logger.Warn("providerkit: backend does not implement ReadinessChecker; the ADR-0056 node-join readiness gate is NOT enforced by the kit — Configured is reported as soon as ConfigureInstance returns")
+	}
 
 	snap, err := store.Load()
 	if err != nil {
@@ -384,6 +391,17 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Tra
 			Machine: m, ClusterID: clusterID, BootstrapBlob: blob, OperationID: opID,
 		}); err != nil {
 			return nil, err
+		}
+		// ADR-0056: a machine must not be reported Configured until its node is
+		// observed Ready on the target cluster. If the backend supplies a
+		// readiness gate, run it under the remaining Configure timeout while the
+		// machine is still Configuring; an error (or the timeout) sends the
+		// machine to Failed via runTransition, so it never settles Configured on
+		// a node that has not joined.
+		if rc, ok := s.backend.(ReadinessChecker); ok {
+			if err := rc.ConfirmNodeReady(ctx, ConfirmNodeReadyRequest{Machine: m, ClusterID: clusterID, OperationID: opID}); err != nil {
+				return nil, fmt.Errorf("node readiness: %w", err)
+			}
 		}
 		return nil, nil
 	}

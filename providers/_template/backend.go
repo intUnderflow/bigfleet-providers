@@ -66,6 +66,13 @@ func (b *templateBackend) CreateInstance(_ context.Context, req providerkit.Crea
 // user-data / ignition; bare-metal: PXE / iPXE) and join it to
 // req.ClusterID. The blob is opaque — never parse it. Return an error to
 // drive the machine to FAILED.
+//
+// ADR-0056: the machine must not reach CONFIGURED until its node has joined and
+// is Ready on req.ClusterID. The recommended way is to implement the optional
+// providerkit.ReadinessChecker (see ConfirmNodeReady below) so the kit holds the
+// machine at CONFIGURING until the node is Ready and fails it on timeout —
+// rather than blocking here. Either way, never report CONFIGURED for a node that
+// has not joined.
 func (b *templateBackend) ConfigureInstance(_ context.Context, req providerkit.ConfigureInstanceRequest) error {
 	if len(req.BootstrapBlob) == 0 {
 		// The template does not require a blob; a real provider may. This is
@@ -74,6 +81,23 @@ func (b *templateBackend) ConfigureInstance(_ context.Context, req providerkit.C
 	}
 	return nil
 }
+
+// ConfirmNodeReady implements the optional providerkit.ReadinessChecker
+// (ADR-0056): block until the node for this machine is Ready on its target
+// cluster, or return an error to fail the Configure. Implementing it makes the
+// kit gate CONFIGURED on real node readiness. Uncomment and complete it; leaving
+// it unimplemented is allowed but then the kit logs that the readiness gate is
+// unenforced (and CONFIGURED is reported as soon as ConfigureInstance returns).
+//
+// func (b *templateBackend) ConfirmNodeReady(ctx context.Context, req providerkit.ConfirmNodeReadyRequest) error {
+// 	// TODO(provider-author): observe node readiness on req.ClusterID — e.g.
+// 	// poll the node's Ready condition via cluster read-access granted to this
+// 	// provider out-of-band, or wait for a substrate bootstrap-completion signal.
+// 	// BigFleet does not pass cluster credentials; obtain them via your
+// 	// deployment. Return nil once Ready; return an error (or honour ctx
+// 	// cancellation on the kit's Configure timeout) to drive the machine to FAILED.
+// 	return nil
+// }
 
 // DrainInstance returns a Configured host to Idle, honouring the grace
 // period.
