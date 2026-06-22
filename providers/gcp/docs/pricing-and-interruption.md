@@ -1,6 +1,6 @@
 ---
 title: Pricing & interruption
-description: How the GCP provider sources price_per_hour (pinned table, on-demand + Spot) and declares a real, non-zero interruption_probability for Spot.
+description: How the GCP provider sources price_per_hour (live-refreshed from the Cloud Billing Catalog, on-demand + Spot) and declares a real, non-zero interruption_probability for Spot.
 sidebar:
   order: 4
   label: Pricing & interruption
@@ -11,28 +11,47 @@ interruption_probability × penalty`. So a provider has to report both honestly.
 GCE has two capacity tiers that matter here — standard on-demand and **Spot** —
 and this page explains exactly how each field is sourced.
 
-## `price_per_hour` — a pinned USD table
+## `price_per_hour` — live-refreshed on-demand rates
 
-The provider sources `price_per_hour` from a **pinned, region-keyed table** of
-GCE on-demand rates (in USD). This is the v1 model the author guide recommends:
-a version-controlled snapshot, sourced once from the Cloud Billing Catalog API /
-the public pricing page and refreshed on a cadence, so there is no pricing-API
-dependency on the `List` hot path and the numbers are deterministic for
-certification.
+The provider reads on-demand prices **live** from the **Cloud Billing Catalog
+API** and keeps them in an in-memory table. A background loop (every
+`--price-refresh`, default 45m) pulls the current rates **off the `List` hot
+path** into a mutex-guarded map; `List`/`Get` only ever read that map and never
+call the pricing API. The live refresh is the source of truth.
 
-- **On-demand:** the pinned per-`(machine_type, region)` rate. `us-central1` is
-  the authoritative baseline; add a region by pinning its table.
+- **On-demand:** composed from the GCE on-demand **core** and **memory** SKUs for
+  the machine's family in its region (Compute Engine service id
+  `6F81-5844-456A`): `price = vCPU × core-rate + memory_GiB × ram-rate`. Reached
+  via Application Default Credentials, or an API key (`--pricing-api-key`).
 - **Spot:** GCE Spot prices are dynamic and deeply discounted (~60–91% off). The
-  provider models Spot as a fixed fraction (`0.4`) of the on-demand rate — a
-  conservative (high) estimate so the cost engine never under-prices Spot. The
-  result is always **non-zero**.
+  provider models Spot as a fixed fraction (`0.4`) of the (live or fallback)
+  on-demand rate — a conservative (high) estimate so the cost engine never
+  under-prices Spot. The result is always **non-zero**.
 - **Reserved:** priced at on-demand unless you model a real committed-use
   discount (a reservation is a billing construct; the instance is a regular VM).
 
-The cost field is a *relative* ranking signal, so an approximate table is
-acceptable — but keep it roughly accurate, and regenerate it per region from the
-Billing Catalog when prices move. `price_per_hour` is never `0` for a real VM
-(`0` is reserved for bare metal, which this provider never creates).
+### The pinned table is the seed + fallback only
+
+A **pinned, region-keyed table** (`us-central1` is the authoritative baseline)
+**seeds** `price_per_hour` before the first refresh lands and **backstops** a
+refresh failure — so a billing-API outage, or a type the catalogue mapping
+cannot resolve, never zeroes a price; it simply keeps the last-known / pinned
+value. It is *not* the runtime source of truth. The cost field is a *relative*
+ranking signal, so the seed only has to be roughly right for the cold-start
+window.
+
+`price_per_hour` is never `0` for a real VM: the provider **fails closed** at
+startup, rejecting any offering whose machine type has no seed price (it would
+otherwise have no safe value to publish before the first refresh). `0` is
+reserved for bare metal, which this provider never creates.
+
+### Staleness
+
+Each refresh records its outcome (`bigfleet_gcp_price_refresh_total{outcome}`)
+and stamps the last fully-successful refresh
+(`bigfleet_gcp_price_last_refresh_timestamp_seconds`), and logs the age of the
+last success — so an operator can alert on a price table that has stopped
+refreshing while the provider keeps serving the (now stale) fallback.
 
 ## `interruption_probability` — a real, non-zero value for Spot
 
@@ -76,11 +95,14 @@ non-zero value for every SPOT machine. The GCP provider claims the `spot`
 profile and its default offerings include Spot slots, so the invariant actively
 fires (it is not vacuously skipped).
 
-## Why a pinned table, not a live lookup
+## Why live, but off the hot path
 
-A live Cloud Billing Catalog lookup is more accurate but adds a hot-path
-dependency and more moving parts. For v1 the pinned table is deterministic,
-dependency-free on the `List` path, and easy to reason about in certification.
-If you need live pricing, regenerate the table on a cadence from the Billing
-Catalog (`cloudbilling.googleapis.com`) offline and ship the updated snapshot —
-the table is not load-bearing for correctness, only for relative cost ranking.
+A live Cloud Billing Catalog lookup is the most accurate source, but calling it
+on `List` would put a network dependency on the read path. The provider gets
+both: a background loop refreshes the in-memory table on a cadence, and
+`List`/`Get` read only the cached map — never the pricing API. The pinned table
+stays in the tree as the startup seed and the outage fallback, so the read path
+is always non-blocking and a pricing-API failure degrades to a stale-but-sane
+price rather than a zero. The fake backend uses a deterministic, credential-free
+price source, so certification (`make certify-gcp`) never makes a live call and
+stays reproducible.

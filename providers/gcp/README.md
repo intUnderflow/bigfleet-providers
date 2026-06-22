@@ -107,11 +107,15 @@ and `bigfleet-capacity` **labels** plus the `bigfleet-machine-id` and
 
 ## Pricing & interruption
 
-`price_per_hour` comes from a pinned, region-keyed **USD** table (the v1 model):
-on-demand rates per `(machine_type, region)`, with **Spot** modelled as a fixed
-fraction of on-demand (always non-zero). `interruption_probability` is **`0.0`
-for on-demand/reserved** and a **real, non-zero** per-family forecast for
-**Spot** (raised toward `1.0` on an observed preemption) — so the provider
+`price_per_hour` is **refreshed live** from the **Cloud Billing Catalog API**
+(GCE on-demand core + memory SKUs, composed per `(machine_type, region)`) on a
+cadence (`--price-refresh`, default 45m) into an in-memory table that `List`/`Get`
+read **off the hot path**; the pinned, region-keyed table is the startup **seed**
+and outage **fallback** only. **Spot** is modelled as a fixed fraction of the
+on-demand rate (always non-zero), and the provider **fails closed** on a machine
+type with no seed price rather than publishing `0`. `interruption_probability`
+is **`0.0` for on-demand/reserved** and a **real, non-zero** per-family forecast
+for **Spot** (raised toward `1.0` on an observed preemption) — so the provider
 claims the `spot` profile and its default offerings include Spot slots. See
 [`docs/pricing-and-interruption.md`](docs/pricing-and-interruption.md).
 

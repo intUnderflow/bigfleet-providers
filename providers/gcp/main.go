@@ -52,17 +52,19 @@ func run() error {
 		zoneB       = flag.String("zone-b", "", "second zone for default offerings (default: <region>-b)")
 		statePath   = flag.String("state", "", "durable state file (empty = in-memory only)")
 
-		image       = flag.String("image", "projects/debian-cloud/global/images/family/debian-12", "boot disk source image for Instances.Insert (gcp backend)")
-		network     = flag.String("network", "global/networks/default", "VPC network for the instance NIC (gcp backend)")
-		subnet      = flag.String("subnetwork", "", "subnetwork for the instance NIC, e.g. regions/<r>/subnetworks/<s> (gcp backend; default: the network's auto subnet)")
-		diskSizeGB  = flag.Int64("disk-size-gb", 20, "boot disk size in GiB (gcp backend)")
-		svcAccount  = flag.String("instance-service-account", "", "service account email the launched instances run as (gcp backend; default: the project default)")
-		baseStartup = flag.String("base-startup-script", "", "path to the generic pre-binding startup script baked in at Insert")
-		sshKey      = flag.String("ssh-key", "", "path to the SSH private key used for in-band Configure/Drain delivery (gcp backend)")
-		sshUser     = flag.String("ssh-user", "bigfleet", "SSH user for Configure/Drain delivery (gcp backend); authorised via ssh-keys metadata")
-		bootstrapHk = flag.String("bootstrap-hook", "/opt/bigfleet/bootstrap", "image path that applies the delivered bootstrap blob")
-		useExtIP    = flag.Bool("use-external-ip", false, "reach instances over an ephemeral external IP for SSH (gcp backend; default: internal IP, same-VPC)")
-		reconcile   = flag.Duration("reconcile-interval", 2*time.Minute, "background GCE->inventory reconcile interval (0 = off)")
+		image        = flag.String("image", "projects/debian-cloud/global/images/family/debian-12", "boot disk source image for Instances.Insert (gcp backend)")
+		network      = flag.String("network", "global/networks/default", "VPC network for the instance NIC (gcp backend)")
+		subnet       = flag.String("subnetwork", "", "subnetwork for the instance NIC, e.g. regions/<r>/subnetworks/<s> (gcp backend; default: the network's auto subnet)")
+		diskSizeGB   = flag.Int64("disk-size-gb", 20, "boot disk size in GiB (gcp backend)")
+		svcAccount   = flag.String("instance-service-account", "", "service account email the launched instances run as (gcp backend; default: the project default)")
+		baseStartup  = flag.String("base-startup-script", "", "path to the generic pre-binding startup script baked in at Insert")
+		sshKey       = flag.String("ssh-key", "", "path to the SSH private key used for in-band Configure/Drain delivery (gcp backend)")
+		sshUser      = flag.String("ssh-user", "bigfleet", "SSH user for Configure/Drain delivery (gcp backend); authorised via ssh-keys metadata")
+		bootstrapHk  = flag.String("bootstrap-hook", "/opt/bigfleet/bootstrap", "image path that applies the delivered bootstrap blob")
+		useExtIP     = flag.Bool("use-external-ip", false, "reach instances over an ephemeral external IP for SSH (gcp backend; default: internal IP, same-VPC)")
+		reconcile    = flag.Duration("reconcile-interval", 2*time.Minute, "background GCE->inventory reconcile interval (0 = off)")
+		priceRefresh = flag.Duration("price-refresh", 45*time.Minute, "live on-demand price refresh interval from the Cloud Billing Catalog (0 = off, pinned table only)")
+		pricingKey   = flag.String("pricing-api-key", "", "Cloud Billing Catalog API key (gcp backend; default: Application Default Credentials)")
 
 		metricsAddr = flag.String("metrics-addr", ":9090", "address for /metrics, /healthz, /readyz (empty = disabled)")
 		reflectFlag = flag.Bool("reflection", true, "register gRPC server reflection (for grpcurl/debugging)")
@@ -144,12 +146,30 @@ func run() error {
 		startupScript = b
 	}
 
-	pr := newPricing(*region)
+	// Live on-demand price source. Production reads the Cloud Billing Catalog API
+	// (ADC, or --pricing-api-key); the fake/dev path uses a deterministic,
+	// credential-free static source so certification never makes a live call.
+	priceSrc, err := buildPricingSource(ctx, mode, *pricingKey, logger)
+	if err != nil {
+		return err
+	}
+	pr := newPricing(*region, priceSrc, logger)
 	in := newInterruption()
 	backend, err := newGCPBackend(*providerLbl, *region, client, offs, pr, in, startupScript, logger)
 	if err != nil {
 		return err
 	}
+
+	// Warm the price cache before first List (best-effort, bounded), so seeded
+	// prices are replaced by live ones ahead of serving. The pinned table seeds
+	// anything not refreshed in time.
+	warmCtx, cancelWarm := context.WithTimeout(ctx, 20*time.Second)
+	if failed := backend.refreshPrices(warmCtx); failed == 0 {
+		m.priceLastRefresh.SetToCurrentTime()
+	} else {
+		logger.Warn("some offered machine types unpriced by the live source at startup; using pinned seed", "unpriced", failed)
+	}
+	cancelWarm()
 
 	// Resolve allocatable (vCPU/memory) for the offered types from the
 	// MachineTypes API (best-effort, bounded); the pinned table covers anything
@@ -201,9 +221,10 @@ func run() error {
 		obs.start(logger)
 	}
 
-	// Background loop: GCE->inventory reconcile, which also observes Spot
-	// preemptions so preempted slots publish an elevated (observed) interruption
-	// probability.
+	// Background loops: live price refresh (off the List hot path) + GCE->inventory
+	// reconcile, which also observes Spot preemptions so preempted slots publish an
+	// elevated (observed) interruption probability.
+	go runPriceRefresher(ctx, backend, m, *priceRefresh, logger)
 	go runReconciler(ctx, srv, backend, m, *reconcile, logger)
 
 	// Mark ready: serving traffic + probes go green.
@@ -273,6 +294,57 @@ func runReconciler(ctx context.Context, srv *providerkit.Server, backend *gcpBac
 			}
 		}
 	}
+}
+
+// runPriceRefresher periodically refreshes the in-memory on-demand price table
+// from the live source, off the List hot path. It records each run's outcome and
+// stamps the last-successful-refresh time (for staleness alerting); the pinned
+// seed/fallback backstops any type the live source could not price.
+func runPriceRefresher(ctx context.Context, backend *gcpBackend, m *metrics, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			failed := backend.refreshPrices(rctx)
+			cancel()
+			outcome := "success"
+			if failed > 0 {
+				outcome = "error"
+				logger.Warn("price refresh: some types unpriced by live source; kept fallback", "unpriced", failed)
+			} else {
+				m.priceLastRefresh.SetToCurrentTime()
+			}
+			m.priceRefresh.WithLabelValues(outcome).Inc()
+			if age, ok := backend.pricing.staleness(); ok {
+				logger.Info("price refresh complete", "outcome", outcome, "last_success_age", age.Round(time.Second))
+			}
+		}
+	}
+}
+
+// buildPricingSource selects the live on-demand price feed for the backend mode:
+// the Cloud Billing Catalog API for the real GCE backend, a deterministic
+// credential-free static source for the fake backend (dev / certification).
+func buildPricingSource(ctx context.Context, mode, apiKey string, logger *slog.Logger) (pricingSource, error) {
+	if mode != "gcp" {
+		return newStaticPricer(""), nil
+	}
+	caps := func(machineType string) (machineCapacity, bool) {
+		c, ok := machineTypeTable[machineType]
+		return c, ok
+	}
+	src, err := newGCEBillingPricer(ctx, apiKey, caps, logger)
+	if err != nil {
+		return nil, fmt.Errorf("build pricing source: %w", err)
+	}
+	return src, nil
 }
 
 func resolveBackendMode(flagVal, region string) string {

@@ -48,6 +48,8 @@ the provider makes is counted and timed.
 |---|---|---|---|
 | `bigfleet_gcp_reconcile_total` | counter | `outcome` | Background GCE→inventory reconcile runs by outcome. |
 | `bigfleet_gcp_spot_preemptions_total` | counter | — | Observed GCE Spot preemptions of managed instances (raises the affected slot's observed interruption probability). |
+| `bigfleet_gcp_price_refresh_total` | counter | `outcome` | Background live price-refresh runs (Cloud Billing Catalog) by outcome. |
+| `bigfleet_gcp_price_last_refresh_timestamp_seconds` | gauge | — | Unix time of the last fully-successful price refresh. Alert on `time() - this` exceeding a few refresh intervals: prices are stale and the provider is serving the pinned fallback. |
 
 ## Health vs readiness
 
