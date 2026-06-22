@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 
 	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
@@ -261,6 +262,41 @@ func (b *awsBackend) spotPairs() []spotPair {
 // a timer. Returns the number of (type,zone) pairs that failed to refresh.
 func (b *awsBackend) refreshPrices(ctx context.Context) int {
 	return b.pricing.refresh(ctx, b.spotPairs())
+}
+
+// refreshOnDemandPrices warms / refreshes the live on-demand price cache from
+// the public AWS Price List Bulk API. One bulk fetch covers every offered type
+// (so on-demand, reserved, and the spot cold-cache fallback all stay fresh).
+// Call at startup and on a timer; never on the List hot path. Returns 1 if the
+// fetch failed, else 0.
+func (b *awsBackend) refreshOnDemandPrices(ctx context.Context) int {
+	return b.pricing.refreshOnDemand(ctx, b.offeredTypes())
+}
+
+// unpricedOnDemand returns the distinct on-demand / reserved offering instance
+// types that currently price at 0 — i.e. they have neither a live price nor a
+// pinned seed. The shard ranks 0 as the cheapest capacity, so emitting it would
+// silently win the cost signal; the caller fails closed on a non-empty result.
+// (Bare-metal is legitimately 0 and excluded; spot is priced from its own live
+// history.)
+func (b *awsBackend) unpricedOnDemand() []string {
+	seen := make(map[string]bool)
+	var bad []string
+	for _, off := range b.offerings {
+		capacity, _ := off.capacityType() // validated in newAWSBackend
+		if capacity != providerkit.CapacityOnDemand && capacity != providerkit.CapacityReserved {
+			continue
+		}
+		if seen[off.InstanceType] {
+			continue
+		}
+		seen[off.InstanceType] = true
+		if b.pricing.price(off.InstanceType, off.Zone, capacity) <= 0 {
+			bad = append(bad, off.InstanceType)
+		}
+	}
+	sort.Strings(bad)
+	return bad
 }
 
 // refreshInstanceTypes warms the allocatable cache from ec2:DescribeInstanceTypes

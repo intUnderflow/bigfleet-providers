@@ -62,6 +62,8 @@ Recorded by the logging interceptor for every unary `CapacityProvider` call.
 | `bigfleet_aws_panics_total` | counter | — | Recovered panics in gRPC handlers. The recovery interceptor turns a panic into `codes.Internal` rather than crashing the process, so this is the only place a panic surfaces. **Any** increase warrants investigation. |
 | `bigfleet_aws_reconcile_total` | counter | `outcome` | Background EC2→inventory reconcile runs (`--reconcile-interval`, default 2m), `success`/`error`. A flatlining `success` rate means drift detection has stalled. |
 | `bigfleet_aws_spot_refresh_total` | counter | `outcome` | Background spot-price refresh runs (`--spot-refresh`, default 5m), `success`/`error`. `error` means the cached spot price is going stale; price is still served from cache. |
+| `bigfleet_aws_ondemand_refresh_total` | counter | `outcome` | Background on-demand price refresh runs from the AWS Price List Bulk API (`--ondemand-refresh`, default 60m), `success`/`error`. `error` means live on-demand prices are going stale; the seed/last-known prices are still served. |
+| `bigfleet_aws_ondemand_price_last_success_timestamp_seconds` | gauge | — | Unix time of the last successful on-demand price refresh. Staleness = `time() - this`; alert if it grows past a few refresh intervals. |
 | `bigfleet_aws_spot_interruptions_total` | counter | — | Observed spot interruption / rebalance notices consumed from the SQS queue. Only increments when `--spot-interruption-queue` is wired (see below). |
 
 ### Runtime collectors
@@ -211,6 +213,14 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "Spot-price refresh failing; served spot prices are going stale"
+
+      # On-demand prices going stale: no successful refresh in 3 intervals.
+      - alert: BigfleetAwsOnDemandPriceStale
+        expr: time() - bigfleet_aws_ondemand_price_last_success_timestamp_seconds > 3 * 60 * 60
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "On-demand price refresh has not succeeded recently; seed/last-known prices are being served"
 
       # Reconcile loop has stopped making successful progress.
       - alert: BigfleetAwsReconcileStalled

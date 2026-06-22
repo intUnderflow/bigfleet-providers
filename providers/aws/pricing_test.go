@@ -1,10 +1,75 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
+
+// stubPriceClient is an ec2Client whose only meaningful method is
+// OnDemandPricesUSD, for exercising the on-demand refresh path in isolation.
+type stubPriceClient struct {
+	*ec2Fake
+	prices map[string]float64
+	err    error
+}
+
+func (s *stubPriceClient) OnDemandPricesUSD(_ context.Context, instanceTypes []string) (map[string]float64, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := make(map[string]float64)
+	for _, t := range instanceTypes {
+		if v, ok := s.prices[t]; ok {
+			out[t] = v
+		}
+	}
+	return out, nil
+}
+
+// A successful on-demand refresh becomes the source of truth, overriding the
+// pinned seed value that the cold cache served.
+func TestPricing_RefreshOnDemandUpdatesPrice(t *testing.T) {
+	stub := &stubPriceClient{ec2Fake: newEC2Fake(), prices: map[string]float64{"m6i.large": 0.111}}
+	p := newPricing("us-east-1", stub, quietLogger())
+
+	// Cold: the pinned seed.
+	if got := p.price("m6i.large", "us-east-1a", providerkit.CapacityOnDemand); got != onDemandUSEast1["m6i.large"] {
+		t.Fatalf("cold on-demand = %v, want seed %v", got, onDemandUSEast1["m6i.large"])
+	}
+	if failed := p.refreshOnDemand(context.Background(), []string{"m6i.large"}); failed != 0 {
+		t.Fatalf("refreshOnDemand reported %d failures", failed)
+	}
+	if got := p.price("m6i.large", "us-east-1a", providerkit.CapacityOnDemand); got != 0.111 {
+		t.Fatalf("refreshed on-demand = %v, want 0.111 (live wins)", got)
+	}
+}
+
+// A refresh that fails, or that omits / zeroes a type, must keep the seed
+// fallback — a priced offering must never drop to 0 (0 wins the cost signal).
+func TestPricing_RefreshOnDemandFailClosed(t *testing.T) {
+	// Fetch error: seed retained, one failure reported.
+	errStub := &stubPriceClient{ec2Fake: newEC2Fake(), err: errors.New("offer fetch failed")}
+	pe := newPricing("us-east-1", errStub, quietLogger())
+	if failed := pe.refreshOnDemand(context.Background(), []string{"m6i.large"}); failed != 1 {
+		t.Fatalf("failed refresh reported %d, want 1", failed)
+	}
+	if got := pe.price("m6i.large", "us-east-1a", providerkit.CapacityOnDemand); got != onDemandUSEast1["m6i.large"] {
+		t.Fatalf("after failed refresh = %v, want seed %v", got, onDemandUSEast1["m6i.large"])
+	}
+
+	// Zero / missing in the live result must not overwrite the seed.
+	zeroStub := &stubPriceClient{ec2Fake: newEC2Fake(), prices: map[string]float64{"m6i.large": 0}}
+	pz := newPricing("us-east-1", zeroStub, quietLogger())
+	if failed := pz.refreshOnDemand(context.Background(), []string{"m6i.large"}); failed != 0 {
+		t.Fatalf("refresh reported %d failures", failed)
+	}
+	if got := pz.price("m6i.large", "us-east-1a", providerkit.CapacityOnDemand); got != onDemandUSEast1["m6i.large"] {
+		t.Fatalf("zero live price = %v, want seed kept %v (never 0)", got, onDemandUSEast1["m6i.large"])
+	}
+}
 
 func TestNewPricing_RegionTableSelection(t *testing.T) {
 	const onDemandM6iLarge = 0.096

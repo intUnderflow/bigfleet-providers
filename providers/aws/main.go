@@ -57,6 +57,7 @@ func run() error {
 		bootstrapHk  = flag.String("bootstrap-hook", "/opt/bigfleet/bootstrap", "AMI path that applies the delivered bootstrap blob")
 		baseUserData = flag.String("base-user-data", "", "path to the generic pre-binding bootstrap baked in at launch")
 		spotRefresh  = flag.Duration("spot-refresh", 5*time.Minute, "spot price refresh interval")
+		odRefresh    = flag.Duration("ondemand-refresh", 60*time.Minute, "on-demand price refresh interval from the public AWS Price List Bulk API (0 = off, seed/fallback table only)")
 		spotIntrQ    = flag.String("spot-interruption-queue", "", "SQS queue URL fed by an EventBridge spot-interruption/rebalance rule (aws backend; raises observed interruption probability)")
 		reconcile    = flag.Duration("reconcile-interval", 2*time.Minute, "background EC2->inventory reconcile interval (0 = off)")
 
@@ -141,6 +142,20 @@ func run() error {
 	backend.refreshPrices(warmCtx)
 	cancelWarm()
 
+	// Warm the live on-demand price cache before first List. The offer file is
+	// large, so allow a longer (still bounded) budget; on timeout/error the
+	// pinned seed table backstops every price, so this stays best-effort.
+	odWarmCtx, cancelODWarm := context.WithTimeout(ctx, 90*time.Second)
+	recordOnDemandRefresh(m, backend.refreshOnDemandPrices(odWarmCtx))
+	cancelODWarm()
+
+	// Fail closed: an on-demand / reserved offering whose type has neither a
+	// live price nor a pinned seed would emit price_per_hour=0, which wins the
+	// shard's cost ranking. Reject at startup rather than silently mis-rank.
+	if bad := backend.unpricedOnDemand(); len(bad) > 0 {
+		return fmt.Errorf("on-demand pricing: instance types have no live or pinned price (would emit price_per_hour=0, winning the cost signal): %s — add them to onDemandByRegion (see cmd/genpricing) or remove them from offerings", strings.Join(bad, ", "))
+	}
+
 	// Resolve allocatable (vCPU/memory) for the offered types from
 	// DescribeInstanceTypes (best-effort, bounded); the pinned table covers
 	// anything AWS can't return. Specs are immutable, so this runs once.
@@ -200,8 +215,9 @@ func run() error {
 		logger.Warn("spot interruption-probability buckets are us-east-1 approximations; verify advisorBucket for this region", "region", *region)
 	}
 
-	// Background loops: spot price refresh + EC2->inventory reconcile.
+	// Background loops: spot + on-demand price refresh + EC2->inventory reconcile.
 	go runSpotRefresher(ctx, backend, m, *spotRefresh)
+	go runOnDemandRefresher(ctx, backend, m, *odRefresh, logger)
 	go runReconciler(ctx, srv, m, *reconcile, logger)
 
 	// Observed spot interruptions (optional): an SQS queue fed by EventBridge.
@@ -303,6 +319,49 @@ func runSpotRefresher(ctx context.Context, backend *awsBackend, m *metrics, inte
 			m.spotRefresh.WithLabelValues(outcome).Inc()
 		}
 	}
+}
+
+// runOnDemandRefresher periodically pulls live on-demand prices from the public
+// AWS Price List Bulk API into the in-memory cache, off the List hot path. The
+// pinned seed table backstops any failed/missing price, so a refresh error
+// degrades freshness, not correctness — it logs the staleness and serves the
+// last-known prices.
+func runOnDemandRefresher(ctx context.Context, backend *awsBackend, m *metrics, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			// The offer file is tens of MB; allow a longer (bounded) budget.
+			rctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			failed := backend.refreshOnDemandPrices(rctx)
+			cancel()
+			recordOnDemandRefresh(m, failed)
+			if failed > 0 {
+				logger.Warn("on-demand price refresh failed; serving last-known on-demand prices from cache/seed")
+			}
+		}
+	}
+}
+
+// recordOnDemandRefresh updates the on-demand refresh metrics: the success/error
+// counter and, on success, the last-successful-refresh timestamp gauge (from
+// which an operator computes staleness as now - gauge).
+func recordOnDemandRefresh(m *metrics, failed int) {
+	if m == nil {
+		return
+	}
+	if failed > 0 {
+		m.onDemandRefresh.WithLabelValues("error").Inc()
+		return
+	}
+	m.onDemandRefresh.WithLabelValues("success").Inc()
+	m.onDemandLastSuccess.SetToCurrentTime()
 }
 
 func buildStore(path string) (providerkit.Store, error) {

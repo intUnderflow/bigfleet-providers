@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+
+	"github.com/intUnderflow/bigfleet-providers/providers/aws/internal/pricelist"
 )
 
 // BigFleet tag keys. bigfleet:managed marks our instances so DescribeManaged
@@ -65,6 +68,10 @@ type ec2RealConfig struct {
 	RunWaitTimeout time.Duration
 	// SSMPollInterval is how often Configure/Drain poll an SSM command's status.
 	SSMPollInterval time.Duration
+	// PriceListBaseURL is the host for the public AWS Price List Bulk API
+	// (on-demand price refresh). Empty defaults to pricelist.DefaultBaseURL;
+	// tests point it at a local server.
+	PriceListBaseURL string
 }
 
 func (c *ec2RealConfig) withDefaults() {
@@ -80,6 +87,9 @@ func (c *ec2RealConfig) withDefaults() {
 	if c.SSMPollInterval <= 0 {
 		c.SSMPollInterval = 3 * time.Second
 	}
+	if c.PriceListBaseURL == "" {
+		c.PriceListBaseURL = pricelist.DefaultBaseURL
+	}
 }
 
 // ec2Real is the production ec2Client, backed by aws-sdk-go-v2. Inventory and
@@ -89,6 +99,7 @@ type ec2Real struct {
 	cfg    ec2RealConfig
 	ec2    ec2API
 	ssm    ssmAPI
+	http   *http.Client // for the public Price List Bulk API (no credentials)
 	logger *slog.Logger
 }
 
@@ -112,9 +123,12 @@ func newEC2Real(ctx context.Context, cfg ec2RealConfig, logger *slog.Logger) (*e
 		return nil, fmt.Errorf("ec2: load AWS config: %w", err)
 	}
 	return &ec2Real{
-		cfg:    cfg,
-		ec2:    ec2.NewFromConfig(awsCfg),
-		ssm:    ssm.NewFromConfig(awsCfg),
+		cfg: cfg,
+		ec2: ec2.NewFromConfig(awsCfg),
+		ssm: ssm.NewFromConfig(awsCfg),
+		// The offer file is tens of MB; allow a generous read budget (the
+		// refresher's ctx still bounds the whole call).
+		http:   &http.Client{Timeout: 5 * time.Minute},
 		logger: logger,
 	}, nil
 }
@@ -321,6 +335,37 @@ func (r *ec2Real) SpotPriceUSD(ctx context.Context, instanceType, zone string) (
 		return 0, fmt.Errorf("no spot price history for %s in %s", instanceType, zone)
 	}
 	return price, nil
+}
+
+// OnDemandPricesUSD fetches the region's EC2 offer file from the public AWS
+// Price List Bulk API (no credentials) and extracts the plain on-demand hourly
+// price for each wanted instance type. It is the live, runtime equivalent of
+// what cmd/genpricing does offline — one bulk fetch per refresh, never on the
+// List hot path. Types the offer file does not price are simply absent.
+func (r *ec2Real) OnDemandPricesUSD(ctx context.Context, instanceTypes []string) (map[string]float64, error) {
+	want := make(map[string]bool, len(instanceTypes))
+	for _, t := range instanceTypes {
+		if t != "" {
+			want[t] = true
+		}
+	}
+	if len(want) == 0 {
+		return map[string]float64{}, nil
+	}
+	url := pricelist.OfferURL(r.cfg.PriceListBaseURL, r.cfg.Region)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build price-list request: %w", err)
+	}
+	resp, err := r.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch price list %s: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch price list %s: status %s", url, resp.Status)
+	}
+	return pricelist.ExtractOnDemandPrices(resp.Body, want)
 }
 
 // DescribeInstanceCapacities resolves vCPU + memory for the given instance

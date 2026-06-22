@@ -160,6 +160,7 @@ reference (defaults, semantics, the bootstrap model) is in
 | Flag | Default | Meaning |
 |---|---|---|
 | `--spot-refresh` | `5m` | Spot price refresh interval |
+| `--ondemand-refresh` | `60m` | On-demand price refresh interval from the public AWS Price List Bulk API (`0` = seed/fallback table only) |
 | `--spot-interruption-queue` | _(empty)_ | SQS URL fed by an EventBridge spot-interruption/rebalance rule (raises observed interruption probability) |
 | `--reconcile-interval` | `2m` | Background EC2→inventory reconcile interval (`0` = off) |
 
