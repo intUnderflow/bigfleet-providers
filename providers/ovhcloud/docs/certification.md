@@ -70,7 +70,7 @@ make report-ovhcloud PROFILE=core,cloud,fault,durable,scale
 # -> VERDICT: CERTIFIED, writes conformance-report/ovhcloud/{report.json,junit.xml}
 ```
 
-A passing run reports **92/93 behaviors** across all eleven areas (Lifecycle,
+A passing run reports **93/93 behaviors** across all eleven areas (Lifecycle,
 Transition Matrix, Fencing, Concurrency, Metadata, Field Shape, List, Property,
 Timeouts, Durability, Scale).
 

@@ -57,7 +57,7 @@ clears.
 
 **Extension suite** — the BigFleet conformance program: a frozen registry of
 **93 behaviors across 11 areas** that deepens the baseline (stronger invariants
-under distinct, append-only ids). All 92 pass, all 11 areas green:
+under distinct, append-only ids). All 93 pass, all 11 areas green:
 
 | Area | What it certifies |
 |---|---|

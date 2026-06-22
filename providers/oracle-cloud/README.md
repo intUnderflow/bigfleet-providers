@@ -20,7 +20,7 @@ job — this binary never re-implements them.
 | **Configure / Drain** | Oracle Cloud Agent **Run Command** (IAM-authenticated) |
 | **Delete** | `TerminateInstance` |
 | **Auth** | Instance Principals, OKE Workload Identity, or `~/.oci/config` |
-| **Status** | **CERTIFIED** — 92/93 behaviors (fake backend, credential-free) |
+| **Status** | **CERTIFIED** — 93/93 behaviors (fake backend, credential-free) |
 
 ## Quick start (credential-free)
 
