@@ -53,7 +53,7 @@ failing them).
 bigfleet repo. We run it verbatim and never modify it.
 
 **Extension suite** — the BigFleet conformance program: a frozen registry of
-**92 behaviors across 11 areas** that deepens the baseline:
+**93 behaviors across 11 areas** that deepens the baseline:
 
 | Area | What it certifies |
 |---|---|
@@ -96,7 +96,7 @@ The Azure provider does **not** claim **bare-metal**: standalone Azure VMs are
 always billed, so it never serves a free pool where `Delete` is meaningless.
 
 `make certify-azure` runs the credential-free core gate (baseline + the black-box
-extension). The **complete** certification — all 92 behaviors across every lane —
+extension). The **complete** certification — all 93 behaviors across every lane —
 runs through the `bfconformance` runner and emits a JUnit + JSON report:
 
 ```sh

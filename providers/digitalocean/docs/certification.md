@@ -55,7 +55,7 @@ bigfleet repo. We run it verbatim and never modify it; it is the floor every
 certified provider clears.
 
 **Extension suite** — the BigFleet conformance program: a frozen registry of
-**92 behaviors across 11 areas** that deepens the baseline (stronger invariants
+**93 behaviors across 11 areas** that deepens the baseline (stronger invariants
 under distinct, append-only ids). The full registry is the
 [conformance program](https://github.com/intUnderflow/bigfleet-providers/tree/main/conformance/docs/conformance.md).
 This provider clears every applicable one.

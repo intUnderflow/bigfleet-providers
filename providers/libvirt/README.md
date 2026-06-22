@@ -122,7 +122,7 @@ make test-libvirt                        # unit tests (race)
 ```
 
 The complete multi-lane run (`PROFILE=core,cloud,fault,durable,scale`) passes all
-**92 behaviors across 11 areas**. Everything cross-cutting — fencing, idempotency,
+**93 behaviors across 11 areas**. Everything cross-cutting — fencing, idempotency,
 async dispatch, transition timeouts, the `shard_metadata` lifecycle, field-shape —
 is handled by `providerkit`. **This provider does not re-implement any of it.**
 

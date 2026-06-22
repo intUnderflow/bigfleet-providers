@@ -52,7 +52,7 @@ bigfleet repo. We run it verbatim and never modify it; it is the floor every
 certified provider clears.
 
 **Extension suite** — the BigFleet conformance program: a frozen registry of
-**92 behaviors across 11 areas** that deepens the baseline (stronger invariants
+**93 behaviors across 11 areas** that deepens the baseline (stronger invariants
 under distinct, append-only ids, never forking the upstream tests):
 
 | Area | What it certifies |
@@ -69,7 +69,7 @@ under distinct, append-only ids, never forking the upstream tests):
 | Scale & soak | large inventory, churn-soak, latency budgets, parallel throughput |
 | Property / fuzz | seeded-random lifecycle / fencing / metadata oracles |
 
-The full, frozen registry of all 92 behaviors — every assertion, profile, and id —
+The full, frozen registry of all 93 behaviors — every assertion, profile, and id —
 is the [conformance program](/conformance/). This provider clears every one
 applicable to the profiles it claims.
 

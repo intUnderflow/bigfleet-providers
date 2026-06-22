@@ -27,7 +27,7 @@ vCPU/memory.
   liveness/readiness probes, Prometheus metrics, and structured logs. See
   [Observability](/providers/proxmox/observability/).
 - **Certified.** It passes the full BigFleet provider conformance program —
-  [92 certified behaviors](/conformance/) — credential-free on every change, for
+  [93 certified behaviors](/conformance/) — credential-free on every change, for
   the **core** and **cloud** profiles. See
   [Certification](/providers/proxmox/certification/).
 - **Conservative by default.** A `Create` settles to `Idle` only once the VM is

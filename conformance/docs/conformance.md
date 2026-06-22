@@ -1,13 +1,13 @@
 ---
 title: Conformance program
-description: The BigFleet provider conformance program — 92 certified behaviors across 11 areas, profiles, and the bfconformance runner.
+description: The BigFleet provider conformance program — 93 certified behaviors across 11 areas, profiles, and the bfconformance runner.
 ---
 
 # BigFleet provider conformance program
 
 :::note[Operators: you can stop here]
 If you are running a provider, all you need to know is that **"certified" means
-it passed every one of the 92 behaviors registered below** — the full
+it passed every one of the 93 behaviors registered below** — the full
 correctness, fault, durability, and scale bar. You do not need to read the
 registry; the trust signal is the verdict. The rest of this page is the
 developer-facing catalog for people **building or extending** providers.
@@ -97,7 +97,7 @@ cases and asserts stronger invariants under distinct behavior ids.
 
 ## The behaviors
 
-Total: **92 behaviors** across **11 areas**.
+Total: **93 behaviors** across **11 areas**.
 
 
 ### Lifecycle & State Machine

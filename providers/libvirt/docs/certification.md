@@ -75,7 +75,7 @@ Running the full multi-lane set confirms the kit-provided lanes pass too:
 
 ```sh
 make report-libvirt PROFILE=core,cloud,fault,durable,scale
-# behaviors: 92 total — 92 passed, 0 failed, 0 skipped, 0 not-implemented
+# behaviors: 93 total — 93 passed, 0 failed, 0 skipped, 0 not-implemented
 # -> VERDICT: CERTIFIED
 ```
 

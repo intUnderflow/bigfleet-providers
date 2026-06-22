@@ -143,7 +143,7 @@ jobs:
 
   # Full certification of every changed provider via the bfconformance runner, in
   # ONE job: the upstream baseline + the extension suite + the FAULT / DURABILITY
-  # / SCALE lanes = all 92 behaviours, credential-free, emitting a per-behaviour
+  # / SCALE lanes = all 93 behaviours, credential-free, emitting a per-behaviour
   # VERDICT + JUnit/JSON report. Inapplicable lanes/profiles skip-as-pass so the
   # verdict stays meaningful (e.g. an on-demand-only provider's spot lane). The
   # fault lane always exercises the reference faultprovider (not the target).

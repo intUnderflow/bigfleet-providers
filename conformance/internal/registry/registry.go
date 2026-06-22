@@ -22,7 +22,7 @@ type Behavior struct {
 	BlackBox   bool     // assertable over the 6 RPCs alone (false => needs runner orchestration / configurable backend)
 }
 
-// Catalog is the complete frozen behavior set (92 behaviors).
+// Catalog is the complete frozen behavior set (93 behaviors).
 var Catalog = []Behavior{
 	{ID: "B101", Area: "Lifecycle & State Machine", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
 		Title: "A full Speculative->Idle->Configured->Idle round-trip repeated four times leaves cluster, shard_metadata, and last_error all empty at every return to Idle"},
@@ -134,6 +134,8 @@ var Catalog = []Behavior{
 		Title: "A Drain with grace_period_seconds=0 against a failing actuator ends in Idle or FAILED-with-last_error, never stuck DRAINING and never a silent revert"},
 	{ID: "B707", Area: "Timeouts & Failure", Profiles: []string{"fault"}, Capability: "Fault", Phase: 4, BlackBox: false,
 		Title: "A FAILED machine still answers Get/List and reports its FAILED state with last_error preserved verbatim across repeated reads"},
+	{ID: "B708", Area: "Timeouts & Failure", Profiles: []string{"fault"}, Capability: "Fault", Phase: 4, BlackBox: false,
+		Title: "ADR-0056: a machine is not reported CONFIGURED until its node is observed Ready — while readiness is unobserved it stays CONFIGURING, and if readiness does not arrive within the Configure timeout it goes FAILED with non-empty last_error (never phantom-CONFIGURED). Non-black-box: needs a readiness-injecting backend (providerkit.ReadinessChecker)"},
 	{ID: "B801", Area: "Field Shape & Cost", Profiles: []string{"core"}, Capability: "", Phase: 2, BlackBox: true,
 		Title: "Every machine reports a non-UNSPECIFIED state and a non-empty top-level instance_type, with no instance-type/zone/capacity-type key hidden in labels"},
 	{ID: "B802", Area: "Field Shape & Cost", Profiles: []string{"core", "spot"}, Capability: "", Phase: 2, BlackBox: true,

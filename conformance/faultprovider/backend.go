@@ -28,6 +28,11 @@ const (
 	clusterConfigureTO    = "fault-timeout" // ConfigureInstance blocks until ctx is done.
 	clusterConfigureSlow  = "fault-slow-ok" // ConfigureInstance ignores ctx, sleeps past the timeout, then succeeds.
 	clusterDrainError     = "fault-drain-error"
+	// clusterReadinessBlock: ConfigureInstance succeeds (the substrate side is
+	// done) but ConfirmNodeReady blocks until ctx is done — the node never
+	// reaches Ready, so the kit must hold CONFIGURING and time out to FAILED,
+	// never reporting CONFIGURED (ADR-0056, behavior B708).
+	clusterReadinessBlock = "fault-readiness-block"
 )
 
 // faultBackend is an in-memory providerkit.Backend (+Deleter) that injects
@@ -110,6 +115,20 @@ func (b *faultBackend) ConfigureInstance(ctx context.Context, req providerkit.Co
 		b.record(req.Machine.ID, req.ClusterID, req.Machine.ShardMetadata)
 		return nil
 	}
+}
+
+// ConfirmNodeReady implements providerkit.ReadinessChecker (ADR-0056). The kit
+// calls it after ConfigureInstance succeeds and holds the machine at CONFIGURING
+// until it returns. For the clusterReadinessBlock selector it blocks until ctx
+// is done (the node never reaches Ready), so the kit times the transition out to
+// FAILED — the machine must NEVER be reported CONFIGURED on an un-Ready node. For
+// every other cluster it returns nil immediately (normal Configure → Configured).
+func (b *faultBackend) ConfirmNodeReady(ctx context.Context, req providerkit.ConfirmNodeReadyRequest) error {
+	if req.ClusterID == clusterReadinessBlock {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return nil
 }
 
 // DrainInstance errors iff the machine was Configured onto the drain-fault
