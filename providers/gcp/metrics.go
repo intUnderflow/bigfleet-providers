@@ -22,6 +22,9 @@ type metrics struct {
 	panics      prometheus.Counter       // bigfleet_gcp_panics_total
 	reconcile   *prometheus.CounterVec   // bigfleet_gcp_reconcile_total{outcome}
 	preemptions prometheus.Counter       // bigfleet_gcp_spot_preemptions_total
+
+	priceRefresh     *prometheus.CounterVec // bigfleet_gcp_price_refresh_total{outcome}
+	priceLastRefresh prometheus.Gauge       // bigfleet_gcp_price_last_refresh_timestamp_seconds
 }
 
 func newMetrics() *metrics {
@@ -58,6 +61,14 @@ func newMetrics() *metrics {
 		preemptions: f.counter(prometheus.CounterOpts{
 			Name: "bigfleet_gcp_spot_preemptions_total",
 			Help: "Observed GCE Spot preemptions of managed instances.",
+		}),
+		priceRefresh: f.counterVec(prometheus.CounterOpts{
+			Name: "bigfleet_gcp_price_refresh_total",
+			Help: "Background live price-refresh runs by outcome.",
+		}, "outcome"),
+		priceLastRefresh: f.gauge(prometheus.GaugeOpts{
+			Name: "bigfleet_gcp_price_last_refresh_timestamp_seconds",
+			Help: "Unix time of the last fully-successful live price refresh.",
 		}),
 	}
 	reg.MustRegister(collectors.NewGoCollector())
@@ -142,6 +153,11 @@ func (f promFactory) counterVec(o prometheus.CounterOpts, labels ...string) *pro
 	c := prometheus.NewCounterVec(o, labels)
 	f.reg.MustRegister(c)
 	return c
+}
+func (f promFactory) gauge(o prometheus.GaugeOpts) prometheus.Gauge {
+	g := prometheus.NewGauge(o)
+	f.reg.MustRegister(g)
+	return g
 }
 func (f promFactory) histogramVec(o prometheus.HistogramOpts, labels ...string) *prometheus.HistogramVec {
 	h := prometheus.NewHistogramVec(o, labels)

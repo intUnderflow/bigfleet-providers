@@ -344,6 +344,29 @@ func (b *gcpBackend) refreshMachineTypes(ctx context.Context) int {
 	return b.machineTypes.resolve(ctx, b.offeredRefs())
 }
 
+// refreshPrices pulls live on-demand prices for the offered machine types into
+// the in-memory price cache. Call at startup and on a timer; never on the List
+// hot path. Returns the number of offered types that failed to refresh (each
+// still covered by the pinned seed/fallback).
+func (b *gcpBackend) refreshPrices(ctx context.Context) int {
+	return b.pricing.refresh(ctx, b.offeredTypes())
+}
+
+// offeredTypes returns the distinct machine types across the configured
+// offerings, to drive the price refresh.
+func (b *gcpBackend) offeredTypes() []string {
+	seen := make(map[string]bool, len(b.offerings))
+	out := make([]string, 0, len(b.offerings))
+	for _, off := range b.offerings {
+		if seen[off.MachineType] {
+			continue
+		}
+		seen[off.MachineType] = true
+		out = append(out, off.MachineType)
+	}
+	return out
+}
+
 // offeredRefs returns the distinct (machine type, zone) refs across offerings.
 func (b *gcpBackend) offeredRefs() []machineTypeRef {
 	out := make([]machineTypeRef, 0, len(b.offerings))

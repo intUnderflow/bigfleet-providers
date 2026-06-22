@@ -48,8 +48,9 @@ slot, never in place. Don't re-issue mutations against it.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Spot looks as expensive as on-demand | Spot price is a fixed fraction of on-demand in the pinned table. | The fraction (`0.4`) is conservative; pin real Spot rates if you need precision. See [Pricing](/providers/gcp/pricing-and-interruption/). |
-| Prices look stale / wrong region | Pinned table has no entry for the region. | The provider falls back to the `us-central1` baseline; pin a per-region table and add it to `onDemandByRegion`. |
+| Spot looks as expensive as on-demand | Spot price is a fixed fraction of the (live or fallback) on-demand rate. | The fraction (`0.4`) is conservative; lower it if you need precision. See [Pricing](/providers/gcp/pricing-and-interruption/). |
+| Prices look stale | Live refresh is failing, so the provider is serving the pinned seed/fallback. | Check `bigfleet_gcp_price_refresh_total{outcome="error"}` and `bigfleet_gcp_price_last_refresh_timestamp_seconds`; confirm the Cloud Billing API is enabled and reachable (or set `--pricing-api-key`). The seed table backstops it so prices never zero. |
+| Prices wrong for a region | No pinned seed entry for the region (live refresh covers it once running). | The seed falls back to the `us-central1` baseline; pin a per-region seed in `onDemandByRegion` for an accurate cold start. |
 | A Spot machine shows `interruption_probability = 0` | Would be a bug — the kit rejects it at startup. | If you see it, file it; the provider declares a non-zero forecast for every Spot family. |
 
 ## Fencing alerts

@@ -1,13 +1,32 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/intUnderflow/bigfleet-providers/providerkit"
 )
 
+// fakePricingSource is a deterministic pricingSource for the refresher tests: it
+// returns a fixed price per type, or an error for types in fail.
+type fakePricingSource struct {
+	prices map[string]float64
+	fail   map[string]bool
+}
+
+func (f *fakePricingSource) OnDemandPriceUSD(_ context.Context, machineType, _ string) (float64, error) {
+	if f.fail[machineType] {
+		return 0, errors.New("synthetic pricing failure")
+	}
+	if v, ok := f.prices[machineType]; ok {
+		return v, nil
+	}
+	return 0, errors.New("no price")
+}
+
 func TestPricing_OnDemandAndSpot(t *testing.T) {
-	p := newPricing("us-central1")
+	p := newPricing("us-central1", nil, quietLogger())
 	od := p.price("n2-standard-4", providerkit.CapacityOnDemand)
 	if od <= 0 {
 		t.Fatalf("on-demand price = %v, want > 0", od)
@@ -21,22 +40,66 @@ func TestPricing_OnDemandAndSpot(t *testing.T) {
 	}
 }
 
+// TestPricing_RefreshUpdatesLivePrice is the real-path test: the refresher pulls
+// a live price from the source and List/Describe reads see it (not the seed).
+func TestPricing_RefreshUpdatesLivePrice(t *testing.T) {
+	src := &fakePricingSource{prices: map[string]float64{"n2-standard-4": 0.222}}
+	p := newPricing("us-central1", src, quietLogger())
+
+	seed := onDemandUSCentral1["n2-standard-4"]
+	if got := p.price("n2-standard-4", providerkit.CapacityOnDemand); got != seed {
+		t.Fatalf("before refresh price = %v, want seed %v", got, seed)
+	}
+	if failed := p.refresh(context.Background(), []string{"n2-standard-4"}); failed != 0 {
+		t.Fatalf("refresh reported %d failures", failed)
+	}
+	if got := p.price("n2-standard-4", providerkit.CapacityOnDemand); got != 0.222 {
+		t.Errorf("after refresh on-demand price = %v, want live 0.222", got)
+	}
+	// Spot tracks the live on-demand rate.
+	if got := p.price("n2-standard-4", providerkit.CapacitySpot); got != spotFraction*0.222 {
+		t.Errorf("after refresh spot price = %v, want %v", got, spotFraction*0.222)
+	}
+	if age, ok := p.staleness(); !ok || age < 0 {
+		t.Errorf("staleness after a clean refresh = (%v,%v), want a fresh age", age, ok)
+	}
+}
+
+// TestPricing_RefreshFailureKeepsFallback proves a live-source failure never
+// zeroes a price: the type falls back to the pinned seed.
+func TestPricing_RefreshFailureKeepsFallback(t *testing.T) {
+	src := &fakePricingSource{fail: map[string]bool{"n2-standard-4": true}}
+	p := newPricing("us-central1", src, quietLogger())
+	if failed := p.refresh(context.Background(), []string{"n2-standard-4"}); failed != 1 {
+		t.Fatalf("refresh failures = %d, want 1", failed)
+	}
+	if _, ok := p.staleness(); ok {
+		t.Error("a refresh with failures must not stamp last-successful-refresh")
+	}
+	seed := onDemandUSCentral1["n2-standard-4"]
+	if got := p.price("n2-standard-4", providerkit.CapacityOnDemand); got != seed {
+		t.Errorf("price after failed refresh = %v, want seed fallback %v (never 0)", got, seed)
+	}
+}
+
 func TestNewGCPBackend_RejectsUnpricedOffering(t *testing.T) {
-	// An offering whose machine type has no pinned price would publish
-	// price_per_hour = 0; newGCPBackend must reject it at startup.
+	// An offering whose machine type has no seed price has no safe value to
+	// publish before the first live refresh; newGCPBackend must reject it at
+	// startup rather than emit price_per_hour = 0.
 	offs := []offering{{
 		MachineType: "zz-unpriced-9", Zone: "us-central1-a", Capacity: "on_demand",
 		Count: 1, Resources: map[string]string{"cpu": "1", "memory": "2Gi"},
 	}}
 	_, err := newGCPBackend("gcp-test", "us-central1", newGCEFake(), offs,
-		newPricing("us-central1"), newInterruption(), nil, quietLogger())
+		newPricing("us-central1", newStaticPricer("us-central1"), quietLogger()),
+		newInterruption(), nil, quietLogger())
 	if err == nil {
-		t.Fatal("expected newGCPBackend to reject an offering with no pinned price")
+		t.Fatal("expected newGCPBackend to reject an offering with no seed price")
 	}
 }
 
 func TestPricing_UnknownRegionFallsBackToBaseline(t *testing.T) {
-	p := newPricing("europe-west99")
+	p := newPricing("europe-west99", nil, quietLogger())
 	if p.price("n2-standard-4", providerkit.CapacityOnDemand) <= 0 {
 		t.Error("unknown region should fall back to the baseline table, not zero")
 	}

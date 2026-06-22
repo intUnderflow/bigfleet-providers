@@ -44,6 +44,8 @@ and interruption are sourced see
 | `--bootstrap-hook` | `/opt/bigfleet/bootstrap` | Image path that consumes the delivered bootstrap blob and joins the cluster. See [the image contract](#the-image-hook-contract). |
 | `--use-external-ip` | `false` | Reach instances over an ephemeral external IP for SSH (default: internal IP, provider in the same VPC). |
 | `--reconcile-interval` | `2m` | Background GCE→inventory reconcile interval (`0` = off; also observes Spot preemptions). |
+| `--price-refresh` | `45m` | Live on-demand price refresh interval from the Cloud Billing Catalog (`0` = off, pinned table only). Read off the `List` hot path. |
+| `--pricing-api-key` | _(empty)_ | Cloud Billing Catalog API key for price refresh (default: Application Default Credentials). |
 | `--metrics-addr` | `:9090` | Address for `/metrics`, `/healthz`, `/readyz`. Empty = disabled. |
 | `--reflection` | `true` | Register gRPC server reflection (for `grpcurl`/debugging). |
 | `--tls-cert` | _(empty)_ | Server certificate (PEM). With `--tls-key`, enables TLS. |

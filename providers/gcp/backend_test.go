@@ -21,7 +21,7 @@ func newTestBackend(t *testing.T, seedCount int) (*gcpBackend, *gceFake) {
 	fake := newGCEFake()
 	logger := quietLogger()
 	offs := defaultOfferings(seedCount, "us-central1-a", "us-central1-b")
-	b, err := newGCPBackend("gcp-test", "us-central1", fake, offs, newPricing("us-central1"), newInterruption(), nil, logger)
+	b, err := newGCPBackend("gcp-test", "us-central1", fake, offs, newPricing("us-central1", newStaticPricer("us-central1"), logger), newInterruption(), nil, logger)
 	if err != nil {
 		t.Fatalf("newGCPBackend: %v", err)
 	}

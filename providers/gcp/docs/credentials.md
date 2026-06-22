@@ -34,8 +34,16 @@ The provider needs exactly one predefined role on the target project:
 That's the least-privilege set. `instanceAdmin.v1` already covers
 `compute.instances.{insert,delete,setMetadata,get,list}` and
 `compute.machineTypes.get`. Map each grant to the call that needs it, and grant
-nothing more. (If you later add live Cloud Billing pricing, add a billing viewer
-role then — this provider uses a pinned price table, so it is not needed.)
+nothing more.
+
+**Live pricing** reads the **Cloud Billing Catalog** API
+(`cloudbilling.googleapis.com`, the public SKU catalogue for service
+`6F81-5844-456A`) on the `--price-refresh` cadence. The catalogue is public, so
+it needs **no extra project role** — only that the Cloud Billing API is enabled
+and the provider presents *some* credential: the provider's own ADC identity, or
+an API key via `--pricing-api-key`. If pricing cannot be reached the provider
+falls back to the pinned seed table (prices go stale but never zero), so a
+missing key/API only degrades cost accuracy, never the lifecycle calls.
 
 The Terraform under
 [`deploy/sa/`](https://github.com/intUnderflow/bigfleet-providers/tree/main/providers/gcp/deploy/sa)
