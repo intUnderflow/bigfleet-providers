@@ -101,7 +101,7 @@ PersistentVolume.
 ## Fencing — defence against zombie shards
 
 Every mutating RPC carries a `(shard_id, shard_epoch, sequence_number)` fencing
-token. The provider (via `providerkit`) tracks the per-shard high-water mark,
+token. The provider (via `providerkit`) tracks the per-`(shard_id, machine_id)` high-water mark,
 rejects any not-strictly-newer token with `FAILED_PRECONDITION` **without applying
 it**, and checks the fence **before** the idempotency short-circuit — so a zombie
 shard can never replay a cached operation. `FAILED_PRECONDITION` is reserved

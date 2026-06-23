@@ -222,7 +222,7 @@ Total: **93 behaviors** across **11 areas**.
 | `B1004` | durable | After restart, full inventory (machine ids and states) is recovered identically with no machine lost or duplicated _(cap: Durable)_ |
 | `B1005` | durable | After restart, a post-restart since-delta cursor and a freshly issued operation_id are well-formed and the operation_id is not reused from a pre-restart cycle (freshness, not counter monotonicity) _(cap: Durable)_ |
 | `B1006` | durable | A transition interrupted by the kill is recovered on restart to FAILED (with last_error) or to a clean stable state, never left stuck in a transitional state _(cap: Durable)_ |
-| `B1007` | durable | After restart, a brand-new shard_id's first low token is still accepted, confirming per-shard mark isolation survived without a global high-water collapse _(cap: Durable)_ |
+| `B1007` | durable | After restart, a brand-new shard_id's first low token is still accepted, confirming per-(shard_id, machine_id) mark isolation survived without a global high-water collapse _(cap: Durable)_ |
 
 ### Scale & Soak
 

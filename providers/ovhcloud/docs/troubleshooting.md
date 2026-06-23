@@ -63,7 +63,7 @@ reconcile.
 ## `FailedPrecondition` errors on Create/Configure/Drain/Delete
 
 **Cause:** these are **fencing rejections**, not bugs. A mutating RPC arrived with
-a token that is not strictly newer than the per-shard high-water mark — a zombie or
+a token that is not strictly newer than the per-`(shard_id, machine_id)` high-water mark — a zombie or
 out-of-order shard. The provider reserves `FAILED_PRECONDITION` exclusively for
 fencing.
 

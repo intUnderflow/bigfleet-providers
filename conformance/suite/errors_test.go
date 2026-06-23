@@ -448,15 +448,16 @@ func TestB212_Int64MaxTokenHighWaterMark(t *testing.T) {
 	}
 	h.MustReach(id, pb.MachineState_MACHINE_STATE_CONFIGURED, 20*time.Second)
 
-	// The mark is now (MaxInt64, MaxInt64). A replay of the exact max is NOT
-	// strictly newer => fenced (proves the mark sits AT the max, no overflow to
-	// some smaller wrapped value that the replay would beat).
-	drainID := h.PickSpeculative() // need a fresh machine the shard can Create
-	if got := harness.Code(h.FencedCall(harness.RPCCreate, drainID, shard, maxI64, maxI64)); got != codes.FailedPrecondition {
+	// The mark for (shard, id) is now (MaxInt64, MaxInt64). A replay of the exact
+	// max on the SAME (shard, machine) is NOT strictly newer => fenced (proves the
+	// mark sits AT the max, no overflow to some smaller wrapped value that the
+	// replay would beat). The fence runs before the position check, so the stale
+	// token is rejected even though Create is out-of-position on the Configured host.
+	if got := harness.Code(h.FencedCall(harness.RPCCreate, id, shard, maxI64, maxI64)); got != codes.FailedPrecondition {
 		t.Errorf("replay of (MaxInt64,MaxInt64): code %s, want FAILED_PRECONDITION (mark must rest at the max)", got)
 	}
 	// A lower epoch with max sequence is also fenced (lexicographic, no wrap).
-	if got := harness.Code(h.FencedCall(harness.RPCCreate, drainID, shard, maxI64-1, maxI64)); got != codes.FailedPrecondition {
+	if got := harness.Code(h.FencedCall(harness.RPCCreate, id, shard, maxI64-1, maxI64)); got != codes.FailedPrecondition {
 		t.Errorf("(MaxInt64-1, MaxInt64): code %s, want FAILED_PRECONDITION", got)
 	}
 	// Sanity: the original machine actually carried the binding (accepted op).

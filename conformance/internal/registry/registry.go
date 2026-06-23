@@ -181,7 +181,7 @@ var Catalog = []Behavior{
 	{ID: "B1006", Area: "Durability / Restart Recovery", Profiles: []string{"durable"}, Capability: "Durable", Phase: 4, BlackBox: false,
 		Title: "A transition interrupted by the kill is recovered on restart to FAILED (with last_error) or to a clean stable state, never left stuck in a transitional state"},
 	{ID: "B1007", Area: "Durability / Restart Recovery", Profiles: []string{"durable"}, Capability: "Durable", Phase: 4, BlackBox: false,
-		Title: "After restart, a brand-new shard_id's first low token is still accepted, confirming per-shard mark isolation survived without a global high-water collapse"},
+		Title: "After restart, a brand-new shard_id's first low token is still accepted, confirming per-(shard_id, machine_id) mark isolation survived without a global high-water collapse"},
 	{ID: "B1101", Area: "Scale & Soak", Profiles: []string{"scale"}, Capability: "Scale", Phase: 5, BlackBox: true,
 		Title: "With a 10k-100k seeded inventory, a full List returns every machine and each record satisfies the field-shape and cost-bound invariants"},
 	{ID: "B1102", Area: "Scale & Soak", Profiles: []string{"scale"}, Capability: "Scale", Phase: 5, BlackBox: true,

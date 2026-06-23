@@ -57,14 +57,16 @@ func TestB301_FenceBeforeNotFound(t *testing.T) {
 	shard := h.UniqueShardID("b301")
 	const ghost = "conformance-b301-ghost-machine"
 
-	// Establish a high-water mark for this shard against a real machine.
-	real := h.PickSpeculative()
-	if err := h.FencedCreate(real, shard, 5, 5); err != nil {
-		t.Fatalf("establish mark (5,5): %v", err)
+	// Establish a high-water mark for (shard, ghost) WITHOUT the machine existing:
+	// the fence runs before the not-found check, so a fenced Create at (5,5) to the
+	// ghost passes the fence (advancing (shard, ghost)'s mark to (5,5)) and only
+	// THEN surfaces NotFound. This both demonstrates fence-before-not-found and sets
+	// up the stale-token rejection below under per-(shard, machine) fencing.
+	if got := harness.Code(h.FencedCall(harness.RPCCreate, ghost, shard, 5, 5)); got != codes.NotFound {
+		t.Fatalf("establish (shard, ghost) mark via (5,5): code %s, want NotFound (fence passes, then not-found)", got)
 	}
 
-	// A STALE token (1,1) for this shard, aimed at a machine that does not
-	// exist, is fenced FIRST on every mutating RPC.
+	// A STALE token (1,1) for (shard, ghost) is fenced FIRST on every mutating RPC.
 	for _, rpc := range []harness.RPC{harness.RPCCreate, harness.RPCConfigure, harness.RPCDrain, harness.RPCDelete} {
 		err := h.FencedCall(rpc, ghost, shard, 1, 1)
 		// Delete may be Unimplemented on some providers; the AWS fake supports

@@ -407,8 +407,8 @@ func TestB1203_RandomLifecycleSequences(t *testing.T) {
 
 // For random interleavings of fenced mutations across MULTIPLE shards on shared
 // machines, the invariant oracle confirms FAILED_PRECONDITION is emitted ONLY
-// for fencing rejections (a token not strictly newer than that shard's mark),
-// never for out-of-position or not-found. We drive Create (idempotent on the
+// for fencing rejections (a token not strictly newer than that (shard, machine)'s
+// mark), never for out-of-position or not-found. We drive Create (idempotent on the
 // Speculative->Idle path), so a fence-passing call never errors for a non-fence
 // reason — letting us attribute every FP precisely.
 func TestB1204_MultiShardFencedInterleavings(t *testing.T) {
@@ -416,17 +416,19 @@ func TestB1204_MultiShardFencedInterleavings(t *testing.T) {
 	h := dial(t)
 	rng := h.Rand()
 
-	// A few shared machines and a few independent shards. Each shard keeps its own
-	// running high-water mark oracle; marks are per-(shard) and independent of the
-	// machine, matching the contract.
+	// A few shared machines and a few independent shards. The oracle keeps a running
+	// high-water mark per (shard, machine) — matching the per-(shard_id, machine_id)
+	// fencing contract: concurrent ops on different machines of the same shard never
+	// fence each other.
 	const nMachines = 4
 	const nShards = 3
 	machines := h.PickNSpeculative(nMachines)
 	shards := make([]string, nShards)
 	type tok struct{ epoch, seq int64 }
-	marks := make([]*tok, nShards) // per-shard oracle, nil == no contact yet
+	marks := make([][]*tok, nShards) // per-(shard, machine) oracle, nil == no contact yet
 	for i := range shards {
 		shards[i] = h.UniqueShardID(fmt.Sprintf("b1204-%d", i))
+		marks[i] = make([]*tok, nMachines)
 	}
 
 	newer := func(m *tok, c tok) bool {
@@ -443,7 +445,7 @@ func TestB1204_MultiShardFencedInterleavings(t *testing.T) {
 	for i := 0; i < steps; i++ {
 		si := rng.Intn(nShards)
 		mi := rng.Intn(nMachines)
-		mk := marks[si]
+		mk := marks[si][mi]
 		var c tok
 		// Bias around this shard's current mark to densely hit the boundary.
 		switch base := mk; base {
@@ -465,7 +467,7 @@ func TestB1204_MultiShardFencedInterleavings(t *testing.T) {
 			c.seq = 1
 		}
 
-		want := newer(marks[si], c)
+		want := newer(marks[si][mi], c)
 		// Note: the target machine is sometimes already Idle from a prior accepted
 		// Create — Create is idempotent there, so a fence-passing call is STILL a
 		// success (no out-of-position error). That is exactly the property: FP can
@@ -477,7 +479,7 @@ func TestB1204_MultiShardFencedInterleavings(t *testing.T) {
 				t.Fatalf("step %d shard=%d machine=%d (e=%d s=%d): fence ACCEPT but error %s (FP must never come from position/not-found)",
 					i, si, mi, c.epoch, c.seq, got)
 			}
-			marks[si] = &tok{c.epoch, c.seq}
+			marks[si][mi] = &tok{c.epoch, c.seq}
 		} else {
 			if got != codes.FailedPrecondition {
 				t.Fatalf("step %d shard=%d machine=%d (e=%d s=%d): fence REJECT but code %s, want FAILED_PRECONDITION",
@@ -490,7 +492,7 @@ func TestB1204_MultiShardFencedInterleavings(t *testing.T) {
 	// LOWEST non-zero token is accepted even though other shards hold high marks.
 	fresh := h.UniqueShardID("b1204-fresh")
 	if err := h.FencedCreate(machines[0], fresh, 1, 1); err != nil {
-		t.Errorf("fresh shard first-contact (1,1) rejected despite per-shard isolation: %v", err)
+		t.Errorf("fresh shard first-contact (1,1) rejected despite per-(shard, machine) isolation: %v", err)
 	}
 }
 

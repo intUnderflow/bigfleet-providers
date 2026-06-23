@@ -59,7 +59,7 @@ bigfleet repo. We run it verbatim and never modify it.
 |---|---|
 | Lifecycle & state machine | residue-free round-trips; per-edge transitional, cluster, and host invariants |
 | Transition matrix / errors | the out-of-position matrix, idempotent no-ops, code discipline, edge inputs |
-| Fencing | fence-before-everything, per-`shard_id` isolation, exhaustive `(epoch, sequence)` ordering |
+| Fencing | fence-before-everything, per-`(shard_id, machine_id)` isolation, exhaustive `(epoch, sequence)` ordering |
 | Concurrency & idempotency | N parallel retries collapse to one `operation_id` and exactly one effect |
 | Metadata | `shard_metadata` verbatim echo, clear-on-drain, clean replace |
 | Field shape & cost | top-level `instance_type`/`zone`/`capacity_type`; price ≥ 0; `interruption_probability` ∈ [0,1], **> 0 for SPOT** |
