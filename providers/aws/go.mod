@@ -8,7 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.307.1
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.44.0
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.69.3
-	github.com/intUnderflow/bigfleet v0.0.0-20260620114917-f809069ab3d8
+	github.com/intUnderflow/bigfleet v0.0.0-20260623204533-f3481855e447
 	github.com/intUnderflow/bigfleet-providers v0.0.0
 	github.com/prometheus/client_golang v1.23.2
 	google.golang.org/grpc v1.80.0

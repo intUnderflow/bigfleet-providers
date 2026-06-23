@@ -3,7 +3,7 @@ module github.com/intUnderflow/bigfleet-providers/providers/_template
 go 1.26.4
 
 require (
-	github.com/intUnderflow/bigfleet v0.0.0-20260620114917-f809069ab3d8
+	github.com/intUnderflow/bigfleet v0.0.0-20260623204533-f3481855e447
 	github.com/intUnderflow/bigfleet-providers v0.0.0
 	google.golang.org/grpc v1.80.0
 )

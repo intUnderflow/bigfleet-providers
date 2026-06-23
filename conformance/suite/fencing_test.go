@@ -17,11 +17,12 @@ import (
 // stale-epoch / stale-seq / new-epoch / unknown-shard / reads-unaffected
 // baseline.
 //
-// The fencing contract (paper §11, M71): every mutating RPC carries a token
-// (shard_id, shard_epoch, sequence_number). For a non-empty shard_id the
-// provider keeps a per-shard high-water mark and accepts a token IFF its
-// (epoch, sequence) is strictly lexicographically greater than the running
-// mark; a not-strictly-newer token is rejected with FAILED_PRECONDITION, the
+// The fencing contract (paper §11, M71; ADR-0058): every mutating RPC carries
+// a token (shard_id, shard_epoch, sequence_number). For a non-empty shard_id
+// the provider keeps a per-(shard_id, machine_id) high-water mark and accepts
+// a token IFF its (epoch, sequence) is strictly lexicographically greater than
+// that machine's running mark for the shard; a not-strictly-newer token is
+// rejected with FAILED_PRECONDITION, the
 // ONLY code the contract reserves for fencing. The fence runs FIRST — before
 // the not-found check and before the idempotency short-circuit. An absent
 // token (empty shard_id, epoch=0, seq=0) bypasses fencing entirely. Reads

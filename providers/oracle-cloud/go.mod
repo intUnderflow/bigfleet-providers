@@ -3,7 +3,7 @@ module github.com/intUnderflow/bigfleet-providers/providers/oracle-cloud
 go 1.26.4
 
 require (
-	github.com/intUnderflow/bigfleet v0.0.0-20260620114917-f809069ab3d8
+	github.com/intUnderflow/bigfleet v0.0.0-20260623204533-f3481855e447
 	github.com/intUnderflow/bigfleet-providers v0.0.0
 	github.com/oracle/oci-go-sdk/v65 v65.118.0
 	github.com/prometheus/client_golang v1.23.2
