@@ -64,7 +64,8 @@ func run() error {
 		zoneA     = flag.String("zone", "fr-par-1", "the single Scaleway zone this process serves (e.g. fr-par-1); all offerings must match it")
 		statePath = flag.String("state", "", "durable state file (empty = in-memory only)")
 
-		image        = flag.String("image", "", "base image label/id for CreateServer (scaleway backend)")
+		image        = flag.String("image", "", "base image label/id for CreateServer (scaleway backend); for elastic-metal, an OS id or name (e.g. \"Ubuntu 22.04\")")
+		bmSSHKeys    = flag.String("baremetal-ssh-key-ids", "", "comma-separated Scaleway SSH-key UUIDs to inject into an Elastic Metal OS install (optional; BigFleet reaches the host via the on-host agent, not SSH)")
 		eurUSD       = flag.Float64("eur-usd", defaultEURtoUSD, "EUR->USD conversion rate applied to Scaleway prices")
 		baseUserData = flag.String("base-user-data", "", "path to the generic pre-binding cloud-init baked in at server create (installs the on-host agent)")
 		priceRefresh = flag.Duration("price-refresh", 30*time.Minute, "price refresh interval (0 = off)")
@@ -129,14 +130,15 @@ func run() error {
 		}
 		bootSrv = srv
 		real, err := newSCWReal(scwRealConfig{
-			Creds:             creds,
-			CommercialKind:    capacity,
-			Image:             *image,
-			Zone:              *zoneA,
-			EURtoUSD:          *eurUSD,
-			Vault:             vault,
-			BootstrapEndpoint: *bootstrapEndpoint,
-			BootstrapCAPEM:    caPEM,
+			Creds:              creds,
+			CommercialKind:     capacity,
+			Image:              *image,
+			Zone:               *zoneA,
+			EURtoUSD:           *eurUSD,
+			BareMetalSSHKeyIDs: splitCSV(*bmSSHKeys),
+			Vault:              vault,
+			BootstrapEndpoint:  *bootstrapEndpoint,
+			BootstrapCAPEM:     caPEM,
 		}, logger)
 		if err != nil {
 			return err
@@ -380,6 +382,18 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// splitCSV splits a comma-separated flag value into trimmed, non-empty entries
+// (nil for an empty value).
+func splitCSV(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func buildStore(path string) (providerkit.Store, error) {

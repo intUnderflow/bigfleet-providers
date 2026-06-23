@@ -81,7 +81,6 @@ image:
 zone: fr-par-1
 provider: scaleway-fr-par
 substrate: instances        # instances (ON_DEMAND) | elastic-metal (BARE_METAL)
-                            # elastic-metal real backend is not yet built — fake only; use instances for real deployments
 
 # The Scaleway server settings.
 scaleway:
@@ -143,7 +142,7 @@ reference (defaults, semantics, the bootstrap model) is in
 |---|---|---|
 | `--addr` | `:9000` | gRPC listen address |
 | `--provider` | `scaleway` | Label stamped on `HostRef.provider` (e.g. `scaleway-fr-par`) |
-| `--substrate` | `instances` | `instances` (ON_DEMAND) \| `elastic-metal` (BARE_METAL). The real Elastic Metal backend is not yet built — `--substrate=elastic-metal` with real credentials fails fast at startup and runs on the in-memory fake only; use `instances` for real deployments |
+| `--substrate` | `instances` | `instances` (ON_DEMAND) \| `elastic-metal` (BARE_METAL) |
 | `--scaleway-backend` | `auto` | `scaleway` \| `fake` \| `auto` (auto = `scaleway` when credentials are set, else `fake`) |
 | `--state` | _(empty)_ | Durable state file; empty = in-memory only |
 

@@ -43,7 +43,7 @@ variable "project_id" {
 }
 
 variable "enable_elastic_metal" {
-  description = "Also grant the Elastic Metal (bare-metal) permission set. NOTE: the real Elastic Metal backend is not yet built into the provider binary (it runs on the fake backend only), so leave this false for any real deployment; it exists for when the Elastic Metal backend ships."
+  description = "Also grant the Elastic Metal (bare-metal) permission set. Set true for an Elastic Metal (--substrate=elastic-metal) deployment."
   type        = bool
   default     = false
 }
@@ -68,8 +68,7 @@ resource "scaleway_iam_application" "provider" {
 #   - BlockStorageFullAccess — delete the boot Block Storage (sbs) volume on
 #                             Delete (the instance API cannot delete sbs volumes),
 #                             so this is required to avoid a storage leak.
-# BareMetalFullAccess is added only when enable_elastic_metal is set (note: the
-# real Elastic Metal backend is not yet built — see var.enable_elastic_metal).
+# BareMetalFullAccess is added only when enable_elastic_metal is set.
 locals {
   permission_sets = concat(
     ["InstancesFullAccess", "BlockStorageFullAccess"],

@@ -26,11 +26,10 @@ One process serves one substrate, selected by `--substrate`:
   Physical servers that return to a free pool, so `Delete` is
   `codes.Unimplemented`. Claims the **bare-metal** profile. `price_per_hour = 0`
   (owned hardware); commissioning is slow, so transition timeouts are generous.
-  **Status: fake-backend only.** The real Elastic Metal client is not built yet —
-  `--substrate=elastic-metal` with real credentials fails fast at startup
-  (`newSCWReal` rejects `BARE_METAL`); it runs on the in-memory fake (which is
-  what the bare-metal conformance profile certifies). Use `instances` for any
-  real deployment until the Elastic Metal backend ships.
+  The real backend provisions over the Scaleway Baremetal API (order + OS install
+  + wait-for-install), delivering the on-host agent as install-time cloud-init
+  user-data; the in-memory fake backs credential-free certification of the
+  bare-metal profile.
 
 ## Running it
 

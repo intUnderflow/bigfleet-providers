@@ -63,6 +63,13 @@ type scwRealConfig struct {
 	Zone           string
 	EURtoUSD       float64
 
+	// BareMetalSSHKeyIDs are optional Scaleway SSH-key UUIDs injected into an
+	// Elastic Metal OS install. BigFleet reaches the host via the on-host agent
+	// (cloud-init user-data), not SSH, so this is normally empty; set it only if a
+	// chosen OS image requires an SSH key at install time, or for break-glass
+	// access. Ignored by the Instances path.
+	BareMetalSSHKeyIDs []string
+
 	// Vault is the on-host agent control channel used by ApplyBootstrap /
 	// DrainNode (Scaleway has no in-guest command API). Required.
 	Vault *bootstrapVault
@@ -162,9 +169,8 @@ func newSCWReal(cfg scwRealConfig, logger *slog.Logger) (scwClient, error) {
 		// Elastic Metal uses a distinct two-step provisioning flow (CreateServer +
 		// InstallServer + WaitForServerInstall) on the baremetal/v1 API. It shares
 		// this client's auth and the same bootstrap-delivery model, but is a
-		// separate adapter; see docs/configuration.md. Until that adapter ships,
-		// refuse rather than mis-provisioning Instances under a bare-metal offering.
-		return nil, fmt.Errorf("scaleway: the real Elastic Metal backend is not built into this binary; run --substrate=elastic-metal against the fake, or use the Instances substrate")
+		// separate adapter (scwbaremetal.go).
+		return newSCWElasticMetal(cfg, client, zone, logger)
 	}
 
 	return &scwReal{

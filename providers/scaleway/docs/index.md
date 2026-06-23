@@ -17,11 +17,9 @@ It serves **two substrates**, one per process, selected by `--substrate`:
 - **Instances → `ON_DEMAND`** (`--substrate=instances`) — cloud VMs the provider
   can tear down. Implements `Delete`.
 - **Elastic Metal → `BARE_METAL`** (`--substrate=elastic-metal`) — physical
-  servers returned to a free pool. `Delete` is `Unimplemented`. **The real
-  Elastic Metal backend is not yet built:** `--substrate=elastic-metal` with real
-  credentials fails fast at startup; it runs on the in-memory fake only (which is
-  what the bare-metal conformance profile certifies). Use `instances` for any real
-  deployment.
+  servers returned to a free pool. `Delete` is `Unimplemented`. The real backend
+  provisions over the Scaleway Baremetal API (order + OS install); the in-memory
+  fake backs the bare-metal conformance profile.
 
 You run **one process per zone** (Scaleway's `fr-par-1`, `nl-ams-1`,
 `pl-waw-1`, …), and **one substrate per process**, next to BigFleet. Each process
