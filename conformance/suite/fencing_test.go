@@ -85,12 +85,17 @@ func TestB301_FenceBeforeNotFound(t *testing.T) {
 	}
 }
 
-// B302 — fencing high-water marks are isolated per shard_id. One shard's high
-// mark never fences another shard's first low-token contact, and the owning
-// shard's own stale token is still rejected. Deepened: three independent shards,
-// each driven high, then cross-checked — a fresh shard's low token is accepted
-// regardless of any other shard's mark, and each owner's stale replay is
-// independently fenced.
+// B302 — fencing high-water marks are isolated per (shard_id, machine_id).
+// Two halves: (1) cross-SHARD — one shard's high mark never fences another
+// shard's first low-token contact, and the owning shard's own stale token is
+// still rejected; (2) cross-MACHINE — within ONE shard, a high mark on one
+// machine never fences a LOWER token on a DIFFERENT machine. Half (2) is the
+// concurrent-execute-pool case: a shard's worker pool draws monotonic
+// sequence numbers but races the sends, so a lower seq for machine B can
+// arrive after a higher seq for machine A on the same shard; a per-shard mark
+// would brick B as a false zombie. Per-machine isolation accepts B while
+// keeping each (shard, machine)'s own monotonicity. A true zombie (lower
+// epoch) is still rejected per machine.
 func TestB302_PerShardIsolation(t *testing.T) {
 	behavior(t, "B302")
 	h := dial(t)
@@ -120,6 +125,19 @@ func TestB302_PerShardIsolation(t *testing.T) {
 	// low token on shardB's machine via shardB (shardB only has mark (7,3), so
 	// (7,4) advances it cleanly).
 	accepted(t, "shardB advance (7,4) unaffected by shardA mark", h.FencedCreate(mB, shardB, 7, 4))
+
+	// (2) Cross-MACHINE isolation within ONE shard — the concurrent-execute-pool
+	// out-of-order case. A fresh shard establishes a HIGH mark on machine mA,
+	// then a LOWER token on a DIFFERENT machine mB of the same shard must be
+	// ACCEPTED (a per-shard mark would have fenced it as a false zombie).
+	// Per-machine monotonicity is preserved (each machine's own stale token is
+	// still rejected) and a true zombie (lower epoch) is still rejected.
+	shardD := h.UniqueShardID("b302-crossmachine")
+	accepted(t, "shardD mA establish high (5,30)", h.FencedCreate(mA, shardD, 5, 30))
+	accepted(t, "shardD mB LOWER token (5,7) accepted — different machine, same shard", h.FencedCreate(mB, shardD, 5, 7))
+	fpOnly(t, "shardD mB own stale (5,7) replay", h.FencedCreate(mB, shardD, 5, 7))
+	fpOnly(t, "shardD mA own stale (5,30) replay unaffected by mB", h.FencedCreate(mA, shardD, 5, 30))
+	fpOnly(t, "shardD mB stale-epoch zombie (4,999)", h.FencedCreate(mB, shardD, 4, 999))
 }
 
 // B303 — exhaustive lexicographic ordering of the (epoch, sequence) mark on a

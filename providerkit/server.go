@@ -38,7 +38,7 @@ type Server struct {
 	// RPCs.
 	mu       sync.RWMutex
 	machines map[string]*Machine
-	fences   map[string]FenceMark
+	fences   map[fenceKey]FenceMark
 	ops      map[opKey]string
 	lastMod  map[string]int64
 	rev      int64
@@ -131,7 +131,7 @@ func New(backend Backend, store Store, opts Options) (*Server, error) {
 		opts:     opts,
 		logger:   opts.Logger,
 		machines: make(map[string]*Machine),
-		fences:   make(map[string]FenceMark),
+		fences:   make(map[fenceKey]FenceMark),
 		ops:      make(map[opKey]string),
 		lastMod:  make(map[string]int64),
 	}
@@ -241,8 +241,8 @@ func (s *Server) loadSnapshot(snap Snapshot) {
 		// re-list rather than silently missing records.
 		s.lastMod[m.ID] = snap.Rev
 	}
-	for id, mark := range snap.Fences {
-		s.fences[id] = mark
+	for _, r := range snap.Fences {
+		s.fences[fenceKey{ShardID: r.ShardID, MachineID: r.MachineID}] = FenceMark{Epoch: r.Epoch, Sequence: r.Sequence}
 	}
 	for _, r := range snap.Ops {
 		s.ops[opKey{id: r.MachineID, k: kindFromString(r.Kind)}] = r.OperationID
@@ -531,7 +531,7 @@ func (s *Server) dispatch(k kind, id string, f Fence, timeout time.Duration, pre
 	// 1. Fence FIRST — before not-found, before the idempotency
 	//    short-circuit. A zombie must not be applied, must not get a cached
 	//    operation_id, and must not learn whether the machine exists.
-	advanced, err := s.checkFenceLocked(f)
+	advanced, err := s.checkFenceLocked(id, f)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, mapErr(err)
@@ -639,20 +639,25 @@ func (s *Server) runTransition(k kind, id string, timeout time.Duration, op back
 
 // checkFenceLocked enforces the paper §11 fencing contract and reports
 // whether the high-water mark advanced (so the caller can persist it). A
-// zero token bypasses fencing (unfenced in-process / test caller). A token
-// that is not strictly newer than the per-shard mark is rejected with
-// ErrFenced and the mark is left untouched. A token that passes advances the
-// mark even though the operation may still fail downstream.
-func (s *Server) checkFenceLocked(f Fence) (advanced bool, err error) {
+// zero token bypasses fencing (unfenced in-process / test caller). The mark
+// is kept per (shard_id, machine_id) — see fenceKey: a per-shard mark would
+// fence a single live shard against its own concurrent execute pool, whose
+// monotonic sequence numbers race the sends and arrive out of order across
+// DIFFERENT machines. A token not strictly newer than THIS machine's mark
+// for THIS shard is rejected with ErrFenced and the mark is left untouched.
+// A token that passes advances the mark even though the operation may still
+// fail downstream. A true zombie still fails on epoch (strictly lower).
+func (s *Server) checkFenceLocked(machineID string, f Fence) (advanced bool, err error) {
 	if f.zero() {
 		return false, nil
 	}
-	mark, known := s.fences[f.ShardID]
+	key := fenceKey{ShardID: f.ShardID, MachineID: machineID}
+	mark, known := s.fences[key]
 	if known && !mark.newer(f) {
-		return false, fmt.Errorf("%w: shard %q sent (epoch=%d seq=%d); high-water mark is (epoch=%d seq=%d)",
-			ErrFenced, f.ShardID, f.ShardEpoch, f.SequenceNumber, mark.Epoch, mark.Sequence)
+		return false, fmt.Errorf("%w: shard %q sent (epoch=%d seq=%d) for machine %q; high-water mark is (epoch=%d seq=%d)",
+			ErrFenced, f.ShardID, f.ShardEpoch, f.SequenceNumber, machineID, mark.Epoch, mark.Sequence)
 	}
-	s.fences[f.ShardID] = FenceMark{Epoch: f.ShardEpoch, Sequence: f.SequenceNumber}
+	s.fences[key] = FenceMark{Epoch: f.ShardEpoch, Sequence: f.SequenceNumber}
 	return true, nil
 }
 
@@ -690,15 +695,20 @@ func (s *Server) snapshotLocked() Snapshot {
 	snap := Snapshot{
 		Rev:      s.rev,
 		NextOp:   s.nextOp,
-		Fences:   make(map[string]FenceMark, len(s.fences)),
+		Fences:   make([]FenceRecord, 0, len(s.fences)),
 		Machines: make([]*Machine, 0, len(s.machines)),
 		Ops:      make([]OpRecord, 0, len(s.ops)),
 	}
 	for _, m := range s.machines {
 		snap.Machines = append(snap.Machines, m)
 	}
-	for id, mark := range s.fences {
-		snap.Fences[id] = mark
+	for key, mark := range s.fences {
+		snap.Fences = append(snap.Fences, FenceRecord{
+			ShardID:   key.ShardID,
+			MachineID: key.MachineID,
+			Epoch:     mark.Epoch,
+			Sequence:  mark.Sequence,
+		})
 	}
 	for k, opID := range s.ops {
 		snap.Ops = append(snap.Ops, OpRecord{MachineID: k.id, Kind: k.k.String(), OperationID: opID})

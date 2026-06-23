@@ -179,6 +179,59 @@ func TestFencing_UnknownShardAccepted_ThenReplayRejected(t *testing.T) {
 	}
 }
 
+// TestFencing_CrossMachineIsolation pins the per-(shard, machine) fence fix.
+// A single live shard's concurrent execute pool draws monotonic sequence
+// numbers but races the sends (stamp-then-send is not atomic, and a gRPC
+// server dispatches each RPC on its own goroutine), so a LOWER seq aimed at
+// machine B can arrive after a HIGHER seq for machine A — same shard, same
+// epoch. Under the old per-shard mark that bricked machine B as a false
+// zombie (FAILED_PRECONDITION → the shard's StateFailed). The mark is now per
+// (shard, machine): B's lower seq is accepted, while per-machine monotonicity
+// and true-zombie (lower-epoch) rejection are preserved.
+func TestFencing_CrossMachineIsolation(t *testing.T) {
+	s, _ := newTestServer(t, 8)
+	resp, err := s.List(bg(), &pb.ListFilter{
+		States:     []pb.MachineState{pb.MachineState_MACHINE_STATE_SPECULATIVE},
+		MaxResults: 2,
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(resp.GetMachines()) < 2 {
+		t.Fatalf("need 2 Speculative machines, got %d", len(resp.GetMachines()))
+	}
+	mA := resp.GetMachines()[0].GetId()
+	mB := resp.GetMachines()[1].GetId()
+	const shard = "shard-cc"
+
+	// Machine A established at a high seq (a worker that won the send race).
+	if err := fenced(s, mA, shard, 1, 27); err != nil {
+		t.Fatalf("establish high mark on machine A: %v", err)
+	}
+	// Same live shard, same epoch, LOWER seq, DIFFERENT machine — the
+	// out-of-order arrival the concurrent execute pool produces. Must be
+	// ACCEPTED (this is the bug: it was a false-zombie FAILED_PRECONDITION).
+	if err := fenced(s, mB, shard, 1, 16); err != nil {
+		t.Fatalf("lower seq on a different machine of the same shard must be accepted (per-(shard,machine) fence): %v", err)
+	}
+	// Machine A's mark is intact and independent of B: A's own stale tokens
+	// are still rejected.
+	if got := codeOf(fenced(s, mA, shard, 1, 27)); got != codes.FailedPrecondition {
+		t.Errorf("machine A replay (1,27): code = %s, want FailedPrecondition (A's per-machine mark intact)", got)
+	}
+	if got := codeOf(fenced(s, mA, shard, 1, 5)); got != codes.FailedPrecondition {
+		t.Errorf("machine A lower seq (1,5): code = %s, want FailedPrecondition", got)
+	}
+	// Machine B's own mark now fences B's stale replay (per-machine monotonicity).
+	if got := codeOf(fenced(s, mB, shard, 1, 16)); got != codes.FailedPrecondition {
+		t.Errorf("machine B replay (1,16): code = %s, want FailedPrecondition", got)
+	}
+	// A true zombie (strictly lower epoch) is still rejected, per machine.
+	if got := codeOf(fenced(s, mB, shard, 0, 999)); got != codes.FailedPrecondition {
+		t.Errorf("stale-epoch zombie on machine B (0,999): code = %s, want FailedPrecondition", got)
+	}
+}
+
 func TestFencing_StaleEpochAndSequenceRejected(t *testing.T) {
 	s, _ := newTestServer(t, 8)
 	id := firstSpeculative(t, s)

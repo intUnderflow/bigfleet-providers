@@ -138,8 +138,8 @@ Total: **93 behaviors** across **11 areas**.
 | ID | Profiles | Behavior |
 |---|---|---|
 | `B301` | core | A stale token aimed at a non-existent machine is rejected with FAILED_PRECONDITION, proving the fence runs before the not-found check |
-| `B302` | core | Fencing high-water marks are isolated per shard_id: one shard's high mark never fences another shard's first low-token contact, and the owning shard's stale token is still rejected |
-| `B303` | core | On a single shard, every not-strictly-newer (epoch,sequence) token is rejected with FAILED_PRECONDITION and every strictly-newer token advances the mark, lexicographically (a higher epoch with a low sequence advances and resets the sequence space) |
+| `B302` | core | Fencing high-water marks are isolated per (shard_id, machine_id): one shard's high mark never fences another shard, AND a high mark on one machine never fences a lower token on a DIFFERENT machine of the same shard (the concurrent-execute-pool out-of-order case); each (shard, machine)'s own stale token is still rejected |
+| `B303` | core | On a single shard and machine, every not-strictly-newer (epoch,sequence) token is rejected with FAILED_PRECONDITION and every strictly-newer token advances the mark, lexicographically (a higher epoch with a low sequence advances and resets the sequence space) |
 | `B305` | core | Get and List succeed throughout a series of interleaved fenced-out mutations, confirming reads carry no token and never fence |
 | `B306` | core | The fence runs before the idempotency short-circuit on Configure: a stale token replaying an already-applied Configure is rejected with FAILED_PRECONDITION, not reused |
 | `B307` | core | The fence runs before the idempotency short-circuit on Drain: a stale-token Drain replay is rejected with FAILED_PRECONDITION |

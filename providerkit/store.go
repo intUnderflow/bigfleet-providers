@@ -38,9 +38,9 @@ type Store interface {
 // retains beyond that — the kit reuses the live records to avoid an extra
 // O(N) copy per mutation.
 type Snapshot struct {
-	Machines []*Machine           `json:"machines"`
-	Fences   map[string]FenceMark `json:"fences"`
-	Ops      []OpRecord           `json:"ops"`
+	Machines []*Machine    `json:"machines"`
+	Fences   []FenceRecord `json:"fences"`
+	Ops      []OpRecord    `json:"ops"`
 	// Rev is the monotonic revision counter List exposes as its opaque
 	// cursor. Persisted so a provider restart does not reissue revisions a
 	// shard already holds.
@@ -59,9 +59,24 @@ type OpRecord struct {
 	OperationID string `json:"operation_id"`
 }
 
+// FenceRecord is one persisted fencing high-water mark, keyed by
+// (shard_id, machine_id). The mark is per-(shard, machine), not per-shard:
+// a shard's concurrent execute pool draws monotonic sequence numbers but
+// races the sends, so a per-shard mark fences a single live shard against
+// its own out-of-order arrivals on DIFFERENT machines. Per-machine keying
+// stays monotonic (the shard serializes transitions per machine) while
+// letting concurrent ops on different machines proceed. See the bigfleet
+// fencing ADR.
+type FenceRecord struct {
+	ShardID   string `json:"shard_id"`
+	MachineID string `json:"machine_id"`
+	Epoch     int64  `json:"epoch"`
+	Sequence  int64  `json:"sequence"`
+}
+
 func (s Snapshot) clone() Snapshot {
 	out := Snapshot{
-		Fences: make(map[string]FenceMark, len(s.Fences)),
+		Fences: make([]FenceRecord, len(s.Fences)),
 		Ops:    make([]OpRecord, len(s.Ops)),
 		Rev:    s.Rev,
 		NextOp: s.NextOp,
@@ -70,9 +85,7 @@ func (s Snapshot) clone() Snapshot {
 	for _, m := range s.Machines {
 		out.Machines = append(out.Machines, m.clone())
 	}
-	for k, v := range s.Fences {
-		out.Fences[k] = v
-	}
+	copy(out.Fences, s.Fences)
 	copy(out.Ops, s.Ops)
 	return out
 }
