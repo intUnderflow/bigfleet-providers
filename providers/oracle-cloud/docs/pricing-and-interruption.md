@@ -86,12 +86,25 @@ reports `0` looks free-and-safe and would be handed workloads it should never ru
     scarcer / larger shapes carry a higher prior, default `0.10`). This is what is
     published today for every preemptible machine, and it already satisfies the
     SPOT > 0 invariant.
-  - an **observed-escalation hook** (provided, not wired by default) —
-    `markPreemption` raises a specific machine's probability toward `1.0` once a
-    preemption signal is seen. The provider does **not** ship a live OCI
-    Events/Notifications subscription, so this path is dormant until an operator
-    wires `markPreemption` to OCI preemption-action events; until then the
-    forecast prior is the published value.
+  - a **live observed escalation** (enabled with `--preemption-stream`) — the
+    provider consumes OCI preemption-action events
+    (`com.oraclecloud.computeapi.instancepreemptionaction`) from an OCI Streaming
+    stream and raises the affected machine's probability toward `1.0` (`0.99`)
+    about two minutes before the host is reclaimed, so the engine de-prioritises
+    it before it disappears. Without the stream configured only the forecast prior
+    is published (which already satisfies the SPOT > 0 invariant).
 
 Because every preemptible offering declares a non-zero forecast, the conformance
 **SPOT `interruption_probability` > 0** invariant holds by construction.
+
+### Wiring the live preemption stream
+
+Point `--preemption-stream` at the OCID of an [OCI Streaming](https://docs.oracle.com/en-us/iaas/Content/Streaming/home.htm)
+stream, and create an [OCI Events](https://docs.oracle.com/en-us/iaas/Content/Events/Concepts/eventsoverview.htm)
+rule in the provider's compartment whose condition matches event type
+`com.oraclecloud.computeapi.instancepreemptionaction` and whose action delivers to
+that stream (the OCI analogue of an AWS EventBridge rule → SQS queue). The provider
+reuses its existing `--auth` credentials to read the stream — no extra secret — and
+maps each event back to a BigFleet machine via the instance's `bigfleet-machine-id`
+freeform tag (carried in the event payload, so no per-event API call). Leave the
+flag unset to publish the forecast prior only.

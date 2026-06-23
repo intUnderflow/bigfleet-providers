@@ -62,6 +62,8 @@ func run() error {
 		baseUserData = flag.String("base-user-data", "", "path to the generic pre-binding cloud-init baked in at launch")
 		reconcile    = flag.Duration("reconcile-interval", 2*time.Minute, "background OCI->inventory reconcile interval (0 = off)")
 
+		preemptStream = flag.String("preemption-stream", "", "OCID of an OCI Streaming stream fed by an Events rule (event type com.oraclecloud.computeapi.instancepreemptionaction); when set, observed preemptions raise interruption_probability for the affected SPOT machine")
+
 		metricsAddr = flag.String("metrics-addr", ":9090", "address for /metrics, /healthz, /readyz (empty = disabled)")
 		reflectFlag = flag.Bool("reflection", true, "register gRPC server reflection (for grpcurl/debugging)")
 
@@ -207,6 +209,19 @@ func run() error {
 	// Background loops: live price refresh + OCI->inventory reconcile.
 	go runPriceRefresher(ctx, backend, m, *priceRefresh, logger)
 	go runReconciler(ctx, srv, m, *reconcile, logger)
+
+	// Live preemption observer: when an OCI Streaming stream (fed by an Events rule
+	// for preemption-action events) is configured, consume it and raise the
+	// observed interruption probability of a SPOT machine about to be reclaimed.
+	// Real backend only — the fake has no live OCI events.
+	if mode == "oci" && *preemptStream != "" {
+		poller, err := newPreemptionPoller(ctx, *authMode, *region, *preemptStream, backend, m, logger)
+		if err != nil {
+			return err
+		}
+		go poller.run(ctx)
+		logger.Info("watching for preemptions", "stream", *preemptStream)
+	}
 
 	// Mark ready: serving traffic + probes go green.
 	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)

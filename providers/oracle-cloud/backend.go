@@ -75,6 +75,23 @@ func newOCIBackend(providerName string, client ociClient, offerings []offering, 
 	}, nil
 }
 
+// machineIDFor resolves an instance OCID to its BigFleet machine id by scanning
+// managed inventory. The preemption poller uses it only as a fallback, when an
+// event payload does not carry the machine-id freeform tag. Returns "" if the
+// instance is not (or is no longer) managed.
+func (b *ociBackend) machineIDFor(ctx context.Context, instanceID string) string {
+	managed, err := b.client.DescribeManaged(ctx)
+	if err != nil {
+		return ""
+	}
+	for _, inst := range managed {
+		if inst.InstanceID == instanceID {
+			return inst.MachineID
+		}
+	}
+	return ""
+}
+
 // slotID is the stable BigFleet machine id for one offering slot. A Speculative
 // slot keeps this id across its whole lifecycle (launched instances are tagged
 // with it, so DescribeManaged maps back to it).

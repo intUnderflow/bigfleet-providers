@@ -27,6 +27,7 @@ sidebar:
 | `--bootstrap-hook` | `/opt/bigfleet/bootstrap` | Image path that applies the delivered bootstrap blob. |
 | `--base-user-data` | — | Path to the generic pre-binding cloud-init baked in at launch. |
 | `--reconcile-interval` | `2m` | Background OCI→inventory reconcile interval (0 = off). |
+| `--preemption-stream` | — | OCID of an OCI Streaming stream fed by an Events rule for `com.oraclecloud.computeapi.instancepreemptionaction`. When set, observed preemptions raise `interruption_probability` for the affected SPOT machine. See [Interruption](/providers/oracle-cloud/pricing-and-interruption/). |
 | `--state` | — | Durable state file (empty = in-memory). |
 | `--metrics-addr` | `:9090` | `/metrics`, `/healthz`, `/readyz` (empty = disabled). |
 | `--reflection` | `true` | Register gRPC server reflection. |
