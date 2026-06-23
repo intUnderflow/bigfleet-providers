@@ -24,7 +24,7 @@ sourced see [Pricing](/providers/scaleway/pricing-and-interruption/).
 |---|---|---|
 | `--addr` | `:9000` | gRPC listen address (CapacityProvider + health + reflection). |
 | `--provider` | `scaleway` | Provider/region label stamped on every `HostRef` (e.g. `scaleway-fr-par`). |
-| `--substrate` | `instances` | `instances` (ON_DEMAND, deletable) \| `elastic-metal` (BARE_METAL, `Delete` = `Unimplemented`). **The real Elastic Metal backend is not yet built:** `--substrate=elastic-metal` with real credentials fails fast at startup; it runs on the in-memory fake only (which is what the bare-metal conformance profile certifies). Use `instances` for any real deployment. |
+| `--substrate` | `instances` | `instances` (ON_DEMAND, deletable) \| `elastic-metal` (BARE_METAL, `Delete` = `Unimplemented`). |
 | `--scaleway-backend` | `auto` | `scaleway` \| `fake` \| `auto`. `auto` = `scaleway` when credentials are set, else `fake`. See [Backend modes](#backend-modes). |
 | `--access-key` | _(empty)_ | Scaleway access key. Falls back to `SCW_ACCESS_KEY`. |
 | `--secret-key` | _(empty)_ | Scaleway secret key. Falls back to `SCW_SECRET_KEY`. |
@@ -33,8 +33,9 @@ sourced see [Pricing](/providers/scaleway/pricing-and-interruption/).
 | `--seed-count` | `32` | Number of Speculative slots in the default offerings (ignored when `--offerings` is set). |
 | `--zone` | `fr-par-1` | The single Scaleway zone this process serves; all offerings must be in this zone. |
 | `--state` | _(empty)_ | Durable state file. Empty = in-memory only (state is lost on restart). |
-| `--image` | _(empty)_ | Base image label/id for `CreateServer`. **Required** for the `scaleway` backend. |
+| `--image` | _(empty)_ | Base image for `CreateServer`. **Required** for the `scaleway` backend. For `instances` it is an Instances image label/id; for `elastic-metal` it is an Elastic Metal OS id or name (e.g. `Ubuntu 22.04`), resolved against the zone's OS catalogue (a cloud-init-capable OS is preferred so the agent's `user_data` is honoured). |
 | `--base-user-data` | _(empty)_ | Path to the generic, pre-binding cloud-init baked into `user_data` at create (installs the on-host agent). |
+| `--baremetal-ssh-key-ids` | _(empty)_ | Comma-separated Scaleway SSH-key UUIDs injected into an Elastic Metal OS install. Optional — BigFleet reaches the host via the on-host agent, not SSH; set it only if a chosen OS requires an SSH key at install, or for break-glass access. Ignored by `instances`. |
 | `--bootstrap-addr` | _(empty)_ | Address the provider serves the on-host agent bootstrap channel on (HTTPS, e.g. `:9443`). Empty disables it; **required** for the `scaleway` backend. See [Create then bootstrap](#create-then-bootstrap). |
 | `--bootstrap-endpoint` | _(empty)_ | Externally-reachable URL of the bootstrap channel, injected into the server's `user_data` so the agent can dial back (e.g. `https://scaleway-fr-par.bigfleet.svc:9443`). **Required** for the `scaleway` backend. |
 | `--bootstrap-tls-cert` | _(empty)_ | Server certificate (PEM) for the bootstrap channel. **Required** for the `scaleway` backend (the blob is a join secret, so the channel is always TLS). |
@@ -142,9 +143,7 @@ startup fails.
 
 The `COPARM1-4C-16G` offering above carries both `team` and the automatic
 `kubernetes.io/arch=arm64` label. An Elastic Metal process supplies
-`bare_metal` offerings instead (e.g. `EM-A210R-HDD`) — but note the real Elastic
-Metal backend is not yet built (see [`--substrate`](#flags)); it runs on the
-in-memory fake only.
+`bare_metal` offerings instead (e.g. `EM-A210R-HDD`).
 
 If you omit `--offerings`, the provider synthesizes a representative mix in
 `--zone` — `DEV1-S`/`GP1-XS` for Instances, `EM-A210R-HDD`/

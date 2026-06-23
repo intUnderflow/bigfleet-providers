@@ -28,9 +28,6 @@ zone: fr-par-1
 provider: ""
 # Substrate served by this process: instances (ON_DEMAND) | elastic-metal
 # (BARE_METAL). One substrate per process. (--substrate)
-# NOTE: elastic-metal is fake-backend only today — the real Elastic Metal client
-# is not built yet and fails fast at startup with real credentials. Use
-# instances for any real deployment.
 substrate: instances
 # Scaleway backend mode: auto | scaleway | fake (--scaleway-backend). auto =
 # scaleway when credentials are set.
