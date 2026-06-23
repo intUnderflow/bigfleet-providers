@@ -21,6 +21,7 @@ type metrics struct {
 	rpcDuration *prometheus.HistogramVec // bigfleet_oci_grpc_request_duration_seconds{method}
 	panics      prometheus.Counter       // bigfleet_oci_panics_total
 	reconcile   *prometheus.CounterVec   // bigfleet_oci_reconcile_total{outcome}
+	interrupts  prometheus.Counter       // bigfleet_oci_interrupts_total
 
 	priceRefresh     *prometheus.CounterVec // bigfleet_oci_price_refresh_total{outcome}
 	priceLastSuccess prometheus.Gauge       // bigfleet_oci_price_last_success_timestamp_seconds
@@ -57,6 +58,10 @@ func newMetrics() *metrics {
 			Name: "bigfleet_oci_reconcile_total",
 			Help: "Background reconcile runs by outcome.",
 		}, "outcome"),
+		interrupts: f.counter(prometheus.CounterOpts{
+			Name: "bigfleet_oci_interrupts_total",
+			Help: "Observed preemption-action events that raised a machine's interruption probability.",
+		}),
 		priceRefresh: f.counterVec(prometheus.CounterOpts{
 			Name: "bigfleet_oci_price_refresh_total",
 			Help: "Background live price-refresh runs by outcome.",

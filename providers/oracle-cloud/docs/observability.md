@@ -30,6 +30,7 @@ All metrics are namespaced `bigfleet_oci_*`:
 | `bigfleet_oci_grpc_request_duration_seconds` | histogram | `method` | gRPC request latency by method. |
 | `bigfleet_oci_panics_total` | counter | — | Recovered panics in gRPC handlers. |
 | `bigfleet_oci_reconcile_total` | counter | `outcome` | Background OCI→inventory reconcile runs. |
+| `bigfleet_oci_interrupts_total` | counter | — | Observed preemption-action events that raised a machine's interruption probability (requires `--preemption-stream`). |
 | `bigfleet_oci_price_refresh_total` | counter | `outcome` | Background live price-refresh runs by success/error. |
 | `bigfleet_oci_price_last_success_timestamp_seconds` | gauge | — | Unix time of the last successful price refresh; staleness = `time() - this`. |
 

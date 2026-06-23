@@ -17,12 +17,13 @@ import (
 //   - Forecast: a conservative per-shape hourly prior (OCI does not publish a
 //     spot-interruption-frequency feed the way AWS does), tunable via a prior
 //     table. This is what the provider publishes today for every SPOT machine.
-//   - Observed (provided hook, not wired by default): markPreemption raises a
+//   - Observed (live when --preemption-stream is set): markPreemption raises a
 //     specific machine's probability toward 1.0 once a preemption signal is seen.
-//     The provider does NOT ship a live OCI Events/Notifications subscription, so
-//     this path is dormant unless an operator wires markPreemption to OCI
-//     preemption-action events; until then only the forecast prior is published
-//     (which already satisfies the SPOT > 0 invariant).
+//     The preemptionPoller (preemption_poller.go) consumes OCI preemption-action
+//     events from an OCI Streaming stream (fed by an Events rule) and calls
+//     markPreemption ~2 minutes before the host is reclaimed. Without the stream
+//     configured only the forecast prior is published (which already satisfies the
+//     SPOT > 0 invariant).
 type interruption struct {
 	mu       sync.Mutex
 	observed map[string]float64 // machineID -> raised probability from a preemption signal
@@ -95,8 +96,8 @@ func (in *interruption) probability(machineID, shape string, capacity providerki
 }
 
 // markPreemption records that a running preemptible instance has received a
-// preemption signal, raising its observed probability. Wire this to an OCI
-// Events/Notifications subscription for preemption-action events in production.
+// preemption signal, raising its observed probability. The preemptionPoller calls
+// it from a live OCI Streaming subscription when --preemption-stream is set.
 func (in *interruption) markPreemption(machineID string, probability float64) {
 	if probability <= 0 {
 		probability = 1.0
