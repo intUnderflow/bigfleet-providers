@@ -38,6 +38,14 @@ else
     echo ">> cloning bigfleet into $SRC"
     rm -rf "$SRC"
     git clone --filter=blob:none --quiet https://github.com/intUnderflow/bigfleet.git "$SRC"
+  else
+    # Cache hit: the pinned ref is often a commit pushed AFTER this clone was
+    # made (the common case right after a `make sync-bigfleet` pin bump), so
+    # it isn't in the cached object store yet — `git checkout <ref>` would then
+    # fail with "pathspec did not match". Fetch first so the pinned commit/tag
+    # is present. --filter=blob:none keeps the update blobless like the clone.
+    echo ">> updating cached bigfleet checkout in $SRC"
+    git -C "$SRC" fetch --filter=blob:none --tags --quiet origin
   fi
   echo ">> checking out bigfleet @ $REF"
   git -C "$SRC" checkout --quiet "$REF"
