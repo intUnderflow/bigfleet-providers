@@ -71,11 +71,12 @@ A minimal production invocation:
   conformance run. Selecting it logs a loud warning so it is never mistaken for
   production.
 - **`auto`** (default) — resolves to `hetzner` when a token is set (via `--token`
-  or `HCLOUD_TOKEN`), otherwise `fake`.
+  or `HCLOUD_TOKEN`), else the provider refuses to start unless `--use-fake-backend` is passed.
 
-So a bare `./bin/hetzner --seed-count 32` (no token) comes up on the fake
-backend — exactly how `make conformance-hetzner` runs credential-free — while
-setting a token opts you into the real backend.
+So a bare `./bin/hetzner` (no token) **refuses to start** — the fake is
+testing/conformance only and must be requested with `--use-fake-backend` (which is
+how `make conformance-hetzner` runs credential-free). Setting a token selects the
+real backend.
 
 ## Offerings
 

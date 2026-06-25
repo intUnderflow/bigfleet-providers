@@ -42,7 +42,8 @@ func run() error {
 	var (
 		addr        = flag.String("addr", ":9000", "gRPC listen address")
 		providerLbl = flag.String("provider", "azure", "provider/region label stamped on HostRefs (e.g. azure-eastus)")
-		backendSel  = flag.String("azure-backend", "auto", "azure | fake | auto (auto = azure when --location is set, else fake)")
+		backendSel  = flag.String("azure-backend", "auto", "azure | fake | auto (auto = azure when --location is set; without it the provider refuses to start unless --use-fake-backend is passed)")
+		useFake     = flag.Bool("use-fake-backend", false, "run the credential-free in-memory fake backend (testing/conformance only — it never creates real VMs)")
 		location    = flag.String("location", "", "Azure region/location (required for the azure backend), e.g. eastus")
 		offerings   = flag.String("offerings", "", "path to a JSON offerings file (default: a built-in mix sized by --seed-count)")
 		seedCount   = flag.Int("seed-count", 32, "number of Speculative slots when using the default offerings")
@@ -82,8 +83,15 @@ func run() error {
 		subID = os.Getenv("AZURE_SUBSCRIPTION_ID")
 	}
 
-	// Pick the Azure client.
+	// Pick the Azure client. The fake backend must be requested explicitly — it
+	// never creates real resources, so a misconfigured operator (no credentials)
+	// must fail closed rather than silently come up on a simulation.
 	mode := resolveBackendMode(*backendSel, *location)
+	if *useFake {
+		mode = "fake"
+	} else if mode == "fake" && strings.ToLower(*backendSel) != "fake" {
+		return fmt.Errorf("refusing to start the azure provider on the in-memory fake backend: no Azure credentials / --location were detected. Configure the real backend, or pass --use-fake-backend to run the credential-free fake (testing/conformance only — it never creates real VMs)")
+	}
 	var client azureClient
 	switch mode {
 	case "fake":

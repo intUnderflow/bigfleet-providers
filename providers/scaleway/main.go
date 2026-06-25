@@ -53,7 +53,8 @@ func run() error {
 		addr        = flag.String("addr", ":9000", "gRPC listen address")
 		providerLbl = flag.String("provider", "scaleway", "provider/region label stamped on HostRefs (e.g. scaleway-fr-par)")
 		substrate   = flag.String("substrate", "instances", "substrate served by this process: instances | elastic-metal")
-		backendSel  = flag.String("scaleway-backend", "auto", "scaleway | fake | auto (auto = scaleway when credentials are set, else fake)")
+		backendSel  = flag.String("scaleway-backend", "auto", "scaleway | fake | auto (auto = scaleway when credentials are set; else refuses to start unless --use-fake-backend is passed)")
+		useFake     = flag.Bool("use-fake-backend", false, "run the credential-free in-memory fake backend (testing/conformance only — it never creates real cloud resources)")
 
 		accessKey = flag.String("access-key", "", "Scaleway access key (or set SCW_ACCESS_KEY)")
 		secretKey = flag.String("secret-key", "", "Scaleway secret key (or set SCW_SECRET_KEY)")
@@ -110,6 +111,11 @@ func run() error {
 	// real backend; build and serve it only when the real backend is selected (so
 	// the credential-free certification run on the fake never needs TLS material).
 	mode := resolveBackendMode(*backendSel, creds)
+	if *useFake {
+		mode = "fake"
+	} else if mode == "fake" && strings.ToLower(*backendSel) != "fake" {
+		return fmt.Errorf("refusing to start the scaleway provider on the in-memory fake backend: no credentials were detected. Configure the real backend, or pass --use-fake-backend to run the credential-free fake (testing/conformance only — it never creates real resources)")
+	}
 	var (
 		client  scwClient
 		bootSrv *http.Server

@@ -73,7 +73,7 @@ A minimal production invocation:
   never mistaken for production.
 - **`auto`** (default) — resolves to `latitude` when **both** a token (via
   `--token` or `LATITUDESH_API_TOKEN`) **and** a project (via `--project` or
-  `LATITUDESH_PROJECT`) are set, otherwise `fake`.
+  `LATITUDESH_PROJECT`) are set, else the provider refuses to start unless `--use-fake-backend` is passed.
 
 So a bare `./latitude --seed-count 32` (no token, no project) comes up on the
 fake backend — exactly how `make certify-latitude` runs credential-free — while

@@ -6,12 +6,13 @@ sidebar:
   label: Troubleshooting
 ---
 
-## The provider boots into the fake backend unexpectedly
+## The provider refuses to start without credentials
 
-`--oci-backend=auto` resolves to the **fake** in-memory backend unless **both**
-`--region` and `--compartment` are set. The startup log line
-`using the IN-MEMORY fake OCI backend` confirms it. Set both flags (and
-`--subnet`, `--image`) for the real backend, or force `--oci-backend=oci`.
+The provider no longer silently falls back to the fake: with `--oci-backend=auto`
+(the default) and **both** `--region` and `--compartment` unset, it exits with a
+clear error rather than coming up on a simulation. Set both flags (and `--subnet`,
+`--image`) for the real backend. To run the credential-free in-memory fake on
+purpose (testing/conformance only), pass `--use-fake-backend`.
 
 ## Machines land in `FAILED` shortly after `Create`/`Configure`
 

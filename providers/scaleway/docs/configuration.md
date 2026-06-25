@@ -82,11 +82,12 @@ A minimal production invocation:
   conformance run. Selecting it logs a loud warning so it is never mistaken for
   production.
 - **`auto`** (default) — resolves to `scaleway` when complete credentials are set
-  (via flags or the `SCW_*` env vars), otherwise `fake`.
+  (via flags or the `SCW_*` env vars), else the provider refuses to start unless `--use-fake-backend` is passed.
 
-So a bare `./bin/scaleway --seed-count 32` (no credentials) comes up on the fake
-backend — exactly how `make certify-scaleway` runs credential-free — while setting
-credentials opts you into the real backend.
+So a bare `./bin/scaleway` (no credentials) **refuses to start** — the fake is
+testing/conformance only and must be requested with `--use-fake-backend` (which is
+how `make certify-scaleway` runs credential-free). Setting credentials selects the
+real backend.
 
 ## Offerings
 

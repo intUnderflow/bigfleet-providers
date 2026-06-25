@@ -53,9 +53,14 @@ func run() error {
 		provider  = flag.String("provider", "example", "provider/region name stamped on HostRefs")
 		statePath = flag.String("state", "", "path to the durable state file (empty = in-memory only)")
 		seedCount = flag.Int("seed-count", 32, "number of Speculative slots to seed on first boot")
-		tlsCert   = flag.String("tls-cert", "", "server certificate (PEM)")
-		tlsKey    = flag.String("tls-key", "", "server private key (PEM)")
-		tlsCA     = flag.String("tls-ca", "", "client CA bundle (PEM); enables mTLS")
+		// Accepted for harness/CLI compatibility: every real provider gates its
+		// in-memory fake behind --use-fake-backend (so a misconfigured deployment
+		// fails closed instead of silently simulating). The template ships only the
+		// in-memory example backend, so the flag has no effect here.
+		_       = flag.Bool("use-fake-backend", false, "no-op in the template (it ships only the in-memory example backend)")
+		tlsCert = flag.String("tls-cert", "", "server certificate (PEM)")
+		tlsKey  = flag.String("tls-key", "", "server private key (PEM)")
+		tlsCA   = flag.String("tls-ca", "", "client CA bundle (PEM); enables mTLS")
 	)
 	flag.Parse()
 

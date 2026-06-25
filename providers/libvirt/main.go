@@ -42,7 +42,8 @@ func run() error {
 	var (
 		addr        = flag.String("addr", ":9000", "gRPC listen address")
 		providerLbl = flag.String("provider", "libvirt", "provider label stamped on HostRefs (e.g. libvirt-rack1)")
-		backendSel  = flag.String("libvirt-backend", "auto", "libvirt | fake | auto (auto = libvirt when --connect is set, else fake)")
+		backendSel  = flag.String("libvirt-backend", "auto", "libvirt | fake | auto (auto = libvirt when --connect is set; else refuses to start unless --use-fake-backend is passed)")
+		useFake     = flag.Bool("use-fake-backend", false, "run the credential-free in-memory fake backend (testing/conformance only — it never creates real cloud resources)")
 		connect     = flag.String("connect", "", "libvirt connection: a bare URI (qemu:///system) for the default zone, or a comma-separated zone=uri list for multi-host")
 		defaultZone = flag.String("default-zone", "local", "zone label for a single bare --connect URI (and the fake backend's hosts)")
 		offerings   = flag.String("offerings", "", "path to a JSON offerings file (default: a built-in mix sized by --seed-count)")
@@ -97,6 +98,11 @@ func run() error {
 
 	// Pick the libvirt client.
 	mode := resolveBackendMode(*backendSel, conns)
+	if *useFake {
+		mode = "fake"
+	} else if mode == "fake" && strings.ToLower(*backendSel) != "fake" {
+		return fmt.Errorf("refusing to start the libvirt provider on the in-memory fake backend: no credentials were detected. Configure the real backend, or pass --use-fake-backend to run the credential-free fake (testing/conformance only — it never creates real resources)")
+	}
 	var client libvirtClient
 	switch mode {
 	case "fake":

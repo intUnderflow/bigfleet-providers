@@ -85,9 +85,10 @@ off-GKE). See [Credentials](/providers/gcp/credentials/).
 - **`auto`** (default) — resolves to `gcp` when `--region` is set, otherwise
   `fake`.
 
-So a bare `./bin/gcp --seed-count 32` (no region) comes up on the fake backend —
-exactly how `make certify-gcp` runs credential-free — while setting
-`--project`/`--region` opts you into the real backend.
+So a bare `./bin/gcp` (no region) **refuses to start** — the fake is
+testing/conformance only and must be requested with `--use-fake-backend` (which is
+how `make certify-gcp` runs credential-free). Setting `--project`/`--region`
+selects the real backend.
 
 ## Offerings
 

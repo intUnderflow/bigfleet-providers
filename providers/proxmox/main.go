@@ -44,7 +44,8 @@ func run() error {
 	var (
 		addr        = flag.String("addr", ":9000", "gRPC listen address")
 		providerLbl = flag.String("provider", "proxmox", "provider label stamped on HostRefs (e.g. proxmox-dc1)")
-		backendSel  = flag.String("proxmox-backend", "auto", "proxmox | fake | auto (auto = proxmox when --proxmox-api-url is set, else fake)")
+		backendSel  = flag.String("proxmox-backend", "auto", "proxmox | fake | auto (auto = proxmox when --proxmox-api-url is set; else refuses to start unless --use-fake-backend is passed)")
+		useFake     = flag.Bool("use-fake-backend", false, "run the credential-free in-memory fake backend (testing/conformance only — it never creates real cloud resources)")
 
 		apiURL    = flag.String("proxmox-api-url", "", "Proxmox API URL, e.g. https://host:8006/api2/json")
 		tokenID   = flag.String("proxmox-token-id", "", "Proxmox API token id: USER@REALM!TOKENID")
@@ -105,6 +106,11 @@ func run() error {
 
 	// Pick the Proxmox client.
 	mode := resolveBackendMode(*backendSel, *apiURL)
+	if *useFake {
+		mode = "fake"
+	} else if mode == "fake" && strings.ToLower(*backendSel) != "fake" {
+		return fmt.Errorf("refusing to start the proxmox provider on the in-memory fake backend: no credentials were detected. Configure the real backend, or pass --use-fake-backend to run the credential-free fake (testing/conformance only — it never creates real resources)")
+	}
 	var client proxmoxClient
 	switch mode {
 	case "fake":

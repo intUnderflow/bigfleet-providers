@@ -11,10 +11,9 @@ You run it next to BigFleet, point it at a base image, give it a Scaleway API ke
 and BigFleet dials its `--addr`. This page covers the container image, the Helm
 chart, the flags you actually need, mTLS, and the Secret wiring.
 
-If you just want to kick the tyres with no Scaleway account, the
-[overview](/providers/scaleway/) shows the credential-free fake backend (a bare
-binary with no credentials comes up on the in-memory fake). Everything below is
-for a real project.
+Everything below is for a real project. (A credential-free in-memory **fake**
+backend exists for the conformance/certification run only; it is testing-only and
+must be requested with `--use-fake-backend`.)
 
 ## Container image
 

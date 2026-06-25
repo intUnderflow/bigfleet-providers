@@ -42,7 +42,8 @@ func run() error {
 		addr        = flag.String("addr", ":9000", "gRPC listen address")
 		providerLbl = flag.String("provider", "aws", "provider/region label stamped on HostRefs (e.g. aws-us-east-1)")
 		region      = flag.String("region", "", "AWS region (required for the aws backend)")
-		ec2Backend  = flag.String("ec2-backend", "auto", "aws | fake | auto (auto = aws when --region is set, else fake)")
+		ec2Backend  = flag.String("ec2-backend", "auto", "aws | fake | auto (auto = aws when --region is set; else refuses to start unless --use-fake-backend is passed)")
+		useFake     = flag.Bool("use-fake-backend", false, "run the credential-free in-memory fake backend (testing/conformance only — it never creates real cloud resources)")
 		offerings   = flag.String("offerings", "", "path to a JSON offerings file (default: a built-in mix sized by --seed-count)")
 		seedCount   = flag.Int("seed-count", 32, "number of Speculative slots when using the default offerings")
 		zoneA       = flag.String("zone-a", "", "first AZ for default offerings (default: <region>a)")
@@ -78,6 +79,11 @@ func run() error {
 
 	// Pick the EC2 client.
 	mode := resolveBackendMode(*ec2Backend, *region)
+	if *useFake {
+		mode = "fake"
+	} else if mode == "fake" && strings.ToLower(*ec2Backend) != "fake" {
+		return fmt.Errorf("refusing to start the aws provider on the in-memory fake backend: no credentials were detected. Configure the real backend, or pass --use-fake-backend to run the credential-free fake (testing/conformance only — it never creates real resources)")
+	}
 	var ec2c ec2Client
 	switch mode {
 	case "fake":

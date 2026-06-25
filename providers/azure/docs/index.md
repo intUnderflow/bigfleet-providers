@@ -67,17 +67,3 @@ from source. The path on AKS is:
 
 A minimal install is on the [Install & deploy](/providers/azure/install/) page.
 
-## Kick the tyres with no Azure account
-
-The provider ships a credential-free **fake backend** that simulates the VM
-lifecycle in memory. With no `--location` it comes up on the fake automatically —
-this is exactly how `make certify-azure` runs in CI:
-
-```sh
-make build-azure
-./bin/azure --seed-count 32 --addr :9000 --metrics-addr :9090
-# curl localhost:9090/readyz  -> ready
-```
-
-Everything in [Install & deploy](/providers/azure/install/) and
-[Configuration](/providers/azure/configuration/) is for a real region.

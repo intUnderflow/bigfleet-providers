@@ -43,7 +43,8 @@ func run() error {
 	var (
 		addr        = flag.String("addr", ":9000", "gRPC listen address")
 		providerLbl = flag.String("provider", "gcp", "provider/region label stamped on HostRefs (e.g. gcp-us-central1)")
-		backendSel  = flag.String("gcp-backend", "auto", "gcp | fake | auto (auto = gcp when --region is set, else fake)")
+		backendSel  = flag.String("gcp-backend", "auto", "gcp | fake | auto (auto = gcp when --region is set; else refuses to start unless --use-fake-backend is passed)")
+		useFake     = flag.Bool("use-fake-backend", false, "run the credential-free in-memory fake backend (testing/conformance only — it never creates real cloud resources)")
 		project     = flag.String("project", "", "GCP project id (required for the gcp backend)")
 		region      = flag.String("region", "", "GCP region, e.g. us-central1 (required for the gcp backend)")
 		offerings   = flag.String("offerings", "", "path to a JSON offerings file (default: a built-in mix sized by --seed-count)")
@@ -83,6 +84,11 @@ func run() error {
 
 	// Pick the GCE client.
 	mode := resolveBackendMode(*backendSel, *region)
+	if *useFake {
+		mode = "fake"
+	} else if mode == "fake" && strings.ToLower(*backendSel) != "fake" {
+		return fmt.Errorf("refusing to start the gcp provider on the in-memory fake backend: no credentials were detected. Configure the real backend, or pass --use-fake-backend to run the credential-free fake (testing/conformance only — it never creates real resources)")
+	}
 	var client gceClient
 	switch mode {
 	case "fake":

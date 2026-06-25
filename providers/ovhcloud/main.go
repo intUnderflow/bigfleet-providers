@@ -46,7 +46,8 @@ func run() error {
 	var (
 		addr        = flag.String("addr", ":9000", "gRPC listen address")
 		providerLbl = flag.String("provider", "ovh-public", "provider/region label stamped on HostRefs (e.g. ovh-public-GRA)")
-		backendSel  = flag.String("ovh-backend", "auto", "ovh | fake | auto (auto = ovh when --region is set, else fake)")
+		backendSel  = flag.String("ovh-backend", "auto", "ovh | fake | auto (auto = ovh when --region is set; else refuses to start unless --use-fake-backend is passed)")
+		useFake     = flag.Bool("use-fake-backend", false, "run the credential-free in-memory fake backend (testing/conformance only — it never creates real cloud resources)")
 		region      = flag.String("region", "", "OVH/OpenStack region (required for the ovh backend, e.g. GRA, SBG, BHS)")
 		offerings   = flag.String("offerings", "", "path to a JSON offerings file (default: a built-in mix sized by --seed-count)")
 		seedCount   = flag.Int("seed-count", 32, "number of Speculative slots when using the default offerings")
@@ -84,6 +85,11 @@ func run() error {
 
 	// Pick the OpenStack client.
 	mode := resolveBackendMode(*backendSel, *region)
+	if *useFake {
+		mode = "fake"
+	} else if mode == "fake" && strings.ToLower(*backendSel) != "fake" {
+		return fmt.Errorf("refusing to start the ovhcloud provider on the in-memory fake backend: no credentials were detected. Configure the real backend, or pass --use-fake-backend to run the credential-free fake (testing/conformance only — it never creates real resources)")
+	}
 	var client ovhClient
 	switch mode {
 	case "fake":

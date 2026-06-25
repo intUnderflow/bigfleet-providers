@@ -12,9 +12,7 @@ TLS trust material, and BigFleet dials its `--addr`. This page covers the
 container image, the Helm chart, the flags you actually need, and the gRPC mTLS
 posture.
 
-If you just want to kick the tyres with no Proxmox cluster, the
-[overview](/providers/proxmox/) shows the credential-free fake backend (a bare
-run with no `--proxmox-api-url`). Everything below is for a real cluster.
+Everything below is for a real cluster.
 
 ## Container image
 

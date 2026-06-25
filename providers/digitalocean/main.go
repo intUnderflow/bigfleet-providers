@@ -44,7 +44,8 @@ func run() error {
 	var (
 		addr        = flag.String("addr", ":9000", "gRPC listen address")
 		providerLbl = flag.String("provider", "digitalocean", "provider/region label stamped on HostRefs (e.g. digitalocean-nyc3)")
-		backendSel  = flag.String("do-backend", "auto", "digitalocean | fake | auto (auto = digitalocean when a token AND region are set, else fake)")
+		backendSel  = flag.String("do-backend", "auto", "digitalocean | fake | auto (auto = digitalocean when a token AND region are set; else refuses to start unless --use-fake-backend is passed)")
+		useFake     = flag.Bool("use-fake-backend", false, "run the credential-free in-memory fake backend (testing/conformance only — it never creates real cloud resources)")
 		token       = flag.String("token", "", "DigitalOcean Personal Access Token (or set DIGITALOCEAN_TOKEN)")
 		region      = flag.String("region", "", "DigitalOcean region slug this process serves (e.g. nyc3); required for the digitalocean backend")
 		offerings   = flag.String("offerings", "", "path to a JSON offerings file (default: a built-in mix sized by --seed-count)")
@@ -91,6 +92,11 @@ func run() error {
 	// The bootstrap agent channel is required by the real backend; build it (and
 	// serve it) only when the real backend is selected.
 	mode := resolveBackendMode(*backendSel, doToken, *region)
+	if *useFake {
+		mode = "fake"
+	} else if mode == "fake" && strings.ToLower(*backendSel) != "fake" {
+		return fmt.Errorf("refusing to start the digitalocean provider on the in-memory fake backend: no credentials were detected. Configure the real backend, or pass --use-fake-backend to run the credential-free fake (testing/conformance only — it never creates real resources)")
+	}
 
 	var (
 		client  doClient

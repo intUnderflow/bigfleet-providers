@@ -11,8 +11,7 @@ point it at a base AMI + subnets, give it AWS credentials, and BigFleet dials it
 `--addr`. This page covers the container image, the Helm chart, the flags you
 actually need, mTLS, and the EKS + IRSA path.
 
-If you just want to kick the tyres with no AWS account, the
-[overview](/providers/aws/) shows the credential-free fake backend. Everything
+Everything
 below is for a real region.
 
 ## Container image

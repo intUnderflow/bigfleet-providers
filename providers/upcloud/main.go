@@ -44,7 +44,8 @@ func run() error {
 	var (
 		addr        = flag.String("addr", ":9000", "gRPC listen address")
 		providerLbl = flag.String("provider", "upcloud", "provider/zone label stamped on HostRefs (e.g. upcloud-fi-hel1)")
-		backendSel  = flag.String("upcloud-backend", "auto", "upcloud | fake | auto (auto = upcloud when API credentials AND --zone are set, else fake)")
+		backendSel  = flag.String("upcloud-backend", "auto", "upcloud | fake | auto (auto = upcloud when API credentials AND --zone are set; else refuses to start unless --use-fake-backend is passed)")
+		useFake     = flag.Bool("use-fake-backend", false, "run the credential-free in-memory fake backend (testing/conformance only — it never creates real cloud resources)")
 		username    = flag.String("username", "", "UpCloud API sub-account username (or set UPCLOUD_USERNAME)")
 		password    = flag.String("password", "", "UpCloud API sub-account password (or set UPCLOUD_PASSWORD)")
 		zone        = flag.String("zone", "", "UpCloud zone id this process serves (e.g. fi-hel1); required for the upcloud backend")
@@ -86,6 +87,11 @@ func run() error {
 	// are set, otherwise the fake — so a credential-free run (no creds, no zone;
 	// exactly how certification boots the binary) defaults to fake.
 	mode := resolveBackendMode(*backendSel, user, pass, *zone)
+	if *useFake {
+		mode = "fake"
+	} else if mode == "fake" && strings.ToLower(*backendSel) != "fake" {
+		return fmt.Errorf("refusing to start the upcloud provider on the in-memory fake backend: no credentials were detected. Configure the real backend, or pass --use-fake-backend to run the credential-free fake (testing/conformance only — it never creates real resources)")
+	}
 	var client upcloudClient
 	switch mode {
 	case "fake":

@@ -46,7 +46,8 @@ func run() error {
 	var (
 		addr        = flag.String("addr", ":9000", "gRPC listen address")
 		providerLbl = flag.String("provider", "latitude", "provider/site label stamped on HostRefs (e.g. latitude-ash)")
-		backendSel  = flag.String("latitude-backend", "auto", "latitude | fake | auto (auto = latitude when a token AND project are set, else fake)")
+		backendSel  = flag.String("latitude-backend", "auto", "latitude | fake | auto (auto = latitude when a token AND project are set; else refuses to start unless --use-fake-backend is passed)")
+		useFake     = flag.Bool("use-fake-backend", false, "run the credential-free in-memory fake backend (testing/conformance only — it never creates real cloud resources)")
 		token       = flag.String("token", "", "Latitude.sh API token (or set LATITUDESH_API_TOKEN)")
 		project     = flag.String("project", "", "Latitude.sh project id or slug (or set LATITUDESH_PROJECT); required for the latitude backend")
 		offerings   = flag.String("offerings", "", "path to a JSON offerings file (default: a built-in mix sized by --seed-count)")
@@ -91,6 +92,11 @@ func run() error {
 	// Pick the Latitude.sh client. The fake is the no-creds default so
 	// certification is credential-free.
 	mode := resolveBackendMode(*backendSel, latToken, latProject)
+	if *useFake {
+		mode = "fake"
+	} else if mode == "fake" && strings.ToLower(*backendSel) != "fake" {
+		return fmt.Errorf("refusing to start the latitude provider on the in-memory fake backend: no credentials were detected. Configure the real backend, or pass --use-fake-backend to run the credential-free fake (testing/conformance only — it never creates real resources)")
+	}
 	var client latitudeClient
 	switch mode {
 	case "fake":

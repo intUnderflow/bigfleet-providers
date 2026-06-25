@@ -94,7 +94,10 @@ func buildProvider(repoRoot, name string) (string, error) {
 // extra flags (e.g. --state=PATH for the durability lane). It returns once the
 // gRPC port accepts a connection.
 func boot(bin, name, addr string, seed int, logPath string, extra ...string) (*provider, error) {
-	args := append([]string{"--addr=" + addr, "--provider=certify", fmt.Sprintf("--seed-count=%d", seed)}, extra...)
+	// --use-fake-backend: certification is credential-free, so the provider must be
+	// told to run its in-memory fake explicitly (providers fail closed on a silent
+	// fake — a misconfigured real deployment must not come up on a simulation).
+	args := append([]string{"--addr=" + addr, "--provider=certify", "--use-fake-backend", fmt.Sprintf("--seed-count=%d", seed)}, extra...)
 	lf, err := os.Create(logPath)
 	if err != nil {
 		return nil, err

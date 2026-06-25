@@ -74,9 +74,10 @@ A minimal production invocation:
 - **`auto`** (default) — resolves to `libvirt` when `--connect` is set, otherwise
   `fake`.
 
-So a bare `./bin/libvirt --seed-count 32` (no `--connect`) comes up on the fake
-backend — exactly how `make certify-libvirt` runs credential-free — while setting
-`--connect` opts you into the real backend.
+So a bare `./bin/libvirt` (no `--connect`) **refuses to start** — the fake is
+testing/conformance only and must be requested with `--use-fake-backend` (which is
+how `make certify-libvirt` runs credential-free). Setting `--connect` selects the
+real backend.
 
 ## Zones map to libvirt hosts
 

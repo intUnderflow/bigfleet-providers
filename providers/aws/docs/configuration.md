@@ -83,9 +83,10 @@ tables for your region. See [Pricing & interruption](/providers/aws/pricing-and-
 - **`auto`** (default) — resolves to `aws` when `--region` is set, otherwise
   `fake`.
 
-So a bare `./bin/aws --seed-count 32` (no `--region`) comes up on the fake
-backend — exactly how `make conformance-aws` runs credential-free — while
-setting `--region` opts you into the real backend.
+So a bare `./bin/aws` (no `--region`) **refuses to start** — the fake is
+testing/conformance only and must be requested with `--use-fake-backend` (which is
+how `make conformance-aws` runs credential-free). Setting `--region` + credentials
+selects the real backend.
 
 ## Offerings
 

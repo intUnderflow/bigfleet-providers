@@ -12,9 +12,6 @@ golden base image, and BigFleet dials its `--addr`. This page covers the
 container image, the Helm chart, the flags you actually need, mTLS, and the
 credential wiring.
 
-If you just want to kick the tyres with no libvirt host, the
-[overview](/providers/libvirt/) shows the credential-free fake backend — a bare
-`./bin/libvirt --seed-count 32` comes up simulating domains with no hypervisor.
 Everything below is for real hosts.
 
 ## Container image

@@ -12,7 +12,7 @@ sidebar:
 |---|---|---|
 | `--addr` | `:9000` | gRPC listen address (BigFleet dials this). |
 | `--provider` | `oci` | Provider/region label stamped on `HostRef.provider` (e.g. `oci-eu-frankfurt-1`). |
-| `--oci-backend` | `auto` | `oci` \| `fake` \| `auto` (auto = oci when `--region` and `--compartment` set, else fake). |
+| `--oci-backend` | `auto` | `oci` \| `fake` \| `auto` (auto = oci when `--region` and `--compartment` set; else refuses to start unless `--use-fake-backend` is passed). |
 | `--region` | — | OCI region identifier, e.g. `eu-frankfurt-1` (required for the oci backend). |
 | `--compartment` | — | Compartment OCID the provider operates in. |
 | `--subnet` | — | Subnet OCID for `LaunchInstance`. |

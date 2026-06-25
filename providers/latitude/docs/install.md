@@ -12,8 +12,6 @@ id/slug and an SSH key, and BigFleet dials its `--addr`. This page covers the
 container image, the Helm chart, the flags you actually need, mTLS, and the
 Secret wiring.
 
-If you just want to kick the tyres with no Latitude account, the
-[overview](/providers/latitude/) shows the credential-free fake backend.
 Everything below is for a real project.
 
 ## Container image

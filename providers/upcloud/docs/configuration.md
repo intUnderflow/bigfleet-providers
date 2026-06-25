@@ -79,7 +79,7 @@ A minimal production invocation:
   mistaken for production.
 - **`auto`** (default) — resolves to `upcloud` when **both** credentials (via
   `--username`/`--password` or `UPCLOUD_USERNAME`/`UPCLOUD_PASSWORD`) **and** a
-  `--zone` are set, otherwise `fake`.
+  `--zone` are set, else the provider refuses to start unless `--use-fake-backend` is passed.
 
 So a bare `./bin/upcloud --seed-count 32` (no credentials, no zone) comes up on
 the fake backend — exactly how `make certify-upcloud` runs credential-free — while

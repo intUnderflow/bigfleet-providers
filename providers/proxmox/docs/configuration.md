@@ -87,7 +87,7 @@ startup and refuses to serve if an offering names an unknown node.
   conformance run. Selecting it logs a loud warning so it is never mistaken for
   production.
 - **`auto`** (default) — resolves to `proxmox` when `--proxmox-api-url` is set,
-  otherwise `fake`.
+  else the provider refuses to start unless `--use-fake-backend` is passed.
 
 So a bare `./bin/proxmox --seed-count 32` (no `--proxmox-api-url`) comes up on the
 fake backend — exactly how `make certify-proxmox` runs credential-free — while

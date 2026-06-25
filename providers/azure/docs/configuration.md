@@ -84,12 +84,16 @@ tables for your region. See
   needed; no real VMs are created. Used for dev and the credential-free
   conformance run. Selecting it logs a loud warning so it is never mistaken for
   production.
-- **`auto`** (default) — resolves to `azure` when `--location` is set, otherwise
-  `fake`.
+- **`auto`** (default) — resolves to `azure` when `--location` is set; without it
+  the provider **refuses to start** unless `--use-fake-backend` is passed (so a
+  misconfigured deployment fails closed instead of silently simulating).
+- **`--use-fake-backend`** — explicitly run the fake. Required to use the fake at
+  all (it is never selected automatically), so an operator who forgets `--location`
+  gets a clear error, not a simulation that never creates real VMs.
 
-So a bare `./bin/azure --seed-count 32` (no `--location`) comes up on the fake
-backend — exactly how `make certify-azure` runs credential-free — while setting
-`--location` opts you into the real backend.
+So a bare `./bin/azure` (no `--location`) **refuses to start**; pass
+`--use-fake-backend` to run the credential-free fake (this is how
+`make certify-azure` runs), while setting `--location` selects the real backend.
 
 ## Offerings
 

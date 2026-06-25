@@ -84,9 +84,10 @@ A minimal production invocation (OS_* sourced from the environment):
 - **`auto`** (default) — resolves to `ovh` when `--region` is set, otherwise
   `fake`.
 
-So a bare `./bin/ovhcloud --seed-count 32` (no region) comes up on the fake
-backend — exactly how `make conformance-ovhcloud` runs credential-free — while
-setting `--region` (and OS_* creds) opts you into the real backend.
+So a bare `./bin/ovhcloud` (no region) **refuses to start** — the fake is
+testing/conformance only and must be requested with `--use-fake-backend` (which is
+how `make conformance-ovhcloud` runs credential-free). Setting `--region` (and
+OS_* creds) selects the real backend.
 
 ## Offerings
 

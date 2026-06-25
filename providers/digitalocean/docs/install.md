@@ -12,8 +12,7 @@ and a bootstrap channel, and BigFleet dials its `--addr`. This page covers the
 container image, the Helm chart, the flags you actually need, mTLS, and the
 Secret wiring.
 
-If you just want to kick the tyres with no DigitalOcean account, the
-[overview](index.md) shows the credential-free fake backend. Everything below is
+Everything below is
 for a real account.
 
 ## Container image

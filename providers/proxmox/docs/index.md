@@ -77,7 +77,7 @@ See [Install & deploy](/providers/proxmox/install/) for the full path, and
 [Configuration](/providers/proxmox/configuration/) for every flag and the
 offerings schema.
 
-If you just want to try it with no Proxmox cluster, the provider's in-memory
-**fake** backend stands up with no credentials — a bare run with no
-`--proxmox-api-url` comes up on the fake, which is how the credential-free
-[certification](/providers/proxmox/certification/) run works.
+The provider also ships an in-memory **fake** backend used only for the
+credential-free [certification](/providers/proxmox/certification/) run. It is
+testing-only and must be requested explicitly with `--use-fake-backend`; a
+misconfigured real deployment fails closed rather than silently simulating.

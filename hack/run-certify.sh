@@ -44,7 +44,9 @@ go -C "providers/$NAME" build -o "$REPO_ROOT/bin/$NAME" .
 echo ">> starting provider on 127.0.0.1:$PORT (seeded for an extension run)"
 # The extension suite consumes many machines (a fresh one per behaviour), so
 # seed generously.
-"./bin/$NAME" --addr="127.0.0.1:$PORT" --provider="certify" --seed-count=256 &
+# --use-fake-backend: certification is credential-free, so request the in-memory
+# fake explicitly (providers fail closed on a silent fake).
+"./bin/$NAME" --addr="127.0.0.1:$PORT" --provider="certify" --use-fake-backend --seed-count=256 &
 PROV_PID=$!
 cleanup() { kill "$PROV_PID" 2>/dev/null || true; }
 trap cleanup EXIT

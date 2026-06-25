@@ -12,8 +12,7 @@ Workload Identity on GKE), and BigFleet dials its `--addr`. This page covers the
 container image, the Helm chart, the flags you actually need, mTLS, and the
 credentials wiring.
 
-If you just want to kick the tyres with no GCP account, the
-[overview](/providers/gcp/) shows the credential-free fake backend. Everything
+Everything
 below is for a real project.
 
 ## Container image
