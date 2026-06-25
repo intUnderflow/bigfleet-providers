@@ -4,6 +4,13 @@ This repo holds out-of-tree BigFleet capacity providers and the shared
 [`providerkit`](providerkit) library they build on. Almost always,
 "contributing" means **adding a provider**.
 
+**You don't have to contribute a provider here to use one.** Building your own
+out-of-tree provider on `providerkit` and running it privately — for your company,
+an internal substrate, or a proprietary cloud — is a fully supported, first-class
+path that never goes through this repo. The mandatory, no-opt-out certification
+described below applies to providers **merged into this repo**: those are a
+certified-conformant starter set, not the only way to run BigFleet capacity.
+
 ## The one rule
 
 **The cross-cutting contract logic lives in `providerkit`, and providers must

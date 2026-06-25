@@ -18,6 +18,8 @@ These providers all live together in one **mono-repo** (rather than one repo per
 
 Each provider is still an independently buildable binary that could ship on its own cadence.
 
+**You don't have to merge a provider here to use it.** `providerkit` is a normal Go module (`go get github.com/intUnderflow/bigfleet-providers`), so you can build and run your own out-of-tree provider — private, internal, or proprietary — without ever touching this repo. That's a fully supported, first-class path, ideal for a company's internal substrate or a one-off you just want to run. The providers in this repo are a curated, **certified-conformant** starter set — deploy them as-is, or copy one as a head start — not a requirement to participate.
+
 ## The contract (source of truth lives in bigfleet)
 
 A provider is a gRPC **server** implementing `bigfleet.v1alpha1.CapacityProvider`; the BigFleet shard is the **client** that dials your `--addr`. The contract is six RPCs — **no `Watch`**; reconciliation is `List` + `Get`:

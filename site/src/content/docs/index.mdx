@@ -49,6 +49,8 @@ BigFleet is the client; each provider is a gRPC server it dials to create, confi
 
 If you're adding support for a new substrate rather than operating one, the authoring path lives a layer down — every provider is built on a shared library that gets fencing, idempotency, and the machine contract right once, so you only write substrate-specific logic.
 
+You don't have to merge it here, either. `providerkit` is a public Go module, so an out-of-tree provider you keep private — for an internal or proprietary substrate — is a fully supported, first-class path. The providers listed here are a curated, certified-conformant starter set to deploy or copy from, not a requirement.
+
 - The [provider author guide](https://bigfleet.lucy.sh/provider-author-guide/) — the spine for new providers.
 - [CONTRIBUTING.md](https://github.com/intUnderflow/bigfleet-providers/blob/main/CONTRIBUTING.md) — the step-by-step recipe.
 - The [conformance program](/conformance/) — the behavior registry your provider must pass.
