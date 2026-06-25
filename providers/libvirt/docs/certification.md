@@ -29,7 +29,7 @@ That target (`hack/run-certify.sh libvirt`) is fully **credential-free**. It:
    `$BIGFLEET_SRC` if set, otherwise cloning the exact version pinned in the
    provider's `go.mod` into `.cache/bigfleet-src`.
 2. Builds `./bin/libvirt` and boots it with `--provider=certify --seed-count=256`.
-   With no `--connect`, the provider's `--libvirt-backend` resolves to `fake`, so
+   It uses `--use-fake-backend`, so
    no hypervisor is touched — the extension suite consumes a fresh machine per
    behavior, hence the generous seed.
 3. Runs the **upstream baseline** (`test/conformance/` in the bigfleet repo), then
@@ -103,15 +103,6 @@ reachable host (see [Credentials](/providers/libvirt/credentials/)) and a base
 image that runs `qemu-guest-agent` and ships the bootstrap hook. It will create
 and destroy real domains; certify against a throwaway host and clean up
 afterwards.
-
-## Why this provider does not opt out of the CI gate
-
-A provider that cannot stand up without credentials may add an empty
-`providers/libvirt/.ci-no-conformance` marker to skip the CI `certify` job. The
-libvirt provider **does not** carry this marker, and must not: its `fake` backend
-stands up with no hypervisor, so `make certify-libvirt` runs and stays green on
-every PR. Adding the opt-out here would forfeit that credential-free certification
-gate.
 
 ## See also
 

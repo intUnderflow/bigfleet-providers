@@ -30,8 +30,7 @@ That target is fully **credential-free**. It:
    `$BIGFLEET_SRC` if set, otherwise cloning the exact version pinned in the
    provider's `go.mod`.
 2. Builds the provider and boots it with `--provider=certify` and a generous
-   `--seed-count`. With no `--proxmox-api-url`, the provider's
-   `--proxmox-backend` resolves to `fake`, so no Proxmox cluster is touched — the
+   `--seed-count`. It uses `--use-fake-backend`, so no Proxmox cluster is touched — the
    extension suite consumes a fresh machine per behavior, hence the generous seed.
 3. Runs the **upstream baseline** (`test/conformance/` in the bigfleet repo), then
    the **extension suite** (`conformance/suite`, build-tagged `certify`), both
@@ -129,24 +128,6 @@ guest-agent `Configure`/`Drain` → destroy — so the endpoint needs the API to
 privileges documented on the [Credentials](/providers/proxmox/credentials/) page
 and a template with `qemu-guest-agent` and `kubelet`. It will create and destroy
 real VMs; certify against a throwaway pool or a dedicated test cluster.
-
-## The `.ci-no-conformance` opt-out
-
-CI runs `make certify-<provider>` per changed provider, credential-free. A provider
-that **cannot stand up without cloud credentials** opts out by adding an empty
-marker file:
-
-```sh
-touch providers/<name>/.ci-no-conformance
-```
-
-When present, the CI `certify` job is **skipped (never failed)** for that provider,
-and you are expected to certify it manually against a real endpoint.
-
-The Proxmox provider **does not** carry this marker, and must not: its `fake`
-backend stands up with no credentials, so `make certify-proxmox` runs and stays
-green on every PR. Adding the opt-out here would forfeit that credential-free
-certification gate.
 
 ## See also
 

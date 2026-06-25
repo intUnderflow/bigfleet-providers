@@ -29,8 +29,7 @@ That target (`hack/run-certify.sh oracle-cloud`) is fully **credential-free**. I
    `$BIGFLEET_SRC` if set, otherwise cloning the exact version pinned in the
    provider's `go.mod`.
 2. Builds `./bin/oracle-cloud` and boots it on `127.0.0.1:9099` with
-   `--provider=certify --seed-count=256`. With no `--region`/`--compartment`, the
-   `--oci-backend` resolves to `fake`, so no OCI tenancy is touched — the
+   `--provider=certify --seed-count=256`. It uses `--use-fake-backend`, so no OCI tenancy is touched — the
    extension suite consumes a fresh machine per behavior, hence the generous seed.
 3. Runs the **upstream baseline** (`test/conformance/` in the bigfleet repo), then
    the **extension suite** (`conformance/suite`), both dialing that one endpoint.
@@ -109,10 +108,3 @@ A real run launches and terminates real instances and runs Run Commands on them,
 so the endpoint needs the permissions on the
 [Credentials & auth](/providers/oracle-cloud/credentials/) page. Certify in a
 throwaway compartment.
-
-## No `.ci-no-conformance` opt-out
-
-Because the `fake` backend stands up with no OCI credentials,
-`make certify-oracle-cloud` runs and stays green on every PR. This provider does
-**not** carry a `.ci-no-conformance` marker — adding one would forfeit the
-credential-free certification gate.

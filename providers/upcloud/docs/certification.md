@@ -29,8 +29,7 @@ That target (`hack/run-certify.sh upcloud`) is fully **credential-free**. It:
    `$BIGFLEET_SRC` if set, otherwise cloning the exact version pinned in the
    provider's `go.mod` into `.cache/bigfleet-src`.
 2. Builds `./bin/upcloud` and boots it with `--provider=certify
-   --seed-count=256`. With no credentials **and** no `--zone`, the provider's
-   `--upcloud-backend` resolves to `fake`, so no UpCloud account is touched — the
+   --seed-count=256`. It uses `--use-fake-backend`, so no UpCloud account is touched — the
    extension suite consumes a fresh machine per behavior, hence the generous seed.
 3. Runs the **upstream baseline** (`test/conformance/` in the bigfleet repo), then
    the **extension suite** (`conformance/suite`, build-tagged `certify`), both
@@ -129,15 +128,6 @@ an API sub-account (see [Credentials](credentials.md)), a valid `--template`, an
 image that ships the on-host hook, and SSH reachability to the servers. It will
 create and destroy real servers (and their storage); certify in a throwaway
 account and tear the servers down.
-
-## Why this provider does not opt out of the CI gate
-
-A provider that cannot stand up without cloud credentials may add an empty
-`providers/upcloud/.ci-no-conformance` marker to skip the CI `certify` job. The
-UpCloud provider **does not** carry this marker, and must not: its `fake` backend
-stands up with no credentials and no zone, so `make certify-upcloud` runs and stays
-green on every PR. Adding the opt-out here would forfeit that credential-free
-certification gate.
 
 ## See also
 

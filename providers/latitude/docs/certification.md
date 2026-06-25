@@ -30,8 +30,7 @@ That target runs fully **credential-free**. It:
    `$BIGFLEET_SRC` if set, otherwise cloning the exact version pinned in the
    provider's `go.mod`.
 2. Builds the `latitude` binary and boots it with `--provider=certify
-   --seed-count=256`. With **no token and no project**, the provider's
-   `--latitude-backend` resolves to `fake`, so **no Latitude project is touched
+   --seed-count=256`. It uses `--use-fake-backend`, so **no Latitude project is touched
    and no money is spent** — the extension suite consumes a fresh machine per
    behavior, hence the generous seed.
 3. Runs the **upstream baseline**, then the **extension suite**, both dialing that
@@ -103,14 +102,6 @@ full project access (see [Credentials](/providers/latitude/credentials/)) and an
 OS image that authorises `--ssh-key` and ships the bootstrap hook. **It will
 deploy and deprovision real bare-metal servers, billed by the hour** — certify in
 a throwaway project and tear the servers down promptly.
-
-## Why this provider does not opt out of the CI gate
-
-A provider that cannot stand up without cloud credentials may add an empty
-`.ci-no-conformance` marker to skip the CI `certify` job. The Latitude provider
-**does not** carry this marker, and must not: its `fake` backend stands up with
-no token and no project, so `make certify-latitude` runs and stays green on every
-PR. Adding the opt-out here would forfeit that credential-free certification gate.
 
 ## See also
 

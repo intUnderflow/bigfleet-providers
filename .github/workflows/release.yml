@@ -52,10 +52,6 @@ jobs:
           BFCONF_SCALE_SEED: "4000"
           BFCONF_SOAK: "5s"
         run: |
-          if [ -f "providers/${{ matrix.provider }}/.ci-no-conformance" ]; then
-            echo "providers/${{ matrix.provider }} opts out of credential-free certification"
-            exit 0
-          fi
           GOWORK=off go -C conformance run ./cmd/bfconformance -provider ${{ matrix.provider }} \
             -profile core,cloud,spot,fault,durable,scale \
             -out "$GITHUB_WORKSPACE/release-report/${{ matrix.provider }}"

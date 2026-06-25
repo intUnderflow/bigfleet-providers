@@ -31,8 +31,7 @@ That target (`hack/run-certify.sh scaleway`) is fully **credential-free**. It:
    `$BIGFLEET_SRC` if set, otherwise cloning the exact version pinned in the
    provider's `go.mod` into `.cache/bigfleet-src`.
 2. Builds `./bin/scaleway` and boots it with `--provider=certify
-   --seed-count=256`. With no credentials, the provider's `--scaleway-backend`
-   resolves to `fake`, so no Scaleway project is touched — the extension suite
+   --seed-count=256`. It uses `--use-fake-backend`, so no Scaleway project is touched — the extension suite
    consumes a fresh machine per behavior, hence the generous seed.
 3. Runs the **upstream baseline** (`test/conformance/` in the bigfleet repo), then
    the **extension suite** (`conformance/suite`, build-tagged `certify`), both
@@ -138,15 +137,6 @@ agent `Configure`/`Drain` → `DeleteServer` — so the endpoint needs an API ke
 the right permission sets (see [Credentials](/providers/scaleway/credentials/)) and
 an image that installs the on-host agent. It will create and destroy real servers;
 certify in a throwaway project and tear the servers down.
-
-## Why this provider does not opt out of the CI gate
-
-A provider that cannot stand up without cloud credentials may add an empty
-`providers/scaleway/.ci-no-conformance` marker to skip the CI `certify` job. The
-Scaleway provider **does not** carry this marker, and must not: its `fake` backend
-stands up with no credentials, so `make certify-scaleway` runs and stays green on
-every PR. Adding the opt-out here would forfeit that credential-free certification
-gate.
 
 ## See also
 

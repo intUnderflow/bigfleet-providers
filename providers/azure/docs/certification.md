@@ -30,8 +30,7 @@ That target (`hack/run-certify.sh azure`) is fully **credential-free**. It:
    `$BIGFLEET_SRC` if set, otherwise cloning the exact version pinned in the
    provider's `go.mod` into `.cache/bigfleet-src`.
 2. Builds `./bin/azure` and boots it on `127.0.0.1:9099` with `--provider=certify
-   --seed-count=256`. With no `--location`, the provider's `--azure-backend`
-   resolves to `fake`, so no Azure account is touched — the extension suite
+   --seed-count=256`. It uses `--use-fake-backend`, so no Azure account is touched — the extension suite
    consumes a fresh machine per behavior, hence the generous seed.
 3. Runs the **upstream baseline** (`test/conformance/` in the bigfleet repo), then
    the **extension suite** (`conformance/suite`, build-tagged `certify`), both
@@ -136,15 +135,6 @@ A real run exercises the full lifecycle — VM create → Configure/Drain extens
 Delete — so the endpoint needs the role on the
 [Credentials](/providers/azure/credentials/) page. It will create and destroy real
 VMs; certify in a throwaway subscription or a dedicated test resource group.
-
-## The `.ci-no-conformance` opt-out
-
-CI runs `make certify-<provider>` per changed provider, credential-free. A provider
-that **cannot stand up without cloud credentials** opts out with an empty marker
-file. The Azure provider **does not** carry this marker, and must not: its `fake`
-backend stands up with no credentials, so `make certify-azure` runs and stays green
-on every PR. Adding the opt-out here would forfeit that credential-free
-certification gate.
 
 ## See also
 

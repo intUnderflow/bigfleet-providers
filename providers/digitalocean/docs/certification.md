@@ -29,8 +29,7 @@ That target (`hack/run-certify.sh digitalocean`) is fully **credential-free**. I
    `$BIGFLEET_SRC` if set, otherwise cloning the exact version pinned in the
    provider's `go.mod` into `.cache/bigfleet-src`.
 2. Builds `./bin/digitalocean` and boots it with `--provider=certify
-   --seed-count=256`. With no token **and** no `--region`, the provider's
-   `--do-backend` resolves to `fake`, so no DigitalOcean account is touched — the
+   --seed-count=256`. It uses `--use-fake-backend`, so no DigitalOcean account is touched — the
    extension suite consumes a fresh machine per behavior, hence the generous seed.
 3. Runs the **upstream baseline** (`test/conformance/` in the bigfleet repo),
    then the **extension suite** (`conformance/suite`, build-tagged `certify`),
@@ -125,15 +124,6 @@ read + write Droplets token (see [Credentials](credentials.md)), an image that
 ships the on-host agent, and a bootstrap channel the Droplets can reach. It will
 create and destroy real Droplets; certify in a throwaway account and tear the
 Droplets down.
-
-## Why this provider does not opt out of the CI gate
-
-A provider that cannot stand up without cloud credentials may add an empty
-`providers/digitalocean/.ci-no-conformance` marker to skip the CI `certify` job.
-The DigitalOcean provider **does not** carry this marker, and must not: its
-`fake` backend stands up with no token and no region, so
-`make certify-digitalocean` runs and stays green on every PR. Adding the opt-out
-here would forfeit that credential-free certification gate.
 
 ## See also
 

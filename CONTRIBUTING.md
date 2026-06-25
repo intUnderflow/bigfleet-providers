@@ -79,10 +79,10 @@ its inventory.
    make conformance-<name>
    ```
 
-   A passing run is what "BigFleet-compatible" means. If your provider can't run
-   conformance without cloud credentials, add an empty
-   `providers/<name>/.ci-no-conformance` marker so CI skips it cleanly (never
-   fail CI for missing cloud creds) and document how to run it with credentials.
+   A passing run is what "BigFleet-compatible" means, and it is mandatory. Every
+   provider ships a credential-free fake backend (run it with `--use-fake-backend`),
+   so `make certify-<name>` runs on every PR with no cloud account. There is **no
+   opt-out**: a provider that cannot certify credential-free is not merged.
 
 ## Why each provider is its own module
 

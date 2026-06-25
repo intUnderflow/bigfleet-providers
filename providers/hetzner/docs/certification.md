@@ -29,7 +29,7 @@ That target (`hack/run-certify.sh hetzner`) is fully **credential-free**. It:
    `$BIGFLEET_SRC` if set, otherwise cloning the exact version pinned in the
    provider's `go.mod` into `.cache/bigfleet-src`.
 2. Builds `./bin/hetzner` and boots it with `--provider=certify --seed-count=256`.
-   With no token, the provider's `--hetzner-backend` resolves to `fake`, so no
+   It uses `--use-fake-backend`, so no
    Hetzner project is touched — the extension suite consumes a fresh machine per
    behavior, hence the generous seed.
 3. Runs the **upstream baseline** (`test/conformance/` in the bigfleet repo),
@@ -95,14 +95,6 @@ token (see [Credentials](/providers/hetzner/credentials/)) and an image that
 authorises `--ssh-key` and ships the bootstrap hook. It will create and destroy
 real servers; certify in a throwaway project and tear the servers down (the demo
 in the repo README runs this end-to-end for cents).
-
-## Why this provider does not opt out of the CI gate
-
-A provider that cannot stand up without cloud credentials may add an empty
-`providers/hetzner/.ci-no-conformance` marker to skip the CI `certify` job. The
-Hetzner provider **does not** carry this marker, and must not: its `fake` backend
-stands up with no token, so `make certify-hetzner` runs and stays green on every
-PR. Adding the opt-out here would forfeit that credential-free certification gate.
 
 ## See also
 

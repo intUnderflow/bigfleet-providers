@@ -147,9 +147,9 @@ jobs:
   # VERDICT + JUnit/JSON report. Inapplicable lanes/profiles skip-as-pass so the
   # verdict stays meaningful (e.g. an on-demand-only provider's spot lane). The
   # fault lane always exercises the reference faultprovider (not the target).
-  # Scale runs at a lighter seed/soak for CI (a nightly job can crank it). A
-  # provider that cannot stand up credential-free opts out with a
-  # providers/<name>/.ci-no-conformance marker (skipped, never failed). The local
+  # Scale runs at a lighter seed/soak for CI (a nightly job can crank it). Every
+  # provider certifies credential-free (its fake backend stands up with no
+  # credentials via --use-fake-backend); there is no opt-out. The local
   # equivalent is: make report-<name> PROFILE=core,cloud,spot,fault,durable,scale
   certify:
     needs: changes
@@ -165,16 +165,7 @@ jobs:
         with:
           go-version-file: conformance/go.mod
           cache-dependency-path: conformance/go.sum
-      - id: gate
-        run: |
-          if [ -f "providers/${{ matrix.provider }}/.ci-no-conformance" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "providers/${{ matrix.provider }} opts out of credential-free certification"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
       - name: Certify — baseline + extension + fault + durable + scale lanes
-        if: steps.gate.outputs.skip != 'true'
         env:
           BFCONF_SCALE_SEED: "4000"
           BFCONF_SOAK: "5s"
@@ -183,7 +174,7 @@ jobs:
             -profile core,cloud,spot,fault,durable,scale \
             -out "$GITHUB_WORKSPACE/conformance-report/${{ matrix.provider }}"
       - uses: actions/upload-artifact@v7
-        if: always() && steps.gate.outputs.skip != 'true'
+        if: always()
         with:
           name: conformance-report-${{ matrix.provider }}
           path: conformance-report/${{ matrix.provider }}

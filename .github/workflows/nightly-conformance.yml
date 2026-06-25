@@ -29,7 +29,6 @@ jobs:
           names=$(for d in providers/*/; do
             n=$(basename "$d")
             [ "$n" = "_template" ] && continue
-            [ -f "providers/$n/.ci-no-conformance" ] && continue
             echo "$n"
           done | jq -R . | jq -cs .)
           echo "list=$names" >> "$GITHUB_OUTPUT"

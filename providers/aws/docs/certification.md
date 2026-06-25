@@ -30,8 +30,7 @@ That target (`hack/run-certify.sh aws`) is fully **credential-free**. It:
    `$BIGFLEET_SRC` if set, otherwise cloning the exact version pinned in the
    provider's `go.mod` into `.cache/bigfleet-src`.
 2. Builds `./bin/aws` and boots it on `127.0.0.1:9099` with `--provider=certify
-   --seed-count=256`. With no `--region`, the provider's `--ec2-backend` resolves
-   to `fake`, so no AWS account is touched — the extension suite consumes a fresh
+   --seed-count=256`. It uses `--use-fake-backend`, so no AWS account is touched — the extension suite consumes a fresh
    machine per behavior, hence the generous seed.
 3. Runs the **upstream baseline** (`test/conformance/` in the bigfleet repo),
    then the **extension suite** (`conformance/suite`, build-tagged `certify`),
@@ -138,24 +137,6 @@ SSM `Configure`/`Drain` → `TerminateInstances` — so the endpoint needs the I
 permissions documented on the [IAM](/providers/aws/iam/) page and a node
 instance profile with `AmazonSSMManagedInstanceCore`. It will create and destroy
 real instances; certify in a throwaway account or a dedicated test cluster.
-
-## The `.ci-no-conformance` opt-out
-
-CI runs `make certify-<provider>` per changed provider, credential-free. A
-provider that **cannot stand up without cloud credentials** opts out by adding an
-empty marker file:
-
-```sh
-touch providers/<name>/.ci-no-conformance
-```
-
-When present, the CI `certify` job is **skipped (never failed)** for that
-provider, and you are expected to certify it manually against a real endpoint.
-
-The AWS provider **does not** carry this marker, and must not: its `fake` backend
-stands up with no credentials, so `make certify-aws` runs and stays green on
-every PR. Adding the opt-out here would forfeit that credential-free
-certification gate.
 
 ## See also
 
