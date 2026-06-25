@@ -44,24 +44,24 @@ Generated Go types and the server interface come from `github.com/intUnderflow/b
 ## Providers
 
 Every provider below is **certified** — it passes the full conformance program
-credential-free on every PR (no opt-out). Each ships a real backend for its
-substrate plus the in-memory fake the certification runs against.
+credential-free on every PR; there is no opt-out. Each real provider ships a
+backend for its substrate, plus the in-memory fake the certification runs against.
 
-| Provider | Substrate | Capacity types | Status |
-|---|---|---|---|
-| [`aws`](providers/aws) | EC2 | on-demand, spot, bare-metal | **CERTIFIED** (credential-free) |
-| [`azure`](providers/azure) | Azure VMs | on-demand, spot | **CERTIFIED** (credential-free) |
-| [`digitalocean`](providers/digitalocean) | Droplets | on-demand | **CERTIFIED** (credential-free) |
-| [`gcp`](providers/gcp) | Compute Engine | on-demand, spot | **CERTIFIED** (credential-free) |
-| [`hetzner`](providers/hetzner) | Hetzner Cloud | on-demand | **CERTIFIED** (credential-free) |
-| [`latitude`](providers/latitude) | Latitude.sh (bare-metal hosts) | on-demand | **CERTIFIED** (credential-free) |
-| [`libvirt`](providers/libvirt) | KVM / libvirt | on-demand, bare-metal | **CERTIFIED** (credential-free) |
-| [`oracle-cloud`](providers/oracle-cloud) | OCI Compute | on-demand, spot, bare-metal | **CERTIFIED** (credential-free) |
-| [`ovhcloud`](providers/ovhcloud) | OVH Public Cloud | on-demand | **CERTIFIED** (credential-free) |
-| [`proxmox`](providers/proxmox) | Proxmox VE | on-demand | **CERTIFIED** (credential-free) |
-| [`scaleway`](providers/scaleway) | Instances + Elastic Metal | on-demand, bare-metal | **CERTIFIED** (credential-free) |
-| [`upcloud`](providers/upcloud) | UpCloud | on-demand | **CERTIFIED** (credential-free) |
-| [`_template`](providers/_template) | in-memory example | on-demand + spot (example) | copy-me skeleton — certified against the example backend |
+| Provider | Substrate | Capacity types |
+|---|---|---|
+| [`aws`](providers/aws) | EC2 | on-demand, spot, bare-metal |
+| [`azure`](providers/azure) | Azure VMs | on-demand, spot |
+| [`digitalocean`](providers/digitalocean) | Droplets | on-demand |
+| [`gcp`](providers/gcp) | Compute Engine | on-demand, spot |
+| [`hetzner`](providers/hetzner) | Hetzner Cloud | on-demand |
+| [`latitude`](providers/latitude) | Latitude.sh (bare-metal hosts) | on-demand |
+| [`libvirt`](providers/libvirt) | KVM / libvirt | on-demand, bare-metal |
+| [`oracle-cloud`](providers/oracle-cloud) | OCI Compute | on-demand, spot, bare-metal |
+| [`ovhcloud`](providers/ovhcloud) | OVH Public Cloud | on-demand |
+| [`proxmox`](providers/proxmox) | Proxmox VE | on-demand |
+| [`scaleway`](providers/scaleway) | Instances + Elastic Metal | on-demand, bare-metal |
+| [`upcloud`](providers/upcloud) | UpCloud | on-demand |
+| [`_template`](providers/_template) | in-memory example (copy-me skeleton) | on-demand + spot (example) |
 
 New providers are added by copying [`_template`](providers/_template) (see
 [CONTRIBUTING.md](CONTRIBUTING.md)); each must pass certification before it lands.
