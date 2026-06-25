@@ -1,16 +1,16 @@
-# Seed + fallback OCI Compute price table for the BigFleet oracle-cloud provider.
+# Internal ranking-floor + cold-start fallback for the BigFleet oracle-cloud provider.
 #
-# This file is NOT the source of truth. The provider live-refreshes prices from
-# the public OCI price list (the cost-estimator API; see source URL below) into an
-# in-memory table on a timer, off the List hot path. This table only:
-#   - SEEDS prices before the first live refresh, and
-#   - is the FALLBACK for any shape a refresh cannot price.
-# Keep it roughly accurate so the fallback doesn't drift; pin priced_at + source
-# on every edit. (Refresh out-of-band from Oracle's published Compute price list.)
-#
-# price_per_hour is a RELATIVE ranking signal for the shard's cost formula
-# (effective_cost = price + interruption_probability × penalty), so approximate
-# rates are acceptable, but keep them roughly accurate.
+# This file is NOT the source of truth and you never hand-maintain it. The provider
+# live-refreshes prices from the public OCI price list (the cost-estimator API; see
+# source URL below) into an in-memory table on a timer, off the List hot path; that
+# live price is authoritative. This table only:
+#   - provides a relative-cost FLOOR before the first live refresh (the brief cold
+#     window) — including a non-zero floor so a genuinely-free shape (e.g. Ampere
+#     A1, which OCI prices at 0) is not ranked as free, and
+#   - is the FALLBACK for a shape the live refresh cannot price.
+# Leave it alone — the live refresh keeps real prices current. price_per_hour here
+# is only a RELATIVE ranking signal for the shard's cost formula (effective_cost =
+# price + interruption_probability × penalty), so the values need not be accurate.
 #
 #   - FLEXIBLE shapes are priced per-OCPU-hour + per-GB-hour (× the shape's
 #     launch OCPU/memory), keyed by shape family in flex_rates.

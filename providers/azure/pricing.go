@@ -18,9 +18,7 @@ import (
 //
 // The seed table is not load-bearing for correctness (it feeds the engine's
 // relative cost ranking, and only until the first refresh populates the live
-// cache), but keep it roughly accurate so the cold window before the first
-// refresh ranks sensibly. Regenerate a region's seed offline from the public
-// Retail Prices API and drop it into onDemandByRegion.
+// cache); the live refresh is authoritative, so the seed is never hand-maintained.
 type pricing struct {
 	region       string
 	seedOnDemand map[string]float64 // vmSize -> seed/fallback USD/hr, resolved for `region`

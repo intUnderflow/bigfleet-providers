@@ -172,11 +172,9 @@ only the seed table (cold fallback) and the eviction *forecast* are pinned.
   0.) If on-demand prices stay wrong after the warm-up, check
   `bigfleet_azure_price_last_success_timestamp_seconds` and egress to
   `prices.azure.com`.
-- **Fix:** the live refresh self-heals the price on the next successful cycle. To
-  improve the cold window, refresh the on-demand seed table from the Retail Prices
-  API per [Pricing & interruption](/providers/azure/pricing-and-interruption/), and
-  add your sizes to `evictionBand`. These feed the engine's *relative* cost
-  ranking, so keep them roughly right.
+- **Fix:** the live refresh self-heals the price on the next successful cycle — you
+  never refresh the seed by hand (it's an internal ranking floor the live refresh
+  overrides). For interruption ranking, add your sizes to `evictionBand`.
 
 ## Readiness never goes green
 

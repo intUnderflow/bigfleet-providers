@@ -17,7 +17,8 @@ import (
 // Prices come from a pinned, zone-agnostic EUR table (deterministic, no runtime
 // pricing dependency on the List hot path), optionally refreshed out-of-band
 // from the Scaleway product catalogue on a timer rather than per-List. The table
-// feeds the engine's relative cost ranking; keep it roughly accurate.
+// feeds the engine's relative cost ranking; the live refresh is authoritative, so
+// it is never hand-maintained.
 type pricing struct {
 	eurToUSD float64
 	client   scwClient

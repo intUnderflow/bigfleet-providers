@@ -16,8 +16,8 @@ import (
 // Prices come from a pinned USD table (deterministic, no runtime pricing
 // dependency on the List hot path), refreshed out-of-band from the live
 // Sizes.List catalogue on a timer rather than per-List. The table is not
-// load-bearing for correctness (it feeds the engine's relative cost ranking),
-// but keep it roughly accurate.
+// load-bearing for correctness (it feeds the engine's relative cost ranking);
+// the live refresh is authoritative, so it is never hand-maintained.
 type pricing struct {
 	client doClient
 	logger *slog.Logger

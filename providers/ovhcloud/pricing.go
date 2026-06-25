@@ -47,10 +47,10 @@ const defaultEURtoUSD = 1.08
 // truth: the live catalog (catalog.go) overlays it on a timer. OVH prices a
 // given flavor identically across its regions, so the table is region-agnostic.
 //
-// Seeded: 2026-06 from the public OVH order catalog. Treat these as approximate
-// (they drift between refreshes of this file); rely on the live refresh for
-// absolute cost, and keep this roughly current so a catalog outage degrades
-// gracefully.
+// These are an internal ranking floor + cold/outage fallback only — the live
+// refresh from the OVH catalog is authoritative, so the table is never
+// hand-maintained; its values need not be accurate (it just keeps a catalog
+// outage degrading gracefully rather than zeroing prices).
 var onDemandEURHourly = map[string]float64{
 	// Discovery (shared) — b3 / d2.
 	"d2-2": 0.0104, "d2-4": 0.0206, "d2-8": 0.0372,

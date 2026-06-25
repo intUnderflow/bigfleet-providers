@@ -49,31 +49,17 @@ Spot. **The live price is the source of truth once the refresh runs.**
 `onDemandByRegion` — a pinned table keyed by region then VM size — is only the
 **seed and cold fallback**: it prices a size before the first refresh completes, and
 if a later refresh fails the last-good (or seed) value is kept rather than zeroed.
-It feeds the engine's *relative* cost ranking and is not otherwise load-bearing,
-but keep it roughly accurate so the brief cold window before the first refresh
-ranks sensibly.
+It feeds the engine's *relative* cost ranking and is not otherwise load-bearing;
+the live refresh is the source of truth, so **you never hand-maintain it**. The
+pinned values only provide a relative-cost floor — including a non-zero floor so a
+genuinely-free size is not ranked as free — during the brief cold window before the
+first refresh.
 
 `eastus` and `westeurope` ship with their own seed snapshots. A region with **no**
 seed table of its own falls back to the `eastus` baseline and logs a warning (the
 seed is then approximate until the live refresh populates the region's real
 prices). The empty region — the fake/dev backend, which does not price-rank —
 falls back silently.
-
-#### Refreshing a region's seed table
-
-The seed only matters for the cold window, so it rarely needs touching. To refresh
-it, read the **public** Azure Retail Prices API (no credentials) and paste the
-result into `onDemandByRegion`:
-
-```sh
-curl -s "https://prices.azure.com/api/retail/prices?currencyCode=USD&\$filter=\
-armRegionName eq 'westus2' and armSkuName eq 'Standard_D4s_v5' and priceType eq 'Consumption'" \
-  | jq '.Items[] | select(.productName | test("Windows|Spot|Low Priority") | not) | .unitPrice'
-```
-
-Filter to the Linux consumption meter (exclude Windows / Spot / Low Priority) —
-the same selection the live refresh applies. `armSkuName` is the **full** size name
-including the `Standard_` prefix (the stripped form matches zero meters).
 
 ### Spot: live from the Retail Prices API
 

@@ -75,31 +75,18 @@ At startup, after the first on-demand warm, the provider checks every
 `on_demand` / `reserved` offering: if an instance type has **neither** a live
 price **nor** a pinned seed, it would emit `price_per_hour = 0`, which wins the
 cost ranking. Rather than mis-rank silently, the provider **refuses to start**
-and names the offending types — add them to `onDemandByRegion` (regenerate with
-`genpricing`, below) or drop them from your offerings.
+and names the offending types — make sure they're covered by the live Price List
+API (the authoritative source) or drop them from your offerings.
 
-#### Seeding / refreshing the fallback table
+#### The fallback table is internal — you never hand-maintain it
 
-The pinned seed table only needs updating occasionally (it is just the
-backstop). Regenerate a region's seed with the `genpricing` tool — it reads the
-same public AWS Price List Bulk API and prints a Go map literal you paste into
-`onDemandByRegion`:
-
-```sh
-cd providers/aws
-go run ./cmd/genpricing -region eu-west-1 \
-  -types m6i.large,m6i.xlarge,c7g.large,c7g.xlarge,r6i.large,g5.xlarge
-# ->  "eu-west-1": {
-#         "c7g.large": 0.08075,
-#         "m6i.large": 0.1056,
-#         ...
-#     },
-```
-
-It selects the plain on-demand SKU (Linux, Shared tenancy, no pre-installed
-software), so Windows / Dedicated / Reserved SKUs for the same type are ignored.
-The offer files are large (tens of MB); the runtime refresher streams the same
-file on its timer.
+`onDemandByRegion` is an internal **ranking floor + cold-start fallback**, not a
+table to keep current: the live Price List refresh is the source of truth, and the
+pinned values only provide a relative-cost floor during the brief window before the
+first refresh (and a non-zero floor so a genuinely-free shape isn't ranked as
+free). Leave it alone — the live refresh keeps real prices current. (A maintainer
+who ever wants to regenerate the placeholder values can run `go run ./cmd/genpricing`
+in `providers/aws`, but it is never required for correct operation.)
 
 ### Spot: refreshed from the price history
 
