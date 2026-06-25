@@ -43,13 +43,30 @@ Generated Go types and the server interface come from `github.com/intUnderflow/b
 
 ## Providers
 
-| Provider | Capacity types | Status |
-|---|---|---|
-| [`aws`](providers/aws) | on-demand, spot, reserved | EC2 — passes conformance (fake EC2 backend); live demo needs AWS creds |
-| [`scaleway`](providers/scaleway) | on-demand (Instances); bare-metal (Elastic Metal, fake-only) | CERTIFIED (fake backend, credential-free). Real backend: Instances only — the Elastic Metal real backend is not built yet |
-| [`_template`](providers/_template) | on-demand + spot (example) | copy-me skeleton — passes conformance against an in-memory backend |
+Every provider below is **certified** — it passes the full conformance program
+credential-free on every PR (no opt-out). Each ships a real backend for its
+substrate plus the in-memory fake the certification runs against.
 
-More providers (gcp, libvirt, …) are added by copying `_template`; the table grows as they land.
+| Provider | Substrate | Capacity types | Status |
+|---|---|---|---|
+| [`aws`](providers/aws) | EC2 | on-demand, spot, bare-metal | **CERTIFIED** (credential-free) |
+| [`azure`](providers/azure) | Azure VMs | on-demand, spot | **CERTIFIED** (credential-free) |
+| [`digitalocean`](providers/digitalocean) | Droplets | on-demand | **CERTIFIED** (credential-free) |
+| [`gcp`](providers/gcp) | Compute Engine | on-demand, spot | **CERTIFIED** (credential-free) |
+| [`hetzner`](providers/hetzner) | Hetzner Cloud | on-demand | **CERTIFIED** (credential-free) |
+| [`latitude`](providers/latitude) | Latitude.sh (bare-metal hosts) | on-demand | **CERTIFIED** (credential-free) |
+| [`libvirt`](providers/libvirt) | KVM / libvirt | on-demand, bare-metal | **CERTIFIED** (credential-free) |
+| [`oracle-cloud`](providers/oracle-cloud) | OCI Compute | on-demand, spot, bare-metal | **CERTIFIED** (credential-free) |
+| [`ovhcloud`](providers/ovhcloud) | OVH Public Cloud | on-demand | **CERTIFIED** (credential-free) |
+| [`proxmox`](providers/proxmox) | Proxmox VE | on-demand | **CERTIFIED** (credential-free) |
+| [`scaleway`](providers/scaleway) | Instances + Elastic Metal | on-demand, bare-metal | **CERTIFIED** (credential-free) |
+| [`upcloud`](providers/upcloud) | UpCloud | on-demand | **CERTIFIED** (credential-free) |
+| [`_template`](providers/_template) | in-memory example | on-demand + spot (example) | copy-me skeleton — certified against the example backend |
+
+New providers are added by copying [`_template`](providers/_template) (see
+[CONTRIBUTING.md](CONTRIBUTING.md)); each must pass certification before it lands.
+You don't have to land yours here, though — running your own out-of-tree provider
+is a [first-class path](#why-this-repo-exists-out-of-tree-on-purpose).
 
 ## Repository layout
 
