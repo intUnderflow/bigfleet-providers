@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	github.com/hetznercloud/hcloud-go/v2 v2.44.0
-	github.com/intUnderflow/bigfleet v0.0.0-20260623204533-f3481855e447
+	github.com/intUnderflow/bigfleet v0.0.0-20260628003822-d9e1d4c58985
 	github.com/intUnderflow/bigfleet-providers v0.0.0
 	github.com/prometheus/client_golang v1.23.2
 	golang.org/x/crypto v0.52.0
